@@ -60,7 +60,7 @@ import {
   BarChartOutlined,
   FileProtectOutlined,
   SafetyOutlined,
-  VerifyOutlined,
+  VerifiedOutlined,
   CopyOutlined,
   NotificationOutlined,
   BellOutlined,
@@ -79,8 +79,8 @@ import {
   UserSwitchOutlined,
   CrownOutlined,
   StarOutlined as StarIcon,
-  TrophyOutlined,
-  AwardOutlined
+  TrophyOutlined
+
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';

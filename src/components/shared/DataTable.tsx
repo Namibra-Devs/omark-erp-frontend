@@ -56,7 +56,7 @@ export function DataTable<T extends { id: string }>({
     return <Empty description="No prospects found. Add your first prospect." />;
   }
   
-  const paginationConfig: TablePaginationConfig = meta ? {
+  const paginationConfig: TablePaginationConfig| false = meta ? {
     current: meta.page,
     pageSize: meta.pageSize,
     total: meta.total,

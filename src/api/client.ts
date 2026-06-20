@@ -1,6 +1,7 @@
+/// <reference types="vite/client" />
 // src/api/client.ts
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
-import type { ApiResponse, ApiError } from '@/types';
+import type { ApiError } from '@/types';
 
 let accessToken: string | null = null;
 let refreshToken: string | null = null;
@@ -43,7 +44,7 @@ apiClient.interceptors.response.use(
   },
   async (error: AxiosError<ApiError>) => {
     const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
-    
+
     // Handle 401 - try refresh
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (isRefreshing) {
@@ -54,21 +55,21 @@ apiClient.interceptors.response.use(
           });
         });
       }
-      
+
       originalRequest._retry = true;
       isRefreshing = true;
-      
+
       try {
-        const response = await apiClient.post<{ data: { accessToken: string } }>('/auth/refresh', {
-          refreshToken,
-        });
-        const newAccessToken = response.data.accessToken;
+        // The response interceptor above already unwraps response.data,
+        // so the resolved value here is { accessToken: string } directly.
+        const unwrapped = await apiClient.post('/auth/refresh', { refreshToken }) as unknown as { accessToken: string };
+        const newAccessToken = unwrapped.accessToken;
         accessToken = newAccessToken;
         onTokenRefreshed(newAccessToken);
         originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
         return apiClient(originalRequest);
       } catch (refreshError) {
-        // Refresh failed, redirect to login
+        // Refresh failed — clear tokens and redirect to login
         accessToken = null;
         refreshToken = null;
         window.location.href = '/login';
@@ -77,7 +78,7 @@ apiClient.interceptors.response.use(
         isRefreshing = false;
       }
     }
-    
+
     // Transform error response
     const apiError: ApiError = {
       error: {
@@ -86,7 +87,7 @@ apiClient.interceptors.response.use(
         details: error.response?.data?.error?.details,
       },
     };
-    
+
     return Promise.reject(apiError);
   }
 );

@@ -458,6 +458,8 @@ export const CSProspectsPage: React.FC = () => {
   const renderDrawerContent = () => {
     if (!selectedProspect) return null;
 
+    
+
     const getStatusIcon = (status: string) => {
       switch (status) {
         case 'new': return <InfoCircleOutlined style={{ color: '#1890ff' }} />;
@@ -534,8 +536,8 @@ export const CSProspectsPage: React.FC = () => {
             <Text strong>Status: {prospectStatusLabels[selectedProspect.status as keyof typeof prospectStatusLabels]}</Text>
           </Space>
           <Badge 
-            status={selectedProspect.status === 'active' ? 'success' : 'default'} 
-            text={selectedProspect.status === 'active' ? 'Active' : 'Inactive'}
+           status={selectedProspect.status === 'purchased' ? 'success' : 'default'}
+text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
           />
         </div>
 

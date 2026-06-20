@@ -5,7 +5,7 @@ import {
   Card, Row, Col, Typography, Tag, Button, Space, Tabs, Table,
   Descriptions, Avatar, Badge, Progress, Timeline, Modal, Form,
   Input, Select, DatePicker, message, Divider, Empty, Spin,
-  Statistic, List, Tooltip, Popconfirm
+  Statistic, List, Tooltip, Popconfirm, InputNumber
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -496,11 +496,11 @@ export const CustomerDetailPage: React.FC = () => {
               prefix="GHS"
               precision={2}
               placeholder="Enter amount"
-              onChange={(value) => {
-                // Convert to minor units (pesewas)
-                const minor = Math.round((value || 0) * 100);
-                form.setFieldsValue({ amountMinor: minor });
-              }}
+            onChange={(value: number | string | null) => {
+  const numeric = typeof value === 'string' ? parseFloat(value) : value;
+  const minor = Math.round((numeric || 0) * 100);
+  form.setFieldsValue({ amountMinor: minor });
+}}
             />
           </Form.Item>
 
