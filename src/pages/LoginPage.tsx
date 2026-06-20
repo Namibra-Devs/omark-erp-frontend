@@ -97,14 +97,7 @@ export const LoginPage: React.FC = () => {
           <Text type="secondary">Enterprise Resource Planning</Text>
         </div>
         
-        {/* Demo Mode Alert */}
-        <Alert
-          message="Demo Mode"
-          description="Use any demo account below. Password can be anything."
-          type="info"
-          showIcon
-          style={{ marginBottom: 24 }}
-        />
+      
         
         {error && (
           <Alert
