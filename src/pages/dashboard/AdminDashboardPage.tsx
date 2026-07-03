@@ -143,14 +143,18 @@ export const AdminDashboardPage: React.FC = () => {
     setExportModal(false);
   };
 
-  const handleAddUser = (values: any) => {
+ const handleAddUser = (values: any) => {
+    // Debugging safeguard line: Check your terminal console if things still look strange
+    console.log("Parent component received values for submission:", values);
+
+    // Ensure we handle values gracefully even if a field is skipped
     addUser({
-      name: `${values.firstName} ${values.lastName}`,
-      email: values.email,
+      name: `${values.firstName || ''} ${values.lastName || ''}`.trim() || 'New User',
+      email: values.email || '',
       phone: values.phone || '',
-      role: values.role,
+      role: values.role || 'marketing_staff', // Set your preferred default fallback role here
       status: 'active',
-      department: values.department || '',
+      department: values.department || 'Marketing', // Default fallback department
     });
     setAddUserModal(false);
   };

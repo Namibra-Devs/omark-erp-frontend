@@ -1,6 +1,8 @@
 // src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { User, Role } from '@/types';
+import type { UserEntity } from '@/types/api';
+import { erpClient, setTokens, clearTokens, getAccessToken } from '@/api/client';
 
 interface AuthContextType {
   user: User | null;
@@ -12,87 +14,6 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Mock users with different roles
-const mockUsers: Record<string, User> = {
-  // Admin
-  'admin@omark.com': {
-    id: '1',
-    firstName: 'John',
-    lastName: 'Admin',
-    email: 'admin@omark.com',
-    phoneNumber: '+233201234567',
-    role: 'admin',
-    isActive: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  
-  // Marketing Staff
-  'marketing@omark.com': {
-    id: '2',
-    firstName: 'Sarah',
-    lastName: 'Marketing',
-    email: 'marketing@omark.com',
-    phoneNumber: '+233201234568',
-    role: 'marketing_staff',
-    isActive: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  
-  // Marketing Director
-  'director@omark.com': {
-    id: '3',
-    firstName: 'Michael',
-    lastName: 'Director',
-    email: 'director@omark.com',
-    phoneNumber: '+233201234569',
-    role: 'marketing_director',
-    isActive: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  
-  // Customer Service
-  'cs@omark.com': {
-    id: '4',
-    firstName: 'Emma',
-    lastName: 'Service',
-    email: 'cs@omark.com',
-    phoneNumber: '+233201234570',
-    role: 'customer_service',
-    isActive: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  
-  // Secretary
-  'secretary@omark.com': {
-    id: '5',
-    firstName: 'David',
-    lastName: 'Secretary',
-    email: 'secretary@omark.com',
-    phoneNumber: '+233201234571',
-    role: 'secretary',
-    isActive: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-  
-  // Accounts
-  'accounts@omark.com': {
-    id: '6',
-    firstName: 'Lisa',
-    lastName: 'Accounts',
-    email: 'accounts@omark.com',
-    phoneNumber: '+233201234572',
-    role: 'accounts',
-    isActive: true,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  },
-};
-
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -101,36 +22,110 @@ export const useAuth = () => {
   return context;
 };
 
+// Maps backend UserEntity to frontend User interface
+const mapUserEntityToUser = (entity: UserEntity): User => {
+  // 1. Safe handling for name properties
+  let firstName = (entity as any).firstName || '';
+  let lastName = (entity as any).lastName || '';
+
+  // 2. Fallback fallback if the backend ever *does* use a single name field down the road
+  if (!firstName && !lastName && entity.name) {
+    const nameParts = entity.name.trim().split(/\s+/);
+    firstName = nameParts[0] || '';
+    lastName = nameParts.slice(1).join(' ') || '';
+  }
+
+  let phoneNumber = '';
+  if (entity.phone) {
+    if (typeof entity.phone === 'string') {
+      phoneNumber = entity.phone;
+    } else if (typeof entity.phone === 'object') {
+      phoneNumber = (entity.phone as any).number || (entity.phone as any).value || JSON.stringify(entity.phone);
+    }
+  }
+
+  return {
+    id: String(entity.id),
+    firstName,
+    lastName,
+    email: entity.email,
+    phoneNumber,
+    role: entity.role as Role,
+    isActive: true, // Default to active
+    createdAt: entity.createdAt,
+    updatedAt: entity.updatedAt,
+  };
+};
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(() => {
-    const savedUser = sessionStorage.getItem('mockUser');
-    return savedUser ? JSON.parse(savedUser) : null;
-  });
-  const [isLoading, setIsLoading] = useState(false);
+  const [user, setUser] = useState<User | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load user profile on startup if tokens exist
+  useEffect(() => {
+    const initializeAuth = async () => {
+      const token = getAccessToken();
+      if (!token) {
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        // Fetch current user details from /api/auth/me
+        // Note: erpClient automatically unwraps 'data' object in response envelope if structured
+        const res = await erpClient.get('/api/auth/me');
+        // If data was unwrapped: res is { success: true, data: UserEntity } or just UserEntity
+        const userEntity = (res as any).data || res;
+        if (userEntity) {
+          setUser(mapUserEntityToUser(userEntity));
+        }
+      } catch (err) {
+        console.error('Failed to load user profile on startup:', err);
+        // Interceptor might have already handled clearing tokens if it was 401 and refresh failed
+        clearTokens();
+        setUser(null);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    initializeAuth();
+  }, []);
 
   const login = async (email: string, password: string) => {
     setIsLoading(true);
+    try {
+      const res = await erpClient.post('/api/v1/auth/login', { email, password });
     
-    // Simulate API delay
-    await new Promise(resolve => setTimeout(resolve, 800));
-    
-    const mockUser = mockUsers[email.toLowerCase()];
-    
-    // Check if user exists and password is not empty
-    if (mockUser && password && password.trim() !== '') {
-      setUser(mockUser);
-      sessionStorage.setItem('mockUser', JSON.stringify(mockUser));
+      const loginData = (res as any).data || res;
+      
+      if (loginData.accessToken && loginData.refreshToken) {
+        setTokens(loginData.accessToken, loginData.refreshToken);
+        setUser(mapUserEntityToUser(loginData.user));
+      } else {
+        throw new Error('Tokens not found in login response');
+      }
+    } catch (err: any) {
+      console.error('Login error:', err);
+      // Re-throw with formatted error expected by LoginPage
+      const errorMsg = err.error?.message || err.message || 'Invalid email or password';
+      throw { error: { message: errorMsg } };
+    } finally {
       setIsLoading(false);
-      return;
     }
-    
-    setIsLoading(false);
-    throw { error: { message: 'Invalid email or password' } };
   };
 
   const logout = async () => {
-    setUser(null);
-    sessionStorage.removeItem('mockUser');
+    setIsLoading(true);
+    try {
+      await erpClient.post('/api/auth/logout');
+    } catch (err) {
+      console.error('API logout failed, performing local logout:', err);
+    } finally {
+      clearTokens();
+      setUser(null);
+      setIsLoading(false);
+    }
   };
 
   const hasRole = (roles: Role[]) => {

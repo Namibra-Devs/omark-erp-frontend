@@ -1,7 +1,7 @@
 // src/pages/marketing/ProspectDetailPage.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Card, Row, Col, Typography, Tag, Button, Space, Timeline, Modal, Form, Input, Select, DatePicker, message, Descriptions, Badge, Spin, Empty } from 'antd';
+import { Card, Row, Col, Typography, Tag, Button, Space, Timeline, Modal, Form, Input, Select, DatePicker, message, Descriptions, Badge, Spin, Empty, InputNumber, Radio } from 'antd';
 import { 
   ArrowLeftOutlined, 
   PhoneOutlined, 
@@ -11,7 +11,8 @@ import {
   PlusOutlined,
   EditOutlined,
   WhatsAppOutlined,
-  UserOutlined
+  UserOutlined,
+  CheckOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -21,6 +22,14 @@ import { prospectStatusLabels, interactionChannelLabels } from '@/constants/enum
 import type { Prospect, ProspectStatus, Interaction } from '@/types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { 
+  useProspect, 
+  useInteractions, 
+  useLogInteraction, 
+  useUpdateProspect, 
+  useConvertProspect 
+} from '@/api/prospects';
+import { useProperties } from '@/api/properties';
 
 dayjs.extend(relativeTime);
 
@@ -28,269 +37,95 @@ const { Title, Text, Paragraph } = Typography;
 const { TextArea } = Input;
 const { Option } = Select;
 
-// Complete mock data for all prospects
-const allMockProspects: Record<string, Prospect> = {
-  '1': {
-    id: '1',
-    firstName: 'John',
-    lastName: 'Doe',
-    address: '123 Main St, Accra, Ghana',
-    phoneNumber: '+233241234567',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'meeting_scheduled',
-    reasonForContact: 'Interested in buying a 3-bedroom property in Accra',
-    notes: 'Follow up next week. He is looking for a 3-bedroom house in the Accra area. Budget around GHS 500,000 - 600,000.',
-    createdAt: '2024-01-15T10:00:00Z',
-    updatedAt: '2024-01-16T14:30:00Z',
-  },
-  '2': {
-    id: '2',
-    firstName: 'Sarah',
-    lastName: 'Smith',
-    address: '456 Independence Ave, Kumasi, Ghana',
-    phoneNumber: '+233241234568',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'meeting_completed',
-    reasonForContact: 'Wants to view luxury properties in Kumasi',
-    notes: 'Meeting completed. She is interested in a 4-bedroom house with a pool.',
-    createdAt: '2024-01-14T09:30:00Z',
-    updatedAt: '2024-01-15T16:20:00Z',
-  },
-  '3': {
-    id: '3',
-    firstName: 'Michael',
-    lastName: 'Johnson',
-    address: '789 Liberation Rd, Tema, Ghana',
-    phoneNumber: '+233241234569',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'new',
-    reasonForContact: 'Ready to purchase a property in Tema',
-    notes: 'Interested in property #102. Has pre-approval for mortgage.',
-    createdAt: '2024-01-13T14:20:00Z',
-    updatedAt: '2024-01-13T14:20:00Z',
-  },
-  '4': {
-    id: '4',
-    firstName: 'Emma',
-    lastName: 'Williams',
-    address: '321 Castle Rd, Cape Coast, Ghana',
-    phoneNumber: '+233241234570',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'suspended',
-    reasonForContact: 'Was interested in beachfront properties',
-    notes: 'Try reaching out again next month. She had family emergency.',
-    createdAt: '2024-01-12T11:15:00Z',
-    updatedAt: '2024-01-12T11:15:00Z',
-  },
-  '5': {
-    id: '5',
-    firstName: 'James',
-    lastName: 'Brown',
-    address: '654 Ocean Dr, Takoradi, Ghana',
-    phoneNumber: '+233241234571',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'postponed',
-    reasonForContact: 'Wants to see more options in Takoradi',
-    notes: 'Postponed to next month due to work travel.',
-    createdAt: '2024-01-11T16:45:00Z',
-    updatedAt: '2024-01-11T16:45:00Z',
-  },
-  '6': {
-    id: '6',
-    firstName: 'Lisa',
-    lastName: 'Taylor',
-    address: '987 Park Ave, Accra, Ghana',
-    phoneNumber: '+233241234572',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'canceled',
-    reasonForContact: 'Found another property elsewhere',
-    notes: 'Canceled due to alternative purchase in another area.',
-    createdAt: '2024-01-10T13:00:00Z',
-    updatedAt: '2024-01-10T13:00:00Z',
-  },
-  '7': {
-    id: '7',
-    firstName: 'David',
-    lastName: 'Wilson',
-    address: '147 Green St, Kumasi, Ghana',
-    phoneNumber: '+233241234573',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'purchased',
-    reasonForContact: 'Bought a property in Kumasi',
-    notes: 'Successfully converted to customer. Purchased a 3-bedroom house.',
-    createdAt: '2024-01-09T08:30:00Z',
-    updatedAt: '2024-01-09T08:30:00Z',
-  },
-};
-
-// Mock interactions for each prospect
-const allMockInteractions: Record<string, Interaction[]> = {
-  '1': [
-    {
-      id: '1-1',
-      prospectId: '1',
-      channel: 'call',
-      occurredAt: '2024-01-16T14:30:00Z',
-      response: 'Had a great conversation. He is very interested and wants to view properties next week. Specifically interested in properties in East Legon.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-16T14:30:00Z',
-    },
-    {
-      id: '1-2',
-      prospectId: '1',
-      channel: 'whatsapp',
-      occurredAt: '2024-01-15T09:00:00Z',
-      response: 'Sent property listings via WhatsApp. He replied saying he likes two of them and wants to schedule viewings.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-15T09:00:00Z',
-    },
-    {
-      id: '1-3',
-      prospectId: '1',
-      channel: 'email',
-      occurredAt: '2024-01-14T11:15:00Z',
-      response: 'Sent initial property brochure and pricing information via email. He acknowledged receipt and said he would review.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-14T11:15:00Z',
-    },
-  ],
-  '2': [
-    {
-      id: '2-1',
-      prospectId: '2',
-      channel: 'call',
-      occurredAt: '2024-01-15T16:20:00Z',
-      response: 'Meeting completed successfully. She is very interested in the luxury properties we showed her.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-15T16:20:00Z',
-    },
-    {
-      id: '2-2',
-      prospectId: '2',
-      channel: 'whatsapp',
-      occurredAt: '2024-01-14T10:00:00Z',
-      response: 'Sent photos of available luxury properties. She responded positively.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-14T10:00:00Z',
-    },
-  ],
-  '3': [
-    {
-      id: '3-1',
-      prospectId: '3',
-      channel: 'call',
-      occurredAt: '2024-01-13T14:20:00Z',
-      response: 'Initial contact. He is ready to purchase and has pre-approval for mortgage.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-13T14:20:00Z',
-    },
-  ],
-  '4': [
-    {
-      id: '4-1',
-      prospectId: '4',
-      channel: 'call',
-      occurredAt: '2024-01-12T11:15:00Z',
-      response: 'Spoke with her briefly. She had a family emergency and asked to pause the process.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-12T11:15:00Z',
-    },
-  ],
-  '5': [
-    {
-      id: '5-1',
-      prospectId: '5',
-      channel: 'email',
-      occurredAt: '2024-01-11T16:45:00Z',
-      response: 'Sent options for properties in Takoradi. He said he will review when back from travel.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-11T16:45:00Z',
-    },
-  ],
-  '6': [
-    {
-      id: '6-1',
-      prospectId: '6',
-      channel: 'call',
-      occurredAt: '2024-01-10T13:00:00Z',
-      response: 'She informed us she found another property and is canceling the process.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-10T13:00:00Z',
-    },
-  ],
-  '7': [
-    {
-      id: '7-1',
-      prospectId: '7',
-      channel: 'call',
-      occurredAt: '2024-01-09T08:30:00Z',
-      response: 'Successfully converted to customer! He purchased a 3-bedroom house in Kumasi.',
-      loggedByUserId: '2',
-      createdAt: '2024-01-09T08:30:00Z',
-    },
-  ],
-};
-
 export const ProspectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [loading, setLoading] = useState(false);
-  const [prospect, setProspect] = useState<Prospect | null>(null);
-  const [interactions, setInteractions] = useState<Interaction[]>([]);
+
+  // Modals state
   const [logModal, setLogModal] = useState(false);
   const [statusModal, setStatusModal] = useState(false);
+  const [convertModal, setConvertModal] = useState(false);
+  const [convertType, setConvertType] = useState<'fully_paid' | 'payment_plan'>('fully_paid');
+
   const [form] = Form.useForm();
   const [statusForm] = Form.useForm();
+  const [convertForm] = Form.useForm();
 
-  useEffect(() => {
-    // Simulate API call to fetch prospect by ID
-    setLoading(true);
-    setTimeout(() => {
-      const foundProspect = allMockProspects[id || ''];
-      if (foundProspect) {
-        setProspect(foundProspect);
-        setInteractions(allMockInteractions[id || ''] || []);
-      } else {
-        setProspect(null);
-        setInteractions([]);
-      }
-      setLoading(false);
-    }, 500);
-  }, [id]);
+  // API hooks
+  const prospectId = id || '';
+  const { data: prospect, isLoading: isProspectLoading } = useProspect(prospectId);
+  const { data: interactionsResponse, isLoading: isInteractionsLoading } = useInteractions(prospectId);
+  const { data: properties } = useProperties();
 
-  const handleLogInteraction = (values: any) => {
-    if (!prospect) return;
-    
-    const newInteraction: Interaction = {
-      id: `${prospect.id}-${Date.now()}`,
-      prospectId: prospect.id,
-      channel: values.channel,
-      occurredAt: values.occurredAt.toISOString(),
-      response: values.response,
-      loggedByUserId: user?.id || '2',
-      createdAt: new Date().toISOString(),
-    };
-    setInteractions([newInteraction, ...interactions]);
-    setLogModal(false);
-    form.resetFields();
-    message.success('Interaction logged successfully!');
+  const logInteractionMutation = useLogInteraction(prospectId);
+  const updateProspectMutation = useUpdateProspect();
+  const convertProspectMutation = useConvertProspect(prospectId);
+
+  const interactions = (interactionsResponse as any)?.data || interactionsResponse || [];
+
+  const handleLogInteraction = async (values: any) => {
+    try {
+      await logInteractionMutation.mutateAsync({
+        channel: values.channel,
+        occurredAt: values.occurredAt.toISOString(),
+        response: values.response,
+        loggedByUserId: user?.id || '2',
+      });
+      setLogModal(false);
+      form.resetFields();
+      message.success('Interaction logged successfully!');
+    } catch (err: any) {
+      console.error('Failed to log interaction:', err);
+      message.error(err.error?.message || 'Failed to log interaction.');
+    }
   };
 
-  const handleStatusUpdate = (values: { status: ProspectStatus }) => {
-    if (!prospect) return;
-    
-    setProspect({ ...prospect, status: values.status, updatedAt: new Date().toISOString() });
-    setStatusModal(false);
-    statusForm.resetFields();
-    message.success(`Status updated to ${prospectStatusLabels[values.status]}`);
+  const handleStatusUpdate = async (values: { status: ProspectStatus }) => {
+    try {
+      await updateProspectMutation.mutateAsync({
+        id: prospectId,
+        data: { status: values.status },
+      });
+      setStatusModal(false);
+      statusForm.resetFields();
+      message.success(`Status updated to ${prospectStatusLabels[values.status]}`);
+    } catch (err: any) {
+      console.error('Failed to update status:', err);
+      message.error(err.error?.message || 'Failed to update status.');
+    }
+  };
+
+  const handleConvert = async (values: any) => {
+    try {
+      const convertPayload: any = {
+        type: values.type,
+        propertyId: values.propertyId,
+      };
+
+      if (values.type === 'payment_plan') {
+        convertPayload.plan = {
+          totalAmountMinor: Math.round((values.totalAmount || 0) * 100),
+          downPaymentMinor: Math.round((values.downPayment || 0) * 100),
+          numMonths: values.numMonths,
+          startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+        };
+      }
+
+      const newCustomer = await convertProspectMutation.mutateAsync(convertPayload);
+      setConvertModal(false);
+      convertForm.resetFields();
+      message.success('Prospect converted to customer successfully!');
+      // Redirect to customer detail page
+      if (newCustomer && newCustomer.id) {
+        navigate(`/customers/${newCustomer.id}`);
+      } else {
+        navigate('/customers');
+      }
+    } catch (err: any) {
+      console.error('Conversion failed:', err);
+      message.error(err.error?.message || 'Failed to convert prospect to customer.');
+    }
   };
 
   const getChannelIcon = (channel: string) => {
@@ -328,7 +163,7 @@ export const ProspectDetailPage: React.FC = () => {
     }
   };
 
-  if (loading) {
+  if (isProspectLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <Spin size="large" tip="Loading prospect details..." />
@@ -354,6 +189,8 @@ export const ProspectDetailPage: React.FC = () => {
     );
   }
 
+  const isPurchased = prospect.status === 'purchased';
+
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
       <PageHeader
@@ -364,16 +201,24 @@ export const ProspectDetailPage: React.FC = () => {
             onClick: () => navigate('/marketing/prospects'),
             icon: <ArrowLeftOutlined />,
           },
-          {
-            label: 'Log Interaction',
-            onClick: () => setLogModal(true),
-            icon: <PlusOutlined />,
-          },
-          {
-            label: 'Update Status',
-            onClick: () => setStatusModal(true),
-            icon: <EditOutlined />,
-          },
+          ...(!isPurchased ? [
+            {
+              label: 'Convert to Customer',
+              onClick: () => setConvertModal(true),
+              icon: <CheckOutlined />,
+              type: 'primary' as any,
+            },
+            {
+              label: 'Log Interaction',
+              onClick: () => setLogModal(true),
+              icon: <PlusOutlined />,
+            },
+            {
+              label: 'Update Status',
+              onClick: () => setStatusModal(true),
+              icon: <EditOutlined />,
+            },
+          ] : []),
         ]}
       />
 
@@ -429,16 +274,22 @@ export const ProspectDetailPage: React.FC = () => {
           <Card 
             title="Interactions Timeline" 
             extra={
-              <Button type="primary" size="small" onClick={() => setLogModal(true)}>
-                <PlusOutlined /> Log
-              </Button>
+              !isPurchased && (
+                <Button type="primary" size="small" onClick={() => setLogModal(true)}>
+                  <PlusOutlined /> Log
+                </Button>
+              )
             }
             style={{ marginBottom: 16, height: '100%' }}
             bodyStyle={{ padding: '16px', maxHeight: '500px', overflowY: 'auto' }}
           >
-            {interactions.length > 0 ? (
+            {isInteractionsLoading ? (
+              <div style={{ textAlign: 'center', padding: '20px' }}>
+                <Spin size="small" />
+              </div>
+            ) : interactions.length > 0 ? (
               <Timeline>
-                {interactions.map((interaction) => (
+                {interactions.map((interaction: Interaction) => (
                   <Timeline.Item
                     key={interaction.id}
                     dot={<span style={{ color: getChannelColor(interaction.channel) }}>{getChannelIcon(interaction.channel)}</span>}
@@ -506,6 +357,7 @@ export const ProspectDetailPage: React.FC = () => {
             name="occurredAt"
             label="Date & Time"
             rules={[{ required: true, message: 'Please select date and time' }]}
+            initialValue={dayjs()}
           >
             <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
           </Form.Item>
@@ -520,7 +372,9 @@ export const ProspectDetailPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit">Log Interaction</Button>
+              <Button type="primary" htmlType="submit" loading={logInteractionMutation.isPending}>
+                Log Interaction
+              </Button>
               <Button onClick={() => {
                 setLogModal(false);
                 form.resetFields();
@@ -548,6 +402,7 @@ export const ProspectDetailPage: React.FC = () => {
             name="status"
             label="New Status"
             rules={[{ required: true, message: 'Please select a status' }]}
+            initialValue={prospect.status}
           >
             <Select placeholder="Select new status" style={{ width: '100%' }}>
               <Option value="new">New</Option>
@@ -561,10 +416,122 @@ export const ProspectDetailPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit">Update Status</Button>
+              <Button type="primary" htmlType="submit" loading={updateProspectMutation.isPending}>
+                Update Status
+              </Button>
               <Button onClick={() => {
                 setStatusModal(false);
                 statusForm.resetFields();
+              }}>Cancel</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Convert to Customer Modal */}
+      <Modal
+        title="Convert Prospect to Customer"
+        open={convertModal}
+        onCancel={() => {
+          setConvertModal(false);
+          convertForm.resetFields();
+        }}
+        footer={null}
+        width={550}
+        style={{ maxWidth: '95%', top: 20 }}
+        bodyStyle={{ padding: '16px' }}
+      >
+        <Form 
+          form={convertForm} 
+          layout="vertical" 
+          onFinish={handleConvert}
+          initialValues={{ type: 'fully_paid' }}
+          onValuesChange={(changed) => {
+            if (changed.type) {
+              setConvertType(changed.type);
+            }
+          }}
+        >
+          <Form.Item
+            name="type"
+            label="Customer Class"
+            rules={[{ required: true }]}
+          >
+            <Radio.Group optionType="button" buttonStyle="solid">
+              <Radio value="fully_paid">Fully Paid</Radio>
+              <Radio value="payment_plan">Payment Plan</Radio>
+            </Radio.Group>
+          </Form.Item>
+
+          <Form.Item
+            name="propertyId"
+            label="Select Property"
+            rules={[{ required: true, message: 'Please select a property' }]}
+          >
+            <Select placeholder="Choose property" showSearch optionFilterProp="children">
+              {properties?.map((prop) => (
+                <Option key={prop.id} value={prop.id}>
+                  {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          {convertType === 'payment_plan' && (
+            <>
+              <Row gutter={8}>
+                <Col span={12}>
+                  <Form.Item
+                    name="totalAmount"
+                    label="Contract Price (GHS)"
+                    rules={[{ required: true, message: 'Price is required' }]}
+                  >
+                    <InputNumber min={1} style={{ width: '100%' }} placeholder="150,000" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="downPayment"
+                    label="Down Payment (GHS)"
+                    rules={[{ required: true, message: 'Down payment is required' }]}
+                  >
+                    <InputNumber min={0} style={{ width: '100%' }} placeholder="30,000" />
+                  </Form.Item>
+                </Col>
+              </Row>
+
+              <Row gutter={8}>
+                <Col span={12}>
+                  <Form.Item
+                    name="numMonths"
+                    label="Plan Duration (Months)"
+                    rules={[{ required: true, message: 'Duration is required' }]}
+                  >
+                    <InputNumber min={1} max={120} style={{ width: '100%' }} placeholder="12" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="startDate"
+                    label="Start Date"
+                    rules={[{ required: true, message: 'Start date is required' }]}
+                    initialValue={dayjs()}
+                  >
+                    <DatePicker style={{ width: '100%' }} />
+                  </Form.Item>
+                </Col>
+              </Row>
+            </>
+          )}
+
+          <Form.Item style={{ marginTop: 24 }}>
+            <Space wrap>
+              <Button type="primary" htmlType="submit" loading={convertProspectMutation.isPending}>
+                Convert Prospect
+              </Button>
+              <Button onClick={() => {
+                setConvertModal(false);
+                convertForm.resetFields();
               }}>Cancel</Button>
             </Space>
           </Form.Item>

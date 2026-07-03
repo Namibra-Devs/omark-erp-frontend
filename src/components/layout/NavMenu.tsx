@@ -27,8 +27,9 @@ export const NavMenu: React.FC = () => {
   // Get the current selected key based on path
   const getSelectedKey = () => {
     const path = location.pathname;
+     if (path.startsWith('/marketing/overview')) return '/marketing/overview';
     if (path.startsWith('/marketing/prospects')) return '/marketing/prospects';
-    if (path.startsWith('/marketing/overview')) return '/marketing/overview';
+   
     if (path.startsWith('/cs/prospects')) return '/cs/prospects';
     if (path.startsWith('/cs/appointments')) return '/cs/appointments';
     if (path.startsWith('/customers')) return '/customers';
@@ -61,6 +62,15 @@ export const NavMenu: React.FC = () => {
     }
 
     // Marketing section
+if (hasRole(['marketing_director', 'admin'])) {
+      items.push({
+        key: '/marketing/overview',
+        icon: <BarChartOutlined />,
+        label: 'Director Overview',
+      });
+    }
+
+
     if (hasRole(['marketing_staff', 'marketing_director', 'admin'])) {
       items.push({
         key: '/marketing/prospects',
@@ -69,14 +79,7 @@ export const NavMenu: React.FC = () => {
       });
     }
     
-    if (hasRole(['marketing_director', 'admin'])) {
-      items.push({
-        key: '/marketing/overview',
-        icon: <BarChartOutlined />,
-        label: 'Director Overview',
-      });
-    }
-
+    
     // Customer Service section
     if (hasRole(['customer_service', 'admin'])) {
       items.push({

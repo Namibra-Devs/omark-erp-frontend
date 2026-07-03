@@ -1,7 +1,7 @@
 // src/pages/marketing/ProspectsPage.tsx
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card } from 'antd';
+import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin } from 'antd';
 import { PlusOutlined, EyeOutlined, SearchOutlined } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -9,160 +9,61 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
+import { useProspects, useCreateProspect, useUpdateProspect } from '@/api/prospects';
 
 const { Option } = Select;
 const { TextArea } = Input;
 const { Text } = Typography;
-
-// Mock data
-const mockProspects: Prospect[] = [
-  {
-    id: '1',
-    firstName: 'John',
-    lastName: 'Doe',
-    address: '123 Main St, Accra',
-    phoneNumber: '+233241234567',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'new',
-    reasonForContact: 'Interested in buying a property',
-    notes: 'Follow up next week',
-    createdAt: '2024-01-15T10:00:00Z',
-    updatedAt: '2024-01-15T10:00:00Z',
-  },
-  {
-    id: '2',
-    firstName: 'Sarah',
-    lastName: 'Smith',
-    address: '456 Independence Ave, Kumasi',
-    phoneNumber: '+233241234568',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'meeting_scheduled',
-    reasonForContact: 'Wants to view properties',
-    notes: 'Meeting scheduled for Monday',
-    createdAt: '2024-01-14T09:30:00Z',
-    updatedAt: '2024-01-14T09:30:00Z',
-  },
-  {
-    id: '3',
-    firstName: 'Michael',
-    lastName: 'Johnson',
-    address: '789 Liberation Rd, Tema',
-    phoneNumber: '+233241234569',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'meeting_completed',
-    reasonForContact: 'Ready to purchase',
-    notes: 'Interested in property #102',
-    createdAt: '2024-01-13T14:20:00Z',
-    updatedAt: '2024-01-13T14:20:00Z',
-  },
-  {
-    id: '4',
-    firstName: 'Emma',
-    lastName: 'Williams',
-    address: '321 Castle Rd, Cape Coast',
-    phoneNumber: '+233241234570',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'suspended',
-    reasonForContact: 'Was interested but went silent',
-    notes: 'Try reaching out again next month',
-    createdAt: '2024-01-12T11:15:00Z',
-    updatedAt: '2024-01-12T11:15:00Z',
-  },
-  {
-    id: '5',
-    firstName: 'James',
-    lastName: 'Brown',
-    address: '654 Ocean Dr, Takoradi',
-    phoneNumber: '+233241234571',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'postponed',
-    reasonForContact: 'Wants to see more options',
-    notes: 'Postponed to next month',
-    createdAt: '2024-01-11T16:45:00Z',
-    updatedAt: '2024-01-11T16:45:00Z',
-  },
-  {
-    id: '6',
-    firstName: 'Lisa',
-    lastName: 'Taylor',
-    address: '987 Park Ave, Accra',
-    phoneNumber: '+233241234572',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'canceled',
-    reasonForContact: 'Found another property',
-    notes: 'Canceled due to alternative purchase',
-    createdAt: '2024-01-10T13:00:00Z',
-    updatedAt: '2024-01-10T13:00:00Z',
-  },
-  {
-    id: '7',
-    firstName: 'David',
-    lastName: 'Wilson',
-    address: '147 Green St, Kumasi',
-    phoneNumber: '+233241234573',
-    source: 'marketing',
-    assignedUserId: '2',
-    status: 'purchased',
-    reasonForContact: 'Bought a property',
-    notes: 'Successfully converted to customer',
-    createdAt: '2024-01-09T08:30:00Z',
-    updatedAt: '2024-01-09T08:30:00Z',
-  },
-];
 
 export const ProspectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
-  const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [prospects, setProspects] = useState<Prospect[]>(mockProspects);
+
+  // React Query hooks
+  const { data: prospectsResponse, isLoading, refetch } = useProspects({
+    source: 'marketing',
+    status: statusFilter === 'all' ? undefined : statusFilter,
+    q: searchText || undefined,
+  });
+
+  const createProspectMutation = useCreateProspect();
+  const updateProspectMutation = useUpdateProspect();
+
+  const prospects = prospectsResponse?.data || [];
 
   const handleAddProspect = async (values: any) => {
-    setLoading(true);
-    // Simulate API call
-    setTimeout(() => {
-      const newProspect: Prospect = {
-        id: Date.now().toString(),
+    try {
+      await createProspectMutation.mutateAsync({
         ...values,
         source: 'marketing',
         assignedUserId: user?.id || '2',
         status: 'new',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setProspects([newProspect, ...prospects]);
-      setLoading(false);
+      });
       setIsModalOpen(false);
       form.resetFields();
       message.success('Prospect added successfully!');
-    }, 800);
+    } catch (err: any) {
+      console.error('Failed to add prospect:', err);
+      message.error(err.error?.message || 'Failed to add prospect. Please try again.');
+    }
   };
 
-  const handleStatusChange = (id: string, newStatus: ProspectStatus) => {
-    setProspects(prospects.map(p => 
-      p.id === id ? { ...p, status: newStatus, updatedAt: new Date().toISOString() } : p
-    ));
-    message.success(`Status updated to ${prospectStatusLabels[newStatus]}`);
+  const handleStatusChange = async (id: string, newStatus: ProspectStatus) => {
+    try {
+      await updateProspectMutation.mutateAsync({
+        id,
+        data: { status: newStatus },
+      });
+      message.success(`Status updated to ${prospectStatusLabels[newStatus]}`);
+    } catch (err: any) {
+      console.error('Failed to update status:', err);
+      message.error(err.error?.message || 'Failed to update status.');
+    }
   };
-
-  // Filter prospects
-  const filteredProspects = prospects.filter(prospect => {
-    const matchesSearch = prospect.firstName.toLowerCase().includes(searchText.toLowerCase()) ||
-                          prospect.lastName.toLowerCase().includes(searchText.toLowerCase()) ||
-                          prospect.phoneNumber.includes(searchText) ||
-                          prospect.address.toLowerCase().includes(searchText.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || prospect.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
 
   const columns = [
     {
@@ -219,7 +120,7 @@ export const ProspectsPage: React.FC = () => {
       width: 240,
       fixed: 'right' as any,
       render: (_: any, record: Prospect) => (
-        <Space size={[4, 4]} wrap>
+        <Space size={[4, 4]} wrap onClick={(e) => e.stopPropagation()}>
           <Button
             type="link"
             icon={<EyeOutlined />}
@@ -229,7 +130,7 @@ export const ProspectsPage: React.FC = () => {
             View
           </Button>
           <Select
-            defaultValue={record.status}
+            value={record.status}
             style={{ width: 130, minWidth: 100 }}
             size="small"
             onChange={(value) => handleStatusChange(record.id, value as ProspectStatus)}
@@ -294,7 +195,7 @@ export const ProspectsPage: React.FC = () => {
           </Col>
           <Col xs={24} sm={24} md={8}>
             <Text type="secondary" style={{ display: 'block', textAlign: 'right' }}>
-              Total: {filteredProspects.length} prospects
+              Total: {prospects.length} prospects
             </Text>
           </Col>
         </Row>
@@ -304,9 +205,9 @@ export const ProspectsPage: React.FC = () => {
       <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
         <Table
           columns={columns}
-          dataSource={filteredProspects}
+          dataSource={prospects}
           rowKey="id"
-          loading={loading}
+          loading={isLoading}
           size="middle"
           scroll={{ x: 700 }}
           pagination={{
@@ -394,7 +295,7 @@ export const ProspectsPage: React.FC = () => {
           
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button type="primary" htmlType="submit" loading={createProspectMutation.isPending}>
                 Create Prospect
               </Button>
               <Button onClick={() => setIsModalOpen(false)}>Cancel</Button>

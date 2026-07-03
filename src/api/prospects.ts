@@ -54,16 +54,16 @@ export const useCreateProspect = () => {
   });
 };
 
-export const useUpdateProspect = (id: string) => {
+export const useUpdateProspect = () => {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (data: Partial<Prospect>) => {
+    mutationFn: async ({ id, data }: { id: string; data: Partial<Prospect> }) => {
       const response = await apiClient.patch<ApiResponse<Prospect>>(`/prospects/${id}`, data);
       return response.data;
     },
-    onSuccess: () => {
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['prospects'] });
-      queryClient.invalidateQueries({ queryKey: ['prospect', id] });
+      queryClient.invalidateQueries({ queryKey: ['prospect', variables.id] });
     },
   });
 };

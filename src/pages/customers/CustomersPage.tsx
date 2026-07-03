@@ -1,6 +1,8 @@
 // src/pages/customers/CustomersPage.tsx
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
+import { useCustomers, useDeleteCustomer, useUpdateCustomer } from '@/api/customers';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
@@ -251,14 +253,31 @@ const getProgressBand = (percent: number): ProgressBand => {
 export const CustomersPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
-  
-  // States
-  const [loading, setLoading] = useState(false);
-  const [customers, setCustomers] = useState<Customer[]>(mockCustomers);
-  const [paymentPlans, setPaymentPlans] = useState<Record<string, PaymentPlan>>(mockPaymentPlans);
+  const queryClient = useQueryClient();
+
+  // ── Filter state ──────────────────────────────────────────────────────────
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState('all');
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 20;
+
+  // ── Live API data ─────────────────────────────────────────────────────────
+  const { data: customersResponse, isLoading: customersLoading, refetch } = useCustomers({
+    type: (typeFilter !== 'all' ? typeFilter : undefined) as any,
+    q: searchText || undefined,
+    page,
+    pageSize: PAGE_SIZE,
+  });
+
+  const customers: Customer[] = (customersResponse as any)?.data ?? [];
+  const customersMeta = (customersResponse as any)?.meta;
+
+  const deleteCustomerMutation = useDeleteCustomer();
+
+  // Keep UI states for modals/drawers
+  const [loading, setLoading] = useState(false);
+  const [paymentPlans] = useState<Record<string, PaymentPlan>>(mockPaymentPlans); // local cache for plan display
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [editModal, setEditModal] = useState(false);
@@ -324,55 +343,24 @@ export const CustomersPage: React.FC = () => {
     return mockProperties[propertyId] || null;
   };
 
-  // Add Customer with Payment Plan
+  // Add Customer — navigates to prospects convert flow or shows info message
   const handleAddCustomer = (values: any) => {
-    setLoading(true);
-    setTimeout(() => {
-      const customerId = `c${Date.now()}`;
-      
-      // Create customer
-      const newCustomer: Customer = {
-        id: customerId,
-        prospectId: values.prospectId || `p${Date.now()}`,
-        firstName: values.firstName,
-        lastName: values.lastName,
-        phoneNumber: values.phoneNumber,
-        address: values.address,
-        type: values.type,
-        propertyId: values.propertyId || 'prop1',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
+    // Customer creation goes through the prospect-convert flow on the backend.
+    // If a prospect ID is provided we can trigger the conversion.
+    message.info('To add a customer, please convert a prospect from the Prospects page.');
+    setAddModal(false);
+  };
 
-      // If payment plan, create payment plan
-      if (values.type === 'payment_plan') {
-        const planData = calculatePaymentPlan(values);
-        const newPlan: PaymentPlan = {
-          id: `pp${Date.now()}`,
-          customerId: customerId,
-          propertyId: values.propertyId || 'prop1',
-          totalAmountMinor: planData.totalAmountMinor,
-          downPaymentMinor: planData.downPaymentMinor,
-          balanceMinor: planData.balanceMinor,
-          numMonths: planData.numMonths,
-          monthlyAmountMinor: planData.monthlyAmountMinor,
-          currency: 'GHS',
-          startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-          status: 'active',
-          progressPercent: planData.progressPercent,
-          progressBand: planData.progressBand,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        setPaymentPlans({ ...paymentPlans, [customerId]: newPlan });
-      }
-
-      setCustomers([newCustomer, ...customers]);
-      setLoading(false);
-      setAddModal(false);
-      addForm.resetFields();
-      message.success(`Customer ${newCustomer.firstName} ${newCustomer.lastName} added successfully!`);
-    }, 800);
+  // Delete customer via API
+  const handleDeleteCustomer = (id: string) => {
+    deleteCustomerMutation.mutate(id, {
+      onSuccess: () => {
+        message.success('Customer deleted successfully!');
+      },
+      onError: () => {
+        message.error('Failed to delete customer. Please try again.');
+      },
+    });
   };
 
   // Export function
@@ -467,20 +455,15 @@ export const CustomersPage: React.FC = () => {
     }, 1000);
   };
 
-  // Filter customers
+  // Client-side tab filter (tab selection refines existing type filter)
   const filteredCustomers = customers.filter(customer => {
-    const fullName = `${customer.firstName} ${customer.lastName}`.toLowerCase();
-    const matchesSearch = fullName.includes(searchText.toLowerCase()) ||
-                          customer.phoneNumber.includes(searchText) ||
-                          customer.address.toLowerCase().includes(searchText.toLowerCase());
-    const matchesType = typeFilter === 'all' || customer.type === typeFilter;
     const matchesTab = activeTab === 'all' || customer.type === activeTab;
-    return matchesSearch && matchesType && matchesTab;
+    return matchesTab;
   });
 
-  // Stats
+  // Stats — derived from live data
   const stats = {
-    total: customers.length,
+    total: customersMeta?.total ?? customers.length,
     paymentPlan: customers.filter(c => c.type === 'payment_plan').length,
     fullyPaid: customers.filter(c => c.type === 'fully_paid').length,
     activePlans: Object.values(paymentPlans).filter(p => p.status === 'active').length,

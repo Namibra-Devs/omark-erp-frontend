@@ -129,6 +129,16 @@ const AppRoutes: React.FC = () => {
         {/* ===== PROSPECT ROUTES ===== */}
         
         {/* Marketing Prospects List - /marketing/prospects */}
+{/* Marketing Director Overview - /marketing/overview */}
+        <Route 
+          path="/marketing/overview" 
+          element={
+            <ProtectedRoute allowedRoles={['marketing_director', 'admin']}>
+              <DirectorOverviewPage />
+            </ProtectedRoute>
+          } 
+        />
+
         <Route 
           path="/marketing/prospects" 
           element={
@@ -148,15 +158,7 @@ const AppRoutes: React.FC = () => {
           } 
         />
         
-        {/* Marketing Director Overview - /marketing/overview */}
-        <Route 
-          path="/marketing/overview" 
-          element={
-            <ProtectedRoute allowedRoles={['marketing_director', 'admin']}>
-              <DirectorOverviewPage />
-            </ProtectedRoute>
-          } 
-        />
+        
         
         {/* CS Prospects List - /cs/prospects */}
         <Route 

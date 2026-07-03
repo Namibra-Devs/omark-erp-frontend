@@ -12,7 +12,6 @@ import {
 import { PhoneInput } from '@/components/shared/PhoneInput';
 
 const { Text, Title } = Typography;
-const { Option } = Select;
 
 // ── Role definitions with icon + colour ────────────────────────────────────
 const ROLES = [
@@ -29,9 +28,9 @@ const ROLES = [
     value: 'marketing_director',
     label: 'Marketing Director',
     icon: <BarChartOutlined />,
-    color: '#722ed1',
+    color: '#090d2dff',
     bg: '#f9f0ff',
-    border: '#d3adf7',
+    border: '#a598efff',
     desc: 'Manage campaigns & team',
   },
   {
@@ -156,7 +155,7 @@ const RolePicker: React.FC<{
       return (
         <div
           key={r.value}
-          onClick={() => onChange?.(r.value)}
+          onClick={() => onChange?.(r.value)} // Correctly passes event back up to Ant Design
           style={{
             border: `2px solid ${selected ? r.color : '#e8e8e8'}`,
             borderRadius: 12,
@@ -299,11 +298,10 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
     reset();
   };
 
-  // Validate current step's fields before advancing
   const nextStep = async () => {
     const fieldsPerStep: Record<number, string[]> = {
       1: ['firstName', 'lastName', 'email', 'phone'],
-      2: ['role'],
+      2: ['role', 'department'],
     };
     try {
       await form.validateFields(fieldsPerStep[step]);
@@ -311,17 +309,21 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
       setPreview({ firstName: vals.firstName, lastName: vals.lastName, role: vals.role });
       setStep((s) => s + 1);
     } catch {
-      // validation errors shown by antd
+      // validation errors managed by antd
     }
   };
 
+  // Intercept changes here using a wrapper method to cleanly pass down value updates
   const handleRoleChange = (role: string) => {
-    form.setFieldValue('role', role);
-    form.setFieldValue('department', DEPT_BY_ROLE[role] ?? '');
+    form.setFieldsValue({
+      role: role,
+      department: DEPT_BY_ROLE[role] ?? '',
+    });
     setPreview((p) => ({ ...p, role }));
   };
 
   const handleFinish = (values: any) => {
+    // values here will now contain clean attributes for firstName, role, department, etc.
     onAdd(values);
     reset();
   };
@@ -385,6 +387,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           rules={[{ required: true, message: 'Please select a role' }]}
           style={{ marginBottom: 8 }}
         >
+          {/* Custom onChange bypassed previously. Now we bridge AntD's internal updates via handleRoleChange */}
           <RolePicker onChange={handleRoleChange} />
         </Form.Item>
 
@@ -450,7 +453,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
       onCancel={handleCancel}
       footer={null}
       width={580}
-      destroyOnHidden
+      destroyOnHidden={false} /* Prevents unmounted multi-step data from dumping out prematurely */
       styles={{
         content: { borderRadius: 16, padding: 0, overflow: 'hidden' },
         body: { padding: 0 },
@@ -459,7 +462,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
       {/* Coloured header band */}
       <div
         style={{
-          background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+          background: 'linear-gradient(135deg, #04041dff 0%, #06044cff 100%)',
           padding: '20px 28px 16px',
         }}
       >
@@ -479,6 +482,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           layout="vertical"
           onFinish={handleFinish}
           requiredMark={false}
+          preserve={true} /* Crucial: ensures values from stepped-out views persist on submit */
         >
           {/* Animated step content */}
           <div

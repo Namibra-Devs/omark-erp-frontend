@@ -145,13 +145,14 @@ export const CustomerDetailPage: React.FC = () => {
   };
 
   const handleGenerateDeed = () => {
-    message.success('Deed generated successfully!');
+    message.info('Deed generation coming soon!');
   };
 
   const handleGeneratePDF = () => {
-    message.success('Payment plan PDF generated!');
+    message.info('PDF generation coming soon!');
   };
 
+  // ── Loading / not found states ────────────────────────────────────────────
   if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
@@ -187,7 +188,7 @@ export const CustomerDetailPage: React.FC = () => {
             label: 'Record Payment',
             onClick: () => setRecordPaymentModal(true),
             icon: <PlusOutlined />,
-            disabled: isFullyPaid,
+            disabled: isFullyPaid || !plan,
           },
           {
             label: 'Generate Deed',
@@ -220,7 +221,7 @@ export const CustomerDetailPage: React.FC = () => {
                     {customer.address}
                   </Descriptions.Item>
                   <Descriptions.Item label="Property">
-                    {property ? `${property.houseNumber} - ${property.offerNumber}` : 'N/A'}
+                    {customer.propertyId || 'N/A'}
                   </Descriptions.Item>
                   <Descriptions.Item label="Joined">
                     {dayjs(customer.createdAt).format('MMMM DD, YYYY')}
@@ -236,27 +237,23 @@ export const CustomerDetailPage: React.FC = () => {
               <div>
                 <Text type="secondary">Total Paid</Text>
                 <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-                  {isFullyPaid ? (
-                    <MoneyText minor={mockProperty.priceMinor} />
-                  ) : paymentPlan ? (
-                    <MoneyText minor={paymentPlan.totalAmountMinor - paymentPlan.balanceMinor} />
+                  {plan ? (
+                    <MoneyText minor={plan.totalAmountMinor - plan.balanceMinor} />
                   ) : 'GHS 0.00'}
                 </div>
               </div>
               <div>
                 <Text type="secondary">Balance</Text>
                 <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-                  {isFullyPaid ? (
-                    'GHS 0.00'
-                  ) : paymentPlan ? (
-                    <MoneyText minor={paymentPlan.balanceMinor} />
+                  {plan ? (
+                    <MoneyText minor={plan.balanceMinor} />
                   ) : 'GHS 0.00'}
                 </div>
               </div>
               <div>
                 <Text type="secondary">Progress</Text>
                 <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-                  {isFullyPaid ? '100%' : paymentPlan ? `${paymentPlan.progressPercent}%` : '0%'}
+                  {isFullyPaid ? '100%' : plan ? `${plan.progressPercent}%` : '0%'}
                 </div>
               </div>
             </div>
@@ -282,32 +279,32 @@ export const CustomerDetailPage: React.FC = () => {
                         <Title level={4} style={{ marginTop: 16 }}>Fully Paid</Title>
                         <Text type="secondary">This customer has fully paid for their property</Text>
                       </div>
-                    ) : paymentPlan ? (
+                    ) : plan ? (
                       <div>
                         <div style={{ marginBottom: 16 }}>
-                          <ProgressCell percent={paymentPlan.progressPercent} band={paymentPlan.progressBand} />
+                          <ProgressCell percent={plan.progressPercent} band={plan.progressBand} />
                         </div>
                         <Descriptions column={2} size="small" bordered>
                           <Descriptions.Item label="Total Amount" span={2}>
-                            <MoneyText minor={paymentPlan.totalAmountMinor} />
+                            <MoneyText minor={plan.totalAmountMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Down Payment">
-                            <MoneyText minor={paymentPlan.downPaymentMinor} />
+                            <MoneyText minor={plan.downPaymentMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Balance">
-                            <MoneyText minor={paymentPlan.balanceMinor} />
+                            <MoneyText minor={plan.balanceMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Monthly Amount">
-                            <MoneyText minor={paymentPlan.monthlyAmountMinor} />
+                            <MoneyText minor={plan.monthlyAmountMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Duration">
-                            {paymentPlan.numMonths} months
+                            {plan.numMonths} months
                           </Descriptions.Item>
                           <Descriptions.Item label="Start Date">
-                            {dayjs(paymentPlan.startDate).format('MMMM DD, YYYY')}
+                            {dayjs(plan.startDate).format('MMMM DD, YYYY')}
                           </Descriptions.Item>
                           <Descriptions.Item label="Status" span={2}>
-                            <StatusTag status={paymentPlan.status} type="paymentPlan" />
+                            <StatusTag status={plan.status} type="paymentPlan" />
                           </Descriptions.Item>
                         </Descriptions>
                         <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
@@ -325,25 +322,24 @@ export const CustomerDetailPage: React.FC = () => {
                   </Card>
                 </Col>
                 <Col xs={24} lg={12}>
-                  <Card title="Property Details">
-                    {property ? (
-                      <Descriptions column={1} size="small" bordered>
-                        <Descriptions.Item label="House Number">
-                          <Text strong>{property.houseNumber}</Text>
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Offer Number">
-                          {property.offerNumber}
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Price">
-                          <MoneyText minor={property.priceMinor} />
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Description">
-                          {property.description || 'No description available'}
-                        </Descriptions.Item>
-                      </Descriptions>
-                    ) : (
-                      <Empty description="No property details found" />
-                    )}
+                  <Card title="Customer Details">
+                    <Descriptions column={1} size="small" bordered>
+                      <Descriptions.Item label="Full Name">
+                        <Text strong>{customer.firstName} {customer.lastName}</Text>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Phone">
+                        <a href={`tel:${customer.phoneNumber}`}>{customer.phoneNumber}</a>
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Address">
+                        {customer.address}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Property ID">
+                        {customer.propertyId || 'N/A'}
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Customer Since">
+                        {dayjs(customer.createdAt).format('MMMM DD, YYYY')}
+                      </Descriptions.Item>
+                    </Descriptions>
                   </Card>
                 </Col>
               </Row>
@@ -354,43 +350,46 @@ export const CustomerDetailPage: React.FC = () => {
             label: 'Installments',
             children: (
               <Card>
-                <Table
-                  columns={[
-                    { title: '#', dataIndex: 'sequence', key: 'sequence', width: 80 },
-                    { 
-                      title: 'Due Date', 
-                      dataIndex: 'dueDate', 
-                      key: 'dueDate',
-                      render: (date: string) => dayjs(date).format('MMMM DD, YYYY'),
-                    },
-                    {
-                      title: 'Expected Amount',
-                      dataIndex: 'expectedAmountMinor',
-                      key: 'expectedAmountMinor',
-                      render: (value: number) => <MoneyText minor={value} />,
-                    },
-                    {
-                      title: 'Status',
-                      dataIndex: 'isPaid',
-                      key: 'isPaid',
-                      render: (isPaid: boolean) => (
-                        <Tag color={isPaid ? 'green' : 'red'}>
-                          {isPaid ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-                          {isPaid ? ' Paid' : ' Pending'}
-                        </Tag>
-                      ),
-                    },
-                    {
-                      title: 'Paid Date',
-                      dataIndex: 'paidAt',
-                      key: 'paidAt',
-                      render: (date: string) => date ? dayjs(date).format('MMMM DD, YYYY') : '-',
-                    },
-                  ]}
-                  dataSource={installments}
-                  rowKey="id"
-                  pagination={false}
-                />
+                <Spin spinning={installmentsLoading}>
+                  <Table
+                    columns={[
+                      { title: '#', dataIndex: 'sequence', key: 'sequence', width: 80 },
+                      {
+                        title: 'Due Date',
+                        dataIndex: 'dueDate',
+                        key: 'dueDate',
+                        render: (date: string) => dayjs(date).format('MMMM DD, YYYY'),
+                      },
+                      {
+                        title: 'Expected Amount',
+                        dataIndex: 'expectedAmountMinor',
+                        key: 'expectedAmountMinor',
+                        render: (value: number) => <MoneyText minor={value} />,
+                      },
+                      {
+                        title: 'Status',
+                        dataIndex: 'isPaid',
+                        key: 'isPaid',
+                        render: (isPaid: boolean) => (
+                          <Tag color={isPaid ? 'green' : 'red'}>
+                            {isPaid ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
+                            {isPaid ? ' Paid' : ' Pending'}
+                          </Tag>
+                        ),
+                      },
+                      {
+                        title: 'Paid Date',
+                        dataIndex: 'paidAt',
+                        key: 'paidAt',
+                        render: (date: string) => date ? dayjs(date).format('MMMM DD, YYYY') : '-',
+                      },
+                    ]}
+                    dataSource={installments as any[]}
+                    rowKey="id"
+                    pagination={false}
+                    locale={{ emptyText: plan ? 'No installments found' : 'No payment plan attached' }}
+                  />
+                </Spin>
               </Card>
             ),
           },
@@ -441,7 +440,7 @@ export const CustomerDetailPage: React.FC = () => {
                       render: (id: string) => `User #${id}`,
                     },
                   ]}
-                  dataSource={payments}
+                  dataSource={plan?.payments || []}
                   rowKey="id"
                   pagination={{ pageSize: 5 }}
                 />
@@ -487,7 +486,7 @@ export const CustomerDetailPage: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleRecordPayment}>
           <Form.Item
-            name="amountMinor"
+            name="amountGHS"
             label="Amount (GHS)"
             rules={[{ required: true, message: 'Please enter amount' }]}
           >
@@ -495,12 +494,8 @@ export const CustomerDetailPage: React.FC = () => {
               style={{ width: '100%' }}
               prefix="GHS"
               precision={2}
-              placeholder="Enter amount"
-            onChange={(value: number | string | null) => {
-  const numeric = typeof value === 'string' ? parseFloat(value) : value;
-  const minor = Math.round((numeric || 0) * 100);
-  form.setFieldsValue({ amountMinor: minor });
-}}
+              min={0.01}
+              placeholder="Enter amount in GHS"
             />
           </Form.Item>
 
@@ -535,7 +530,11 @@ export const CustomerDetailPage: React.FC = () => {
 
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit">
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={recordPaymentMutation.isPending}
+              >
                 Record Payment
               </Button>
               <Button onClick={() => {
