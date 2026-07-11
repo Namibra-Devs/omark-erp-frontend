@@ -1,11 +1,9 @@
 // src/pages/dashboard/AdminDashboardPage.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Tabs, Typography, Space, Button, Alert, Badge, message, Tooltip } from 'antd';
 import {
   DashboardOutlined,
   UserOutlined,
-  SettingOutlined,
-  AuditOutlined,
   ReloadOutlined,
   ExportOutlined,
   PlusOutlined,
@@ -18,8 +16,6 @@ import { StatsCards } from './admin/components/StatsCards';
 import { QuickActions } from './admin/components/QuickActions';
 import { RecentActivity } from './admin/components/RecentActivity';
 import { UserManagement } from './admin/components/UserManagement';
-import { SystemSettings } from './admin/components/SystemSettings';
-import { AuditLog } from './admin/components/AuditLog';
 import { AddUserModal } from './admin/components/AddUserModal';
 import { EditUserDrawer } from './admin/components/EditUserDrawer';
 import { ExportModal } from './admin/components/ExportModal';
@@ -121,21 +117,6 @@ export const AdminDashboardPage: React.FC = () => {
   const [editUserDrawer, setEditUserDrawer] = useState(false);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [exportModal, setExportModal] = useState(false);
-  const [auditLogModal, setAuditLogModal] = useState(false);
-  const [settingsModal, setSettingsModal] = useState(false);
-  const [systemSettings, setSystemSettings] = useState({
-    maintenanceMode: false,
-    emailNotifications: true,
-    smsNotifications: true,
-    autoBackup: true,
-    defaultCurrency: 'GHS',
-    timezone: 'Africa/Accra',
-    dateFormat: 'YYYY-MM-DD',
-  });
-
-  // Dismiss maintenance alert without turning off the setting
-  const [maintenanceDismissed, setMaintenanceDismissed] = useState(false);
-  useEffect(() => { setMaintenanceDismissed(false); }, [systemSettings.maintenanceMode]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleExport = (format: 'excel' | 'csv' | 'pdf' | 'json') => {
@@ -144,21 +125,10 @@ export const AdminDashboardPage: React.FC = () => {
   };
 
  const handleAddUser = (values: any) => {
-    // Debugging safeguard line: Check your terminal console if things still look strange
-    console.log("Parent component received values for submission:", values);
-
-    // Ensure we handle values gracefully even if a field is skipped
-    addUser({
-      name: `${values.firstName || ''} ${values.lastName || ''}`.trim() || 'New User',
-      email: values.email || '',
-      phone: values.phone || '',
-      role: values.role || 'marketing_staff', // Set your preferred default fallback role here
-      status: 'active',
-      department: values.department || 'Marketing', // Default fallback department
-    });
-    setAddUserModal(false);
-  };
-
+  console.log("Parent component received values for submission:", values);
+  addUser(values);
+  setAddUserModal(false);
+};
   const handleEditUser = (values: any) => {
     editUser(selectedUser.id, values);
     setEditUserDrawer(false);
@@ -184,7 +154,6 @@ export const AdminDashboardPage: React.FC = () => {
         <RecentActivity
           activities={activityLogs}
           loading={loading}
-          onViewAll={() => setAuditLogModal(true)}
         />
       ),
     },
@@ -229,39 +198,6 @@ export const AdminDashboardPage: React.FC = () => {
         />
       ),
     },
-    {
-      key: '3',
-      label: (
-        <span className="adp-tab-label">
-          <SettingOutlined />
-          System Settings
-          {systemSettings.maintenanceMode && (
-            <span
-              style={{
-                background: '#fff7e6',
-                border: '1px solid #ffd591',
-                borderRadius: 10,
-                padding: '0 6px',
-                fontSize: 10,
-                fontWeight: 700,
-                color: '#d46b08',
-                marginLeft: 2,
-                lineHeight: '18px',
-              }}
-            >
-              MAINT
-            </span>
-          )}
-        </span>
-      ),
-      children: (
-        <SystemSettings
-          settings={systemSettings}
-          onSettingsChange={setSystemSettings}
-          loading={loading}
-        />
-      ),
-    },
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -297,74 +233,30 @@ export const AdminDashboardPage: React.FC = () => {
 
           {/* Right: action buttons */}
           <Space wrap className="adp-header-actions">
-            {/* Replace the existing Tooltip + Badge + Button block */}
-<Tooltip title="View notifications">
-  <button
-    onClick={() => setAuditLogModal(true)}
-    style={{
-      position: 'relative',
-      width: 36,
-      height: 36,
-      borderRadius: 8,
-      border: '1px solid #d9d9d9',
-      background: '#fff',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      cursor: 'pointer',
-      color: '#595959',
-      transition: 'all 0.2s',
-    }}
-    onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
-    onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
-    aria-label={`Notifications — ${stats.pendingNotifications} pending`}
-  >
-    <BellOutlined style={{ fontSize: 16 }} />
-
-    {stats.pendingNotifications > 0 && (
-      <>
-        <style>{`
-          @keyframes bell-pulse-ring {
-            0%   { transform: scale(1);   opacity: 0.6; }
-            70%  { transform: scale(2.2); opacity: 0; }
-            100% { transform: scale(2.2); opacity: 0; }
-          }
-          @keyframes bell-pulse-core {
-            0%, 100% { transform: scale(1); }
-            50%       { transform: scale(0.85); }
-          }
-        `}</style>
-
-        {/* Ripple ring */}
-        <span style={{
-          position: 'absolute',
-          top: 5,
-          right: 5,
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          background: '#ff4d4f',
-          animation: 'bell-pulse-ring 1.8s ease-out infinite',
-          pointerEvents: 'none',
-        }} />
-
-        {/* Solid dot */}
-        <span style={{
-          position: 'absolute',
-          top: 5,
-          right: 5,
-          width: 8,
-          height: 8,
-          borderRadius: '50%',
-          background: '#ff4d4f',
-          border: '1.5px solid #fff',
-          animation: 'bell-pulse-core 1.8s ease-in-out infinite',
-          pointerEvents: 'none',
-        }} />
-      </>
-    )}
-  </button>
-</Tooltip>
+            <Tooltip title="View notifications">
+              <button
+                onClick={() => message.info('Notifications feature coming soon!')}
+                style={{
+                  position: 'relative',
+                  width: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  border: '1px solid #d9d9d9',
+                  background: '#fff',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  color: '#595959',
+                  transition: 'all 0.2s',
+                }}
+                onMouseEnter={e => (e.currentTarget.style.background = '#f5f5f5')}
+                onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
+                aria-label="Notifications"
+              >
+                <BellOutlined style={{ fontSize: 16 }} />
+              </button>
+            </Tooltip>
 
             <Tooltip title="Export data">
               <Button
@@ -395,48 +287,23 @@ export const AdminDashboardPage: React.FC = () => {
             >
               Add Staff
             </Button>
-
-            <Tooltip title="System settings">
-              <Button
-                icon={<SettingOutlined />}
-                onClick={() => setSettingsModal(true)}
-                style={{ borderRadius: 8 }}
-              />
-            </Tooltip>
           </Space>
         </div>
       </div>
-
-      {/* ── MAINTENANCE ALERT ────────────────────────────────────────────── */}
-      {systemSettings.maintenanceMode && !maintenanceDismissed && (
-        <Alert
-          icon={<SafetyOutlined />}
-          message="Maintenance Mode is Active"
-          description="Users cannot access the system. Disable this in System Settings → System Toggles."
-          type="warning"
-          showIcon
-          closable
-          onClose={() => setMaintenanceDismissed(true)}
-          style={{ marginBottom: 20, borderRadius: 12 }}
-        />
-      )}
 
       {/* ── STATS ────────────────────────────────────────────────────────── */}
       <div className="adp-stats">
         <StatsCards stats={stats} loading={loading} />
       </div>
 
-     {/* ── QUICK ACTIONS ────────────────────────────────────────────────── */}
-<div className="adp-actions" style={{ marginTop: 20, marginBottom: 20 }}>
-  <QuickActions
-    onAddUser={() => setAddUserModal(true)}
-    onManageUsers={() => setActiveTab('2')}
-    onSystemSettings={() => setSettingsModal(true)}
-    onExport={() => setExportModal(true)}
-    onAuditLog={() => setAuditLogModal(true)}
-    onBackup={() => message.success('Backup initiated — you\'ll be notified when complete.')}
-  />
-</div>
+      {/* ── QUICK ACTIONS ────────────────────────────────────────────────── */}
+      <div className="adp-actions" style={{ marginTop: 20, marginBottom: 20 }}>
+        <QuickActions
+          onAddUser={() => setAddUserModal(true)}
+          onManageUsers={() => setActiveTab('2')}
+          onExport={() => setExportModal(true)}
+        />
+      </div>
 
       {/* ── MAIN TABS ────────────────────────────────────────────────────── */}
       <div className="adp-tabs">
@@ -469,21 +336,6 @@ export const AdminDashboardPage: React.FC = () => {
         open={exportModal}
         onCancel={() => setExportModal(false)}
         onExport={handleExport}
-        loading={loading}
-      />
-
-      <AuditLog
-        open={auditLogModal}
-        onCancel={() => setAuditLogModal(false)}
-        logs={activityLogs}
-        loading={loading}
-      />
-
-      <SystemSettings
-        open={settingsModal}
-        settings={systemSettings}
-        onSettingsChange={setSystemSettings}
-        onClose={() => setSettingsModal(false)}
         loading={loading}
       />
     </div>

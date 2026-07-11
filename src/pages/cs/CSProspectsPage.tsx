@@ -1,12 +1,12 @@
-// src/pages/cs/CSProspectsPage.tsx (Updated with premium slide-in drawer)
-import React, { useState } from 'react';
+// src/pages/cs/CSProspectsPage.tsx
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Button, Space, Modal, Form, Input, Select, Row, Col, Table, 
   Tag, message, Typography, Card, Avatar, Badge, Tooltip, 
   DatePicker, Progress, Statistic, Divider, Tabs, Empty,
   Dropdown, Popconfirm, Radio, Alert, Drawer, Descriptions,
-  Timeline, Steps, Rate, Switch
+  Timeline, Steps, Rate, Switch, Spin
 } from 'antd';
 import { 
   PlusOutlined, 
@@ -57,6 +57,13 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { prospectStatusLabels, prospectSourceLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import type { Prospect, ProspectStatus, ProspectSource } from '@/types';
+import { 
+  useProspectsQuery, 
+  useCreateProspectMutation, 
+  useUpdateProspectMutation,
+  useDeleteProspectMutation,
+  useProspectQuery
+} from '@/api/prospects';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -66,118 +73,14 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { Text, Title } = Typography;
 
-// Mock data for CS prospects
-const mockCSProspects: Prospect[] = [
-  {
-    id: 'cs1',
-    firstName: 'Alice',
-    lastName: 'Johnson',
-    address: '123 Customer St, Accra',
-    phoneNumber: '+233241234580',
-    source: 'customer_service',
-    assignedUserId: '4',
-    status: 'new',
-    reasonForContact: 'Complaint about property maintenance',
-    notes: 'Customer reported issues with plumbing in new property. Needs urgent attention.',
-    createdAt: '2024-01-15T10:00:00Z',
-    updatedAt: '2024-01-15T10:00:00Z',
-  },
-  {
-    id: 'cs2',
-    firstName: 'Robert',
-    lastName: 'Williams',
-    address: '456 Service Ave, Kumasi',
-    phoneNumber: '+233241234581',
-    source: 'customer_service',
-    assignedUserId: '4',
-    status: 'meeting_scheduled',
-    reasonForContact: 'Inquiry about property documentation',
-    notes: 'Needs help with property title documents and registration.',
-    createdAt: '2024-01-14T09:30:00Z',
-    updatedAt: '2024-01-14T09:30:00Z',
-  },
-  {
-    id: 'cs3',
-    firstName: 'Maria',
-    lastName: 'Garcia',
-    address: '789 Support Rd, Tema',
-    phoneNumber: '+233241234582',
-    source: 'customer_service',
-    assignedUserId: '4',
-    status: 'meeting_completed',
-    reasonForContact: 'Request for property inspection',
-    notes: 'Inspection completed, property in good condition. Customer satisfied.',
-    createdAt: '2024-01-13T14:20:00Z',
-    updatedAt: '2024-01-13T14:20:00Z',
-  },
-  {
-    id: 'cs4',
-    firstName: 'James',
-    lastName: 'Brown',
-    address: '321 Help St, Cape Coast',
-    phoneNumber: '+233241234583',
-    source: 'customer_service',
-    assignedUserId: '4',
-    status: 'suspended',
-    reasonForContact: 'Billing dispute',
-    notes: 'Customer has billing questions, awaiting documentation from finance.',
-    createdAt: '2024-01-12T11:15:00Z',
-    updatedAt: '2024-01-12T11:15:00Z',
-  },
-  {
-    id: 'cs5',
-    firstName: 'Patricia',
-    lastName: 'Davis',
-    address: '654 Care Dr, Takoradi',
-    phoneNumber: '+233241234584',
-    source: 'customer_service',
-    assignedUserId: '4',
-    status: 'postponed',
-    reasonForContact: 'Property upgrade inquiry',
-    notes: 'Customer postponed discussion to next month due to travel.',
-    createdAt: '2024-01-11T16:45:00Z',
-    updatedAt: '2024-01-11T16:45:00Z',
-  },
-  {
-    id: 'cs6',
-    firstName: 'Thomas',
-    lastName: 'Wilson',
-    address: '987 Support Ln, Accra',
-    phoneNumber: '+233241234585',
-    source: 'customer_service',
-    assignedUserId: '4',
-    status: 'canceled',
-    reasonForContact: 'Canceled service request',
-    notes: 'Customer resolved issue independently.',
-    createdAt: '2024-01-10T13:00:00Z',
-    updatedAt: '2024-01-10T13:00:00Z',
-  },
-  {
-    id: 'cs7',
-    firstName: 'Jennifer',
-    lastName: 'Moore',
-    address: '147 Service Blvd, Kumasi',
-    phoneNumber: '+233241234586',
-    source: 'customer_service',
-    assignedUserId: '4',
-    status: 'purchased',
-    reasonForContact: 'Completed property purchase',
-    notes: 'Customer successfully purchased property. Now a valued customer.',
-    createdAt: '2024-01-09T08:30:00Z',
-    updatedAt: '2024-01-09T08:30:00Z',
-  },
-];
-
 export const CSProspectsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
-  const [loading, setLoading] = useState(false);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState('all');
-  const [prospects, setProspects] = useState<Prospect[]>(mockCSProspects);
   const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   
@@ -186,39 +89,103 @@ export const CSProspectsPage: React.FC = () => {
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
   const [exportLoading, setExportLoading] = useState(false);
 
+  // ── API Queries ────────────────────────────────────────────────────────────
+  const { 
+    data: prospectsData, 
+    isLoading: prospectsLoading,
+    refetch: refetchProspects,
+    error: prospectsError
+  } = useProspectsQuery({
+    source: 'customer_service',
+    status: statusFilter !== 'all' ? statusFilter : undefined,
+    q: searchText || undefined,
+  });
+
+  // ── API Mutations ──────────────────────────────────────────────────────────
+  const createProspect = useCreateProspectMutation();
+  const updateProspect = useUpdateProspectMutation();
+  const deleteProspect = useDeleteProspectMutation();
+
+  // ── Data Extraction ──────────────────────────────────────────────────────
+  const prospects: Prospect[] = React.useMemo(() => {
+    if (!prospectsData) return [];
+    const data = (prospectsData as any).data ?? prospectsData;
+    if (Array.isArray(data)) return data;
+    if (data?.items) return data.items;
+    return [];
+  }, [prospectsData]);
+
+  // ── Filter prospects by tab ─────────────────────────────────────────────
+  const filteredProspects = prospects.filter(prospect => {
+    const matchesTab = activeTab === 'all' || 
+      (activeTab === 'active' && prospect.status !== 'purchased' && prospect.status !== 'canceled') ||
+      (activeTab === 'completed' && (prospect.status === 'purchased' || prospect.status === 'canceled'));
+    return matchesTab;
+  });
+
+  // ── Stats ──────────────────────────────────────────────────────────────────
+  const statusBreakdown = {
+    total: prospects.length,
+    new: prospects.filter(p => p.status === 'new').length,
+    meetingScheduled: prospects.filter(p => p.status === 'meeting_scheduled').length,
+    meetingCompleted: prospects.filter(p => p.status === 'meeting_completed').length,
+    purchased: prospects.filter(p => p.status === 'purchased').length,
+    canceled: prospects.filter(p => p.status === 'canceled').length,
+  };
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
   const handleAddProspect = async (values: any) => {
-    setLoading(true);
-    setTimeout(() => {
-      const newProspect: Prospect = {
-        id: `cs${Date.now()}`,
+    try {
+      const payload = {
         ...values,
-        source: 'customer_service',
+        source: 'customer_service' as ProspectSource,
         assignedUserId: user?.id || '4',
-        status: 'new',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        status: 'new' as ProspectStatus,
       };
-      setProspects([newProspect, ...prospects]);
-      setLoading(false);
+
+      await createProspect.mutateAsync(payload);
+      message.success('Customer Service prospect added successfully!');
       setIsModalOpen(false);
       form.resetFields();
-      message.success('Customer Service prospect added successfully!');
-    }, 800);
+      
+      setTimeout(() => {
+        refetchProspects();
+      }, 500);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to add prospect');
+    }
   };
 
-  const handleStatusChange = (id: string, newStatus: ProspectStatus) => {
-    setProspects(prospects.map(p => 
-      p.id === id ? { ...p, status: newStatus, updatedAt: new Date().toISOString() } : p
-    ));
-    message.success(`Status updated to ${prospectStatusLabels[newStatus]}`);
+  const handleStatusChange = async (id: string, newStatus: ProspectStatus) => {
+    try {
+      await updateProspect.mutateAsync({
+        id,
+        data: { status: newStatus },
+      });
+      message.success(`Status updated to ${prospectStatusLabels[newStatus]}`);
+      
+      setTimeout(() => {
+        refetchProspects();
+      }, 300);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to update status');
+    }
   };
 
-  const handleDeleteProspect = (id: string) => {
-    setProspects(prospects.filter(p => p.id !== id));
-    message.success('Prospect deleted successfully!');
+  const handleDeleteProspect = async (id: string) => {
+    try {
+      await deleteProspect.mutateAsync(id);
+      message.success('Prospect deleted successfully!');
+      
+      setTimeout(() => {
+        refetchProspects();
+      }, 300);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to delete prospect');
+    }
   };
 
-  // Export function
+  // ── Export function ──────────────────────────────────────────────────────
   const handleExport = () => {
     setExportLoading(true);
     setTimeout(() => {
@@ -236,12 +203,10 @@ export const CSProspectsPage: React.FC = () => {
 
       let fileName = `cs-prospects-${dayjs().format('YYYY-MM-DD-HHmmss')}`;
       let blob: Blob;
-      let mimeType: string;
 
       switch (exportFormat) {
         case 'json':
           blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
-          mimeType = 'application/json';
           fileName += '.json';
           break;
         case 'csv': {
@@ -256,7 +221,6 @@ export const CSProspectsPage: React.FC = () => {
             )
           ];
           blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
-          mimeType = 'text/csv';
           fileName += '.csv';
           break;
         }
@@ -272,7 +236,6 @@ export const CSProspectsPage: React.FC = () => {
             )
           ];
           blob = new Blob([excelRows.join('\n')], { type: 'application/vnd.ms-excel' });
-          mimeType = 'application/vnd.ms-excel';
           fileName += '.xls';
           break;
         }
@@ -281,13 +244,11 @@ export const CSProspectsPage: React.FC = () => {
             Object.entries(row).map(([key, value]) => `${key}: ${value}`).join('\n')
           ).join('\n\n---\n\n');
           blob = new Blob([pdfContent], { type: 'application/pdf' });
-          mimeType = 'application/pdf';
           fileName += '.txt';
           break;
         }
         default:
           blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
-          mimeType = 'application/json';
           fileName += '.json';
       }
 
@@ -306,29 +267,35 @@ export const CSProspectsPage: React.FC = () => {
     }, 1000);
   };
 
-  // Filter prospects
-  const filteredProspects = prospects.filter(prospect => {
-    const matchesSearch = prospect.firstName.toLowerCase().includes(searchText.toLowerCase()) ||
-                          prospect.lastName.toLowerCase().includes(searchText.toLowerCase()) ||
-                          prospect.phoneNumber.includes(searchText) ||
-                          prospect.address.toLowerCase().includes(searchText.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || prospect.status === statusFilter;
-    const matchesTab = activeTab === 'all' || 
-                      (activeTab === 'active' && prospect.status !== 'purchased' && prospect.status !== 'canceled') ||
-                      (activeTab === 'completed' && (prospect.status === 'purchased' || prospect.status === 'canceled'));
-    return matchesSearch && matchesStatus && matchesTab;
-  });
+  // ── Loading state ─────────────────────────────────────────────────────────
+  if (prospectsLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+        <Spin size="large" tip="Loading prospects..." />
+      </div>
+    );
+  }
 
-  // Get status breakdown
-  const statusBreakdown = {
-    total: prospects.length,
-    new: prospects.filter(p => p.status === 'new').length,
-    meetingScheduled: prospects.filter(p => p.status === 'meeting_scheduled').length,
-    meetingCompleted: prospects.filter(p => p.status === 'meeting_completed').length,
-    purchased: prospects.filter(p => p.status === 'purchased').length,
-    canceled: prospects.filter(p => p.status === 'canceled').length,
-  };
+  // ── Error state ───────────────────────────────────────────────────────────
+  if (prospectsError) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Alert
+          message="Error Loading Prospects"
+          description="There was an error loading the prospects. Please try again."
+          type="error"
+          showIcon
+          action={
+            <Button size="small" type="primary" onClick={() => refetchProspects()}>
+              Retry
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
 
+  // ── Table Columns ─────────────────────────────────────────────────────────
   const columns = [
     {
       title: 'Customer',
@@ -454,11 +421,9 @@ export const CSProspectsPage: React.FC = () => {
     },
   ];
 
-  // Premium Drawer Content
+  // ── Drawer Content ──────────────────────────────────────────────────────
   const renderDrawerContent = () => {
     if (!selectedProspect) return null;
-
-    
 
     const getStatusIcon = (status: string) => {
       switch (status) {
@@ -488,7 +453,7 @@ export const CSProspectsPage: React.FC = () => {
 
     return (
       <div style={{ height: '100%' }}>
-        {/* Header with close button */}
+        {/* Header */}
         <div style={{ 
           display: 'flex', 
           justifyContent: 'space-between', 
@@ -536,8 +501,8 @@ export const CSProspectsPage: React.FC = () => {
             <Text strong>Status: {prospectStatusLabels[selectedProspect.status as keyof typeof prospectStatusLabels]}</Text>
           </Space>
           <Badge 
-           status={selectedProspect.status === 'purchased' ? 'success' : 'default'}
-text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
+            status={selectedProspect.status === 'purchased' ? 'success' : 'default'}
+            text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
           />
         </div>
 
@@ -648,7 +613,7 @@ text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
           </Col>
         </Row>
 
-        {/* Footer Actions */}
+        {/* Footer */}
         <div style={{ 
           marginTop: 24, 
           paddingTop: 16, 
@@ -694,11 +659,8 @@ text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
           {
             label: 'Refresh',
             onClick: () => {
-              setLoading(true);
-              setTimeout(() => {
-                setLoading(false);
-                message.success('Refreshed!');
-              }, 500);
+              refetchProspects();
+              message.success('Refreshed!');
             },
             icon: <ReloadOutlined />,
           },
@@ -827,7 +789,7 @@ text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
           columns={columns}
           dataSource={filteredProspects}
           rowKey="id"
-          loading={loading}
+          loading={prospectsLoading}
           size="middle"
           scroll={{ x: 1000 }}
           pagination={{
@@ -916,7 +878,7 @@ text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
           
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button type="primary" htmlType="submit" loading={createProspect.isPending}>
                 Create Prospect
               </Button>
               <Button onClick={() => {
@@ -930,7 +892,7 @@ text={selectedProspect.status === 'purchased' ? 'Active' : 'Inactive'}
         </Form>
       </Modal>
 
-      {/* Premium Slide-in Drawer from Right - Half Page */}
+      {/* Premium Slide-in Drawer */}
       <Drawer
         title={null}
         placement="right"

@@ -1,40 +1,34 @@
 // src/pages/marketing/ProspectDetailPage.tsx
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Card, Row, Col, Typography, Tag, Button, Space, Timeline, Modal, Form, Input, Select, DatePicker, message, Descriptions, Badge, Spin, Empty, InputNumber, Radio } from 'antd';
+import { Card, Row, Col, Typography, Tag, Button, Space, Timeline, Modal, Form, Input, Select, message, Descriptions, Badge, Spin, Empty, Alert } from 'antd';
 import { 
   ArrowLeftOutlined, 
   PhoneOutlined, 
   MailOutlined, 
   HomeOutlined,
   ClockCircleOutlined,
-  PlusOutlined,
   EditOutlined,
   WhatsAppOutlined,
   UserOutlined,
-  CheckOutlined
+  ReloadOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
-import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { prospectStatusLabels, interactionChannelLabels } from '@/constants/enums';
-import type { Prospect, ProspectStatus, Interaction } from '@/types';
+import type { Prospect, ProspectStatus } from '@/types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { 
-  useProspect, 
-  useInteractions, 
-  useLogInteraction, 
-  useUpdateProspect, 
-  useConvertProspect 
+  useProspectQuery, 
+  useInteractionsQuery, 
+  useUpdateProspectMutation
 } from '@/api/prospects';
-import { useProperties } from '@/api/properties';
 
 dayjs.extend(relativeTime);
 
 const { Title, Text, Paragraph } = Typography;
-const { TextArea } = Input;
 const { Option } = Select;
 
 export const ProspectDetailPage: React.FC = () => {
@@ -42,89 +36,45 @@ export const ProspectDetailPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  // Modals state
-  const [logModal, setLogModal] = useState(false);
+  // Modal state
   const [statusModal, setStatusModal] = useState(false);
-  const [convertModal, setConvertModal] = useState(false);
-  const [convertType, setConvertType] = useState<'fully_paid' | 'payment_plan'>('fully_paid');
-
-  const [form] = Form.useForm();
   const [statusForm] = Form.useForm();
-  const [convertForm] = Form.useForm();
 
   // API hooks
   const prospectId = id || '';
-  const { data: prospect, isLoading: isProspectLoading } = useProspect(prospectId);
-  const { data: interactionsResponse, isLoading: isInteractionsLoading } = useInteractions(prospectId);
-  const { data: properties } = useProperties();
+  const { 
+    data: prospectData, 
+    isLoading: isProspectLoading,
+    error: prospectError,
+    refetch: refetchProspect
+  } = useProspectQuery(prospectId);
+  
+  const { 
+    data: interactionsData, 
+    isLoading: isInteractionsLoading
+  } = useInteractionsQuery(prospectId);
 
-  const logInteractionMutation = useLogInteraction(prospectId);
-  const updateProspectMutation = useUpdateProspect();
-  const convertProspectMutation = useConvertProspect(prospectId);
+  const updateProspectMutation = useUpdateProspectMutation();
 
-  const interactions = (interactionsResponse as any)?.data || interactionsResponse || [];
-
-  const handleLogInteraction = async (values: any) => {
-    try {
-      await logInteractionMutation.mutateAsync({
-        channel: values.channel,
-        occurredAt: values.occurredAt.toISOString(),
-        response: values.response,
-        loggedByUserId: user?.id || '2',
-      });
-      setLogModal(false);
-      form.resetFields();
-      message.success('Interaction logged successfully!');
-    } catch (err: any) {
-      console.error('Failed to log interaction:', err);
-      message.error(err.error?.message || 'Failed to log interaction.');
-    }
-  };
+  // Extract data
+  const prospect = prospectData as any;
+  const interactions = (interactionsData as any)?.data || [];
 
   const handleStatusUpdate = async (values: { status: ProspectStatus }) => {
     try {
       await updateProspectMutation.mutateAsync({
         id: prospectId,
-        data: { status: values.status },
+        data: { 
+          status: values.status 
+        },
       });
       setStatusModal(false);
       statusForm.resetFields();
       message.success(`Status updated to ${prospectStatusLabels[values.status]}`);
+      await refetchProspect();
     } catch (err: any) {
-      console.error('Failed to update status:', err);
-      message.error(err.error?.message || 'Failed to update status.');
-    }
-  };
-
-  const handleConvert = async (values: any) => {
-    try {
-      const convertPayload: any = {
-        type: values.type,
-        propertyId: values.propertyId,
-      };
-
-      if (values.type === 'payment_plan') {
-        convertPayload.plan = {
-          totalAmountMinor: Math.round((values.totalAmount || 0) * 100),
-          downPaymentMinor: Math.round((values.downPayment || 0) * 100),
-          numMonths: values.numMonths,
-          startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-        };
-      }
-
-      const newCustomer = await convertProspectMutation.mutateAsync(convertPayload);
-      setConvertModal(false);
-      convertForm.resetFields();
-      message.success('Prospect converted to customer successfully!');
-      // Redirect to customer detail page
-      if (newCustomer && newCustomer.id) {
-        navigate(`/customers/${newCustomer.id}`);
-      } else {
-        navigate('/customers');
-      }
-    } catch (err: any) {
-      console.error('Conversion failed:', err);
-      message.error(err.error?.message || 'Failed to convert prospect to customer.');
+      const errorMsg = err?.response?.data?.message || err?.message || 'Failed to update status.';
+      message.error(errorMsg);
     }
   };
 
@@ -163,6 +113,7 @@ export const ProspectDetailPage: React.FC = () => {
     }
   };
 
+  // Loading state
   if (isProspectLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
@@ -171,16 +122,24 @@ export const ProspectDetailPage: React.FC = () => {
     );
   }
 
-  if (!prospect) {
+  // Error state
+  if (prospectError || !prospect) {
     return (
-      <div style={{ textAlign: 'center', padding: '50px' }}>
-        <Empty 
-          description="Prospect not found"
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
+      <div style={{ padding: 24 }}>
+        <Alert
+          message="Error Loading Prospect"
+          description="There was an error loading the prospect details. Please try again."
+          type="error"
+          showIcon
+          action={
+            <Button size="small" type="primary" onClick={() => refetchProspect()}>
+              Retry
+            </Button>
+          }
         />
         <Button 
           type="primary" 
-          onClick={() => navigate('/marketing/prospects')}
+          onClick={() => navigate('/marketing/prospects')} 
           style={{ marginTop: 16 }}
         >
           Back to Prospects
@@ -188,8 +147,6 @@ export const ProspectDetailPage: React.FC = () => {
       </div>
     );
   }
-
-  const isPurchased = prospect.status === 'purchased';
 
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
@@ -201,24 +158,19 @@ export const ProspectDetailPage: React.FC = () => {
             onClick: () => navigate('/marketing/prospects'),
             icon: <ArrowLeftOutlined />,
           },
-          ...(!isPurchased ? [
-            {
-              label: 'Convert to Customer',
-              onClick: () => setConvertModal(true),
-              icon: <CheckOutlined />,
-              type: 'primary' as any,
+          {
+            label: 'Update Status',
+            onClick: () => setStatusModal(true),
+            icon: <EditOutlined />,
+          },
+          {
+            label: 'Refresh',
+            onClick: () => {
+              refetchProspect();
+              message.success('Refreshed!');
             },
-            {
-              label: 'Log Interaction',
-              onClick: () => setLogModal(true),
-              icon: <PlusOutlined />,
-            },
-            {
-              label: 'Update Status',
-              onClick: () => setStatusModal(true),
-              icon: <EditOutlined />,
-            },
-          ] : []),
+            icon: <ReloadOutlined />,
+          },
         ]}
       />
 
@@ -239,6 +191,13 @@ export const ProspectDetailPage: React.FC = () => {
                   <PhoneOutlined /> {prospect.phoneNumber}
                 </a>
               </Descriptions.Item>
+              {prospect.email && (
+                <Descriptions.Item label="Email">
+                  <a href={`mailto:${prospect.email}`}>
+                    <MailOutlined /> {prospect.email}
+                  </a>
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="Address">
                 <HomeOutlined /> {prospect.address}
               </Descriptions.Item>
@@ -247,23 +206,25 @@ export const ProspectDetailPage: React.FC = () => {
                 <StatusTag status={prospect.status} type="prospect" />
               </Descriptions.Item>
               <Descriptions.Item label="Source">
-                <Tag color="blue">{prospect.source.toUpperCase()}</Tag>
+                <Tag color="blue">{prospect.source?.toUpperCase() || 'N/A'}</Tag>
               </Descriptions.Item>
-              <Descriptions.Item label="Reason for Contact">
-                <Paragraph ellipsis={{ rows: 2, expandable: true, symbol: 'more' }}>
-                  {prospect.reasonForContact}
-                </Paragraph>
-              </Descriptions.Item>
+              {prospect.reasonForContact && (
+                <Descriptions.Item label="Reason for Contact">
+                  <Paragraph ellipsis={{ rows: 2, expandable: true, symbol: 'more' }}>
+                    {prospect.reasonForContact}
+                  </Paragraph>
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="Notes">
                 <Paragraph ellipsis={{ rows: 3, expandable: true, symbol: 'more' }}>
                   {prospect.notes || 'No additional notes'}
                 </Paragraph>
               </Descriptions.Item>
               <Descriptions.Item label="Created">
-                {dayjs(prospect.createdAt).format('MMM DD, YYYY')}
+                {dayjs(prospect.createdAt).format('MMM DD, YYYY HH:mm')}
               </Descriptions.Item>
               <Descriptions.Item label="Last Updated">
-                {dayjs(prospect.updatedAt).format('MMM DD, YYYY')}
+                {dayjs(prospect.updatedAt).format('MMM DD, YYYY HH:mm')}
               </Descriptions.Item>
             </Descriptions>
           </Card>
@@ -273,13 +234,6 @@ export const ProspectDetailPage: React.FC = () => {
         <Col xs={24} lg={12}>
           <Card 
             title="Interactions Timeline" 
-            extra={
-              !isPurchased && (
-                <Button type="primary" size="small" onClick={() => setLogModal(true)}>
-                  <PlusOutlined /> Log
-                </Button>
-              )
-            }
             style={{ marginBottom: 16, height: '100%' }}
             bodyStyle={{ padding: '16px', maxHeight: '500px', overflowY: 'auto' }}
           >
@@ -289,7 +243,7 @@ export const ProspectDetailPage: React.FC = () => {
               </div>
             ) : interactions.length > 0 ? (
               <Timeline>
-                {interactions.map((interaction: Interaction) => (
+                {interactions.map((interaction: any) => (
                   <Timeline.Item
                     key={interaction.id}
                     dot={<span style={{ color: getChannelColor(interaction.channel) }}>{getChannelIcon(interaction.channel)}</span>}
@@ -298,7 +252,7 @@ export const ProspectDetailPage: React.FC = () => {
                     <div style={{ marginBottom: 8, wordBreak: 'break-word' }}>
                       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: 4 }}>
                         <Text strong>
-                          {interactionChannelLabels[interaction.channel as keyof typeof interactionChannelLabels]}
+                          {interactionChannelLabels[interaction.channel as keyof typeof interactionChannelLabels] || interaction.channel}
                         </Text>
                         <Text type="secondary" style={{ fontSize: 12 }}>
                           <ClockCircleOutlined /> {dayjs(interaction.occurredAt).fromNow()}
@@ -308,7 +262,7 @@ export const ProspectDetailPage: React.FC = () => {
                         {interaction.response}
                       </Paragraph>
                       <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                        Logged by: User #{interaction.loggedByUserId}
+                        Logged by: {interaction.loggedBy?.firstName || interaction.loggedBy?.email || `User #${interaction.loggedByUserId}`}
                       </Text>
                     </div>
                   </Timeline.Item>
@@ -322,67 +276,6 @@ export const ProspectDetailPage: React.FC = () => {
           </Card>
         </Col>
       </Row>
-
-      {/* Log Interaction Modal */}
-      <Modal
-        title="Log Interaction"
-        open={logModal}
-        onCancel={() => {
-          setLogModal(false);
-          form.resetFields();
-        }}
-        footer={null}
-        width={520}
-        style={{ maxWidth: '95%', top: 20 }}
-        bodyStyle={{ padding: '16px' }}
-      >
-        <Form form={form} layout="vertical" onFinish={handleLogInteraction}>
-          <Form.Item
-            name="channel"
-            label="Channel"
-            rules={[{ required: true, message: 'Please select a channel' }]}
-          >
-            <Select placeholder="Select channel" style={{ width: '100%' }}>
-              <Option value="call">📞 Call</Option>
-              <Option value="whatsapp">💬 WhatsApp</Option>
-              <Option value="email">📧 Email</Option>
-              <Option value="sms">📱 SMS</Option>
-              <Option value="in_person">👤 In Person</Option>
-              <Option value="social_media">🌐 Social Media</Option>
-              <Option value="other">📝 Other</Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="occurredAt"
-            label="Date & Time"
-            rules={[{ required: true, message: 'Please select date and time' }]}
-            initialValue={dayjs()}
-          >
-            <DatePicker showTime format="YYYY-MM-DD HH:mm" style={{ width: '100%' }} />
-          </Form.Item>
-
-          <Form.Item
-            name="response"
-            label="Response / Notes"
-            rules={[{ required: true, message: 'Please enter response' }]}
-          >
-            <TextArea rows={4} placeholder="Enter interaction details..." />
-          </Form.Item>
-
-          <Form.Item>
-            <Space wrap>
-              <Button type="primary" htmlType="submit" loading={logInteractionMutation.isPending}>
-                Log Interaction
-              </Button>
-              <Button onClick={() => {
-                setLogModal(false);
-                form.resetFields();
-              }}>Cancel</Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
 
       {/* Update Status Modal */}
       <Modal
@@ -422,116 +315,6 @@ export const ProspectDetailPage: React.FC = () => {
               <Button onClick={() => {
                 setStatusModal(false);
                 statusForm.resetFields();
-              }}>Cancel</Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* Convert to Customer Modal */}
-      <Modal
-        title="Convert Prospect to Customer"
-        open={convertModal}
-        onCancel={() => {
-          setConvertModal(false);
-          convertForm.resetFields();
-        }}
-        footer={null}
-        width={550}
-        style={{ maxWidth: '95%', top: 20 }}
-        bodyStyle={{ padding: '16px' }}
-      >
-        <Form 
-          form={convertForm} 
-          layout="vertical" 
-          onFinish={handleConvert}
-          initialValues={{ type: 'fully_paid' }}
-          onValuesChange={(changed) => {
-            if (changed.type) {
-              setConvertType(changed.type);
-            }
-          }}
-        >
-          <Form.Item
-            name="type"
-            label="Customer Class"
-            rules={[{ required: true }]}
-          >
-            <Radio.Group optionType="button" buttonStyle="solid">
-              <Radio value="fully_paid">Fully Paid</Radio>
-              <Radio value="payment_plan">Payment Plan</Radio>
-            </Radio.Group>
-          </Form.Item>
-
-          <Form.Item
-            name="propertyId"
-            label="Select Property"
-            rules={[{ required: true, message: 'Please select a property' }]}
-          >
-            <Select placeholder="Choose property" showSearch optionFilterProp="children">
-              {properties?.map((prop) => (
-                <Option key={prop.id} value={prop.id}>
-                  {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          {convertType === 'payment_plan' && (
-            <>
-              <Row gutter={8}>
-                <Col span={12}>
-                  <Form.Item
-                    name="totalAmount"
-                    label="Contract Price (GHS)"
-                    rules={[{ required: true, message: 'Price is required' }]}
-                  >
-                    <InputNumber min={1} style={{ width: '100%' }} placeholder="150,000" />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item
-                    name="downPayment"
-                    label="Down Payment (GHS)"
-                    rules={[{ required: true, message: 'Down payment is required' }]}
-                  >
-                    <InputNumber min={0} style={{ width: '100%' }} placeholder="30,000" />
-                  </Form.Item>
-                </Col>
-              </Row>
-
-              <Row gutter={8}>
-                <Col span={12}>
-                  <Form.Item
-                    name="numMonths"
-                    label="Plan Duration (Months)"
-                    rules={[{ required: true, message: 'Duration is required' }]}
-                  >
-                    <InputNumber min={1} max={120} style={{ width: '100%' }} placeholder="12" />
-                  </Form.Item>
-                </Col>
-                <Col span={12}>
-                  <Form.Item
-                    name="startDate"
-                    label="Start Date"
-                    rules={[{ required: true, message: 'Start date is required' }]}
-                    initialValue={dayjs()}
-                  >
-                    <DatePicker style={{ width: '100%' }} />
-                  </Form.Item>
-                </Col>
-              </Row>
-            </>
-          )}
-
-          <Form.Item style={{ marginTop: 24 }}>
-            <Space wrap>
-              <Button type="primary" htmlType="submit" loading={convertProspectMutation.isPending}>
-                Convert Prospect
-              </Button>
-              <Button onClick={() => {
-                setConvertModal(false);
-                convertForm.resetFields();
               }}>Cancel</Button>
             </Space>
           </Form.Item>

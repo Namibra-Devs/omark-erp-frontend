@@ -6,7 +6,7 @@ import {
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
   DatePicker, Statistic, Divider, Empty, Dropdown, Popconfirm,
   Alert, Drawer, Descriptions, Timeline, Tabs, Progress,
-  Radio, Switch, InputNumber, Upload, List, Collapse
+  Radio, Switch, InputNumber, Upload, List, Collapse, Spin
 } from 'antd';
 import {
   PlusOutlined,
@@ -67,7 +67,20 @@ import { ProgressCell } from '@/components/shared/ProgressCell';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { paymentPlanStatusLabels, progressBandLabels } from '@/constants/enums';
-import type { PaymentPlan, ProgressBand } from '@/types';
+import {
+  usePaymentPlansQuery,
+  useCreatePaymentPlanMutation,
+  useUpdatePaymentPlanMutation,
+  useDeletePaymentPlanMutation,
+  getProgressBand,
+  type PaymentPlan,
+  type ProgressBand,
+  type CreatePaymentPlanPayload,
+  type UpdatePaymentPlanPayload
+} from '@/api/paymentPlans';
+import { useCustomersQuery } from '@/api/customers';
+import { usePropertiesQuery } from '@/api/properties';
+import type { Customer } from '@/types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -79,165 +92,11 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { Text, Title } = Typography;
 
-// Mock Payment Plans Data
-const mockPaymentPlans: PaymentPlan[] = [
-  {
-    id: 'pp1',
-    customerId: 'c1',
-    propertyId: 'prop1',
-    totalAmountMinor: 15000000,
-    downPaymentMinor: 3000000,
-    balanceMinor: 12000000,
-    numMonths: 12,
-    monthlyAmountMinor: 1000000,
-    currency: 'GHS',
-    startDate: '2024-01-15',
-    status: 'active',
-    progressPercent: 25,
-    progressBand: 'red',
-    createdAt: '2024-01-15T10:00:00Z',
-    updatedAt: '2024-01-20T14:30:00Z',
-  },
-  {
-    id: 'pp2',
-    customerId: 'c2',
-    propertyId: 'prop2',
-    totalAmountMinor: 18000000,
-    downPaymentMinor: 18000000,
-    balanceMinor: 0,
-    numMonths: 0,
-    monthlyAmountMinor: 0,
-    currency: 'GHS',
-    startDate: '2024-01-10',
-    status: 'completed',
-    progressPercent: 100,
-    progressBand: 'green',
-    createdAt: '2024-01-10T09:00:00Z',
-    updatedAt: '2024-01-18T16:20:00Z',
-  },
-  {
-    id: 'pp3',
-    customerId: 'c3',
-    propertyId: 'prop3',
-    totalAmountMinor: 20000000,
-    downPaymentMinor: 5000000,
-    balanceMinor: 15000000,
-    numMonths: 24,
-    monthlyAmountMinor: 625000,
-    currency: 'GHS',
-    startDate: '2024-01-08',
-    status: 'active',
-    progressPercent: 15,
-    progressBand: 'red',
-    createdAt: '2024-01-08T11:30:00Z',
-    updatedAt: '2024-01-15T08:45:00Z',
-  },
-  {
-    id: 'pp4',
-    customerId: 'c4',
-    propertyId: 'prop4',
-    totalAmountMinor: 10000000,
-    downPaymentMinor: 2000000,
-    balanceMinor: 8000000,
-    numMonths: 10,
-    monthlyAmountMinor: 800000,
-    currency: 'GHS',
-    startDate: '2024-01-05',
-    status: 'active',
-    progressPercent: 60,
-    progressBand: 'yellow',
-    createdAt: '2024-01-05T14:15:00Z',
-    updatedAt: '2024-01-12T10:00:00Z',
-  },
-  {
-    id: 'pp5',
-    customerId: 'c5',
-    propertyId: 'prop5',
-    totalAmountMinor: 25000000,
-    downPaymentMinor: 25000000,
-    balanceMinor: 0,
-    numMonths: 0,
-    monthlyAmountMinor: 0,
-    currency: 'GHS',
-    startDate: '2024-01-03',
-    status: 'completed',
-    progressPercent: 100,
-    progressBand: 'green',
-    createdAt: '2024-01-03T08:00:00Z',
-    updatedAt: '2024-01-10T11:30:00Z',
-  },
-  {
-    id: 'pp6',
-    customerId: 'c6',
-    propertyId: 'prop6',
-    totalAmountMinor: 12000000,
-    downPaymentMinor: 2400000,
-    balanceMinor: 9600000,
-    numMonths: 18,
-    monthlyAmountMinor: 533333,
-    currency: 'GHS',
-    startDate: '2024-01-01',
-    status: 'defaulted',
-    progressPercent: 30,
-    progressBand: 'red',
-    createdAt: '2024-01-01T16:45:00Z',
-    updatedAt: '2024-01-08T09:15:00Z',
-  },
-  {
-    id: 'pp7',
-    customerId: 'c7',
-    propertyId: 'prop7',
-    totalAmountMinor: 8000000,
-    downPaymentMinor: 1600000,
-    balanceMinor: 6400000,
-    numMonths: 8,
-    monthlyAmountMinor: 800000,
-    currency: 'GHS',
-    startDate: '2024-01-20',
-    status: 'active',
-    progressPercent: 45,
-    progressBand: 'red',
-    createdAt: '2024-01-20T09:00:00Z',
-    updatedAt: '2024-01-20T09:00:00Z',
-  },
-  {
-    id: 'pp8',
-    customerId: 'c8',
-    propertyId: 'prop8',
-    totalAmountMinor: 30000000,
-    downPaymentMinor: 9000000,
-    balanceMinor: 21000000,
-    numMonths: 36,
-    monthlyAmountMinor: 583333,
-    currency: 'GHS',
-    startDate: '2024-01-12',
-    status: 'active',
-    progressPercent: 75,
-    progressBand: 'light_green',
-    createdAt: '2024-01-12T13:30:00Z',
-    updatedAt: '2024-01-19T10:00:00Z',
-  },
-];
-
-// Mock Customer names
-const mockCustomers: Record<string, { name: string; phone: string; property: string }> = {
-  'c1': { name: 'John Doe', phone: '+233241234567', property: 'H-102' },
-  'c2': { name: 'Jane Smith', phone: '+233241234568', property: 'H-205' },
-  'c3': { name: 'Michael Johnson', phone: '+233241234569', property: 'H-301' },
-  'c4': { name: 'Sarah Williams', phone: '+233241234570', property: 'H-108' },
-  'c5': { name: 'Robert Brown', phone: '+233241234571', property: 'H-412' },
-  'c6': { name: 'Emily Davis', phone: '+233241234572', property: 'H-203' },
-  'c7': { name: 'David Wilson', phone: '+233241234573', property: 'H-305' },
-  'c8': { name: 'Lisa Taylor', phone: '+233241234574', property: 'H-501' },
-};
-
 export const PaymentPlansPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   
   // States
-  const [loading, setLoading] = useState(false);
-  const [paymentPlans, setPaymentPlans] = useState<PaymentPlan[]>(mockPaymentPlans);
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [bandFilter, setBandFilter] = useState<string>('all');
@@ -253,31 +112,80 @@ export const PaymentPlansPage: React.FC = () => {
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
   const [exportLoading, setExportLoading] = useState(false);
 
-  // Get customer name
+  // ── API Queries ────────────────────────────────────────────────────────────
+  const { 
+    data: paymentPlansData, 
+    isLoading: paymentPlansLoading,
+    error: paymentPlansError,
+    refetch: refetchPaymentPlans
+  } = usePaymentPlansQuery({
+    status: statusFilter !== 'all' ? statusFilter : undefined,
+  });
+
+  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ limit: 100 });
+  const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ limit: 100 });
+
+  // ── API Mutations ──────────────────────────────────────────────────────────
+  const createPaymentPlan = useCreatePaymentPlanMutation();
+  const updatePaymentPlan = useUpdatePaymentPlanMutation();
+  const deletePaymentPlan = useDeletePaymentPlanMutation();
+
+  // ── Data Mapping ──────────────────────────────────────────────────────────
+  // hooks return data directly (already unwrapped by the query functions)
+  const paymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
+  const customers: Customer[] = Array.isArray(customersData) ? customersData : [];
+  const properties = propertiesData?.items ?? [];
+
+  // Create maps for quick lookups
+  const customerMap = React.useMemo(() => {
+    return customers.reduce((acc, customer) => {
+      acc[customer.id] = customer;
+      return acc;
+    }, {} as Record<string, Customer>);
+  }, [customers]);
+
+  const propertyMap = React.useMemo(() => {
+    return properties.reduce((acc, prop) => {
+      acc[prop.id] = prop;
+      return acc;
+    }, {} as Record<string, any>);
+  }, [properties]);
+
+  // ── Helper Functions ──────────────────────────────────────────────────────
   const getCustomerName = (customerId: string) => {
-    return mockCustomers[customerId]?.name || 'Unknown Customer';
+    return customerMap[customerId] ? 
+      `${customerMap[customerId].firstName} ${customerMap[customerId].lastName}` : 
+      'Unknown Customer';
   };
 
   const getCustomerPhone = (customerId: string) => {
-    return mockCustomers[customerId]?.phone || '';
+    return customerMap[customerId]?.phoneNumber || '';
   };
 
   const getCustomerProperty = (customerId: string) => {
-    return mockCustomers[customerId]?.property || 'N/A';
+    const customer = customerMap[customerId];
+    if (!customer) return 'N/A';
+    const property = propertyMap[customer.propertyId];
+    return property ? property.houseNumber : 'N/A';
   };
 
-  // Filter payment plans
+  const getPropertyDetails = (propertyId: string) => {
+    return propertyMap[propertyId] || null;
+  };
+
+  // ── Filter Payment Plans ──────────────────────────────────────────────────
   const filteredPlans = paymentPlans.filter(plan => {
     const customerName = getCustomerName(plan.customerId).toLowerCase();
+    const property = getCustomerProperty(plan.customerId).toLowerCase();
     const matchesSearch = customerName.includes(searchText.toLowerCase()) ||
                           plan.id.toLowerCase().includes(searchText.toLowerCase()) ||
-                          getCustomerProperty(plan.customerId).toLowerCase().includes(searchText.toLowerCase());
+                          property.includes(searchText.toLowerCase());
     const matchesStatus = statusFilter === 'all' || plan.status === statusFilter;
     const matchesBand = bandFilter === 'all' || plan.progressBand === bandFilter;
     return matchesSearch && matchesStatus && matchesBand;
   });
 
-  // Stats
+  // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = {
     total: paymentPlans.length,
     active: paymentPlans.filter(p => p.status === 'active').length,
@@ -288,7 +196,6 @@ export const PaymentPlansPage: React.FC = () => {
     totalBalance: paymentPlans.reduce((sum, p) => sum + p.balanceMinor, 0),
   };
 
-  // Band breakdown
   const bandBreakdown = {
     red: paymentPlans.filter(p => p.progressBand === 'red').length,
     yellow: paymentPlans.filter(p => p.progressBand === 'yellow').length,
@@ -296,169 +203,9 @@ export const PaymentPlansPage: React.FC = () => {
     green: paymentPlans.filter(p => p.progressBand === 'green').length,
   };
 
-  // Table Columns
-  const columns = [
-    {
-      title: 'Customer',
-      key: 'customer',
-      width: 200,
-      render: (_: any, record: PaymentPlan) => (
-        <Space>
-          <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
-          <div>
-            <Text strong>{getCustomerName(record.customerId)}</Text>
-            <br />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              <PhoneOutlined /> {getCustomerPhone(record.customerId)}
-            </Text>
-          </div>
-        </Space>
-      ),
-    },
-    {
-      title: 'Property',
-      key: 'property',
-      width: 120,
-      render: (_: any, record: PaymentPlan) => (
-        <div>
-          <Text strong>{getCustomerProperty(record.customerId)}</Text>
-          <br />
-          <Text type="secondary" style={{ fontSize: 12 }}>ID: {record.id}</Text>
-        </div>
-      ),
-    },
-    {
-      title: 'Total Amount',
-      dataIndex: 'totalAmountMinor',
-      key: 'totalAmountMinor',
-      width: 140,
-      render: (value: number) => <MoneyText minor={value} />,
-      sorter: (a: PaymentPlan, b: PaymentPlan) => a.totalAmountMinor - b.totalAmountMinor,
-    },
-    {
-      title: 'Monthly Amount',
-      dataIndex: 'monthlyAmountMinor',
-      key: 'monthlyAmountMinor',
-      width: 140,
-      render: (value: number) => <MoneyText minor={value} />,
-      sorter: (a: PaymentPlan, b: PaymentPlan) => a.monthlyAmountMinor - b.monthlyAmountMinor,
-    },
-    {
-      title: 'Balance',
-      dataIndex: 'balanceMinor',
-      key: 'balanceMinor',
-      width: 140,
-      render: (value: number, record: PaymentPlan) => {
-        if (record.status === 'completed') {
-          return <Tag color="green">GHS 0.00</Tag>;
-        }
-        return <MoneyText minor={value} />;
-      },
-      sorter: (a: PaymentPlan, b: PaymentPlan) => a.balanceMinor - b.balanceMinor,
-    },
-    {
-      title: 'Progress',
-      key: 'progress',
-      width: 180,
-      render: (_: any, record: PaymentPlan) => (
-        <ProgressCell 
-          percent={record.progressPercent} 
-          band={record.progressBand} 
-        />
-      ),
-    },
-    {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      width: 140,
-      render: (status: string) => <StatusTag status={status} type="paymentPlan" />,
-      filters: [
-        { text: 'Active', value: 'active' },
-        { text: 'Completed', value: 'completed' },
-        { text: 'Defaulted', value: 'defaulted' },
-        { text: 'Cancelled', value: 'cancelled' },
-      ],
-      onFilter: (value: any, record: PaymentPlan) => record.status === value,
-    },
-    {
-      title: 'Next Due',
-      key: 'nextDue',
-      width: 120,
-      render: (_: any, record: PaymentPlan) => {
-        if (record.status === 'completed') {
-          return <Tag color="green">Completed</Tag>;
-        }
-        // Simulate next due date (start date + 1 month per payment)
-        const nextDue = dayjs(record.startDate).add(1, 'month');
-        const isOverdue = nextDue.isBefore(dayjs());
-        return (
-          <Tooltip title={nextDue.format('MMMM DD, YYYY')}>
-            <Tag color={isOverdue ? 'red' : 'blue'}>
-              {isOverdue ? 'Overdue' : nextDue.format('MMM DD')}
-            </Tag>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      title: 'Actions',
-      key: 'actions',
-      width: 160,
-      fixed: 'right' as const,
-      render: (_: any, record: PaymentPlan) => (
-        <Space>
-          <Tooltip title="View Details">
-            <Button 
-              type="primary"
-              ghost
-              icon={<EyeOutlined />} 
-              onClick={() => {
-                setSelectedPlan(record);
-                setViewDrawerOpen(true);
-              }}
-            />
-          </Tooltip>
-          <Tooltip title="Edit">
-            <Button 
-              icon={<EditOutlined />} 
-              onClick={() => {
-                setSelectedPlan(record);
-                setEditModal(true);
-                form.setFieldsValue({
-                  totalAmount: record.totalAmountMinor / 100,
-                  downPayment: record.downPaymentMinor / 100,
-                  numMonths: record.numMonths,
-                  monthlyAmount: record.monthlyAmountMinor / 100,
-                  startDate: dayjs(record.startDate),
-                  status: record.status,
-                });
-              }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="Delete Payment Plan"
-            description={`Are you sure you want to delete this payment plan?`}
-            onConfirm={() => {
-              setPaymentPlans(paymentPlans.filter(p => p.id !== record.id));
-              message.success('Payment plan deleted successfully!');
-            }}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Tooltip title="Delete">
-              <Button danger icon={<DeleteOutlined />} />
-            </Tooltip>
-          </Popconfirm>
-        </Space>
-      ),
-    },
-  ];
-
-  // Add Payment Plan
-  const handleAddPlan = (values: any) => {
-    setLoading(true);
-    setTimeout(() => {
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleAddPlan = async (values: any) => {
+    try {
       const totalAmountMinor = Math.round((values.totalAmount || 0) * 100);
       const downPaymentMinor = Math.round((values.downPayment || 0) * 100);
       const balanceMinor = totalAmountMinor - downPaymentMinor;
@@ -467,10 +214,9 @@ export const PaymentPlansPage: React.FC = () => {
       const progressPercent = totalAmountMinor > 0 ? Math.round((downPaymentMinor / totalAmountMinor) * 100) : 0;
       const progressBand = getProgressBand(progressPercent);
 
-      const newPlan: PaymentPlan = {
-        id: `pp${Date.now()}`,
+      const payload: CreatePaymentPlanPayload = {
         customerId: values.customerId,
-        propertyId: 'prop1',
+        propertyId: values.propertyId,
         totalAmountMinor,
         downPaymentMinor,
         balanceMinor,
@@ -481,22 +227,22 @@ export const PaymentPlansPage: React.FC = () => {
         status: values.status || 'active',
         progressPercent,
         progressBand,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
       };
-      setPaymentPlans([newPlan, ...paymentPlans]);
-      setLoading(false);
+
+      await createPaymentPlan.mutateAsync(payload);
+      message.success('Payment plan created successfully!');
       setAddModal(false);
       addForm.resetFields();
-      message.success('Payment plan created successfully!');
-    }, 800);
+      refetchPaymentPlans();
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to create payment plan');
+    }
   };
 
-  // Edit Payment Plan
-  const handleEditPlan = (values: any) => {
+  const handleEditPlan = async (values: any) => {
     if (!selectedPlan) return;
-    setLoading(true);
-    setTimeout(() => {
+
+    try {
       const totalAmountMinor = Math.round((values.totalAmount || 0) * 100);
       const downPaymentMinor = Math.round((values.downPayment || 0) * 100);
       const balanceMinor = totalAmountMinor - downPaymentMinor;
@@ -505,8 +251,7 @@ export const PaymentPlansPage: React.FC = () => {
       const progressPercent = totalAmountMinor > 0 ? Math.round((downPaymentMinor / totalAmountMinor) * 100) : 0;
       const progressBand = getProgressBand(progressPercent);
 
-      const updatedPlan: PaymentPlan = {
-        ...selectedPlan,
+      const payload: UpdatePaymentPlanPayload = {
         totalAmountMinor,
         downPaymentMinor,
         balanceMinor,
@@ -516,26 +261,34 @@ export const PaymentPlansPage: React.FC = () => {
         status: values.status || selectedPlan.status,
         progressPercent,
         progressBand,
-        updatedAt: new Date().toISOString(),
       };
-      setPaymentPlans(paymentPlans.map(p => p.id === selectedPlan.id ? updatedPlan : p));
-      setLoading(false);
+
+      await updatePaymentPlan.mutateAsync({
+        id: selectedPlan.id,
+        data: payload,
+      });
+
+      message.success('Payment plan updated successfully!');
       setEditModal(false);
       setSelectedPlan(null);
       form.resetFields();
-      message.success('Payment plan updated successfully!');
-    }, 800);
+      refetchPaymentPlans();
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to update payment plan');
+    }
   };
 
-  // Helper function for progress band
-  const getProgressBand = (percent: number): ProgressBand => {
-    if (percent >= 90) return 'green';
-    if (percent >= 70) return 'light_green';
-    if (percent >= 50) return 'yellow';
-    return 'red';
+  const handleDeletePlan = async (id: string) => {
+    try {
+      await deletePaymentPlan.mutateAsync(id);
+      message.success('Payment plan deleted successfully!');
+      refetchPaymentPlans();
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to delete payment plan');
+    }
   };
 
-  // Export function
+  // ── Export function ──────────────────────────────────────────────────────
   const handleExport = () => {
     setExportLoading(true);
     const dataToExport = filteredPlans.map(plan => ({
@@ -547,7 +300,7 @@ export const PaymentPlansPage: React.FC = () => {
       'Monthly Amount': `GHS ${(plan.monthlyAmountMinor / 100).toLocaleString()}`,
       'Months': plan.numMonths,
       'Progress': `${plan.progressPercent}%`,
-      'Status': paymentPlanStatusLabels[plan.status],
+      'Status': paymentPlanStatusLabels[plan.status] || plan.status,
       'Start Date': plan.startDate,
       'Created': dayjs(plan.createdAt).format('YYYY-MM-DD'),
     }));
@@ -619,7 +372,171 @@ export const PaymentPlansPage: React.FC = () => {
     }, 1000);
   };
 
-  // Render Drawer Content
+  // ── Table Columns ─────────────────────────────────────────────────────────
+  const columns = [
+    {
+      title: 'Customer',
+      key: 'customer',
+      width: 200,
+      render: (_: any, record: PaymentPlan) => (
+        <Space>
+          <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+          <div>
+            <Text strong>{getCustomerName(record.customerId)}</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <PhoneOutlined /> {getCustomerPhone(record.customerId)}
+            </Text>
+          </div>
+        </Space>
+      ),
+    },
+    {
+      title: 'Property',
+      key: 'property',
+      width: 120,
+      render: (_: any, record: PaymentPlan) => (
+        <div>
+          <Text strong>{getCustomerProperty(record.customerId)}</Text>
+          <br />
+          <Text type="secondary" style={{ fontSize: 12 }}>ID: {record.id.slice(0, 8)}</Text>
+        </div>
+      ),
+    },
+    {
+      title: 'Total Amount',
+      dataIndex: 'totalAmountMinor',
+      key: 'totalAmountMinor',
+      width: 140,
+      render: (value: number) => <MoneyText minor={value} />,
+      sorter: (a: PaymentPlan, b: PaymentPlan) => a.totalAmountMinor - b.totalAmountMinor,
+    },
+    {
+      title: 'Monthly Amount',
+      dataIndex: 'monthlyAmountMinor',
+      key: 'monthlyAmountMinor',
+      width: 140,
+      render: (value: number) => <MoneyText minor={value} />,
+      sorter: (a: PaymentPlan, b: PaymentPlan) => a.monthlyAmountMinor - b.monthlyAmountMinor,
+    },
+    {
+      title: 'Balance',
+      dataIndex: 'balanceMinor',
+      key: 'balanceMinor',
+      width: 140,
+      render: (value: number, record: PaymentPlan) => {
+        if (record.status === 'completed' || value === 0) {
+          return <Tag color="green">GHS 0.00</Tag>;
+        }
+        return <MoneyText minor={value} />;
+      },
+      sorter: (a: PaymentPlan, b: PaymentPlan) => a.balanceMinor - b.balanceMinor,
+    },
+    {
+      title: 'Progress',
+      key: 'progress',
+      width: 180,
+      render: (_: any, record: PaymentPlan) => (
+        <ProgressCell 
+          percent={record.progressPercent} 
+          band={record.progressBand} 
+        />
+      ),
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      width: 140,
+      render: (status: string) => <StatusTag status={status} type="paymentPlan" />,
+      filters: [
+        { text: 'Active', value: 'active' },
+        { text: 'Completed', value: 'completed' },
+        { text: 'Defaulted', value: 'defaulted' },
+        { text: 'Cancelled', value: 'cancelled' },
+      ],
+      onFilter: (value: any, record: PaymentPlan) => record.status === value,
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 160,
+      fixed: 'right' as const,
+      render: (_: any, record: PaymentPlan) => (
+        <Space>
+          <Tooltip title="View Details">
+            <Button 
+              type="primary"
+              ghost
+              icon={<EyeOutlined />} 
+              onClick={() => {
+                setSelectedPlan(record);
+                setViewDrawerOpen(true);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="Edit">
+            <Button 
+              icon={<EditOutlined />} 
+              onClick={() => {
+                setSelectedPlan(record);
+                setEditModal(true);
+                form.setFieldsValue({
+                  totalAmount: record.totalAmountMinor / 100,
+                  downPayment: record.downPaymentMinor / 100,
+                  numMonths: record.numMonths,
+                  monthlyAmount: record.monthlyAmountMinor / 100,
+                  startDate: dayjs(record.startDate),
+                  status: record.status,
+                });
+              }}
+            />
+          </Tooltip>
+          <Popconfirm
+            title="Delete Payment Plan"
+            description={`Are you sure you want to delete this payment plan?`}
+            onConfirm={() => handleDeletePlan(record.id)}
+            okText="Yes"
+            cancelText="No"
+          >
+            <Tooltip title="Delete">
+              <Button danger icon={<DeleteOutlined />} />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  // ── Loading state ─────────────────────────────────────────────────────────
+  if (paymentPlansLoading || customersLoading || propertiesLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+        <Spin size="large" tip="Loading payment plans..." />
+      </div>
+    );
+  }
+
+  // ── Error state ───────────────────────────────────────────────────────────
+  if (paymentPlansError) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Alert
+          message="Error Loading Payment Plans"
+          description="There was an error loading the payment plans. Please try again."
+          type="error"
+          showIcon
+          action={
+            <Button size="small" type="primary" onClick={() => refetchPaymentPlans()}>
+              Retry
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  // ── Render Drawer Content ─────────────────────────────────────────────────
   const renderDrawerContent = () => {
     if (!selectedPlan) return null;
 
@@ -682,7 +599,7 @@ export const PaymentPlansPage: React.FC = () => {
             {selectedPlan.status === 'completed' && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
             {selectedPlan.status === 'defaulted' && <WarningOutlined style={{ color: '#ff4d4f' }} />}
             {selectedPlan.status === 'cancelled' && <CloseCircleOutlined style={{ color: '#d9d9d9' }} />}
-            <Text strong>Status: {paymentPlanStatusLabels[selectedPlan.status]}</Text>
+            <Text strong>Status: {paymentPlanStatusLabels[selectedPlan.status] || selectedPlan.status}</Text>
           </Space>
           <Badge 
             status={selectedPlan.status === 'active' ? 'processing' : 
@@ -778,7 +695,7 @@ export const PaymentPlansPage: React.FC = () => {
                   </Text>
                 </Timeline.Item>
                 <Timeline.Item color={selectedPlan.status === 'active' ? 'green' : 'red'}>
-                  <Text>Status: {paymentPlanStatusLabels[selectedPlan.status]}</Text>
+                  <Text>Status: {paymentPlanStatusLabels[selectedPlan.status] || selectedPlan.status}</Text>
                   <br />
                   <Text type="secondary" style={{ fontSize: 12 }}>
                     {selectedPlan.progressPercent}% complete
@@ -832,13 +749,7 @@ export const PaymentPlansPage: React.FC = () => {
           },
           {
             label: 'Refresh',
-            onClick: () => {
-              setLoading(true);
-              setTimeout(() => {
-                setLoading(false);
-                message.success('Refreshed!');
-              }, 500);
-            },
+            onClick: () => refetchPaymentPlans(),
             icon: <ReloadOutlined />,
           },
         ]}
@@ -1031,7 +942,7 @@ export const PaymentPlansPage: React.FC = () => {
           columns={columns}
           dataSource={filteredPlans}
           rowKey="id"
-          loading={loading}
+          loading={paymentPlansLoading}
           size="middle"
           scroll={{ x: 1400 }}
           pagination={{
@@ -1073,9 +984,23 @@ export const PaymentPlansPage: React.FC = () => {
             rules={[{ required: true, message: 'Please select a customer' }]}
           >
             <Select placeholder="Select customer" showSearch>
-              {Object.entries(mockCustomers).map(([id, data]) => (
-                <Option key={id} value={id}>
-                  {data.name} - {data.property}
+              {customers.map(customer => (
+                <Option key={customer.id} value={customer.id}>
+                  {customer.firstName} {customer.lastName} - {getCustomerProperty(customer.id)}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="propertyId"
+            label="Property"
+            rules={[{ required: true, message: 'Please select a property' }]}
+          >
+            <Select placeholder="Select property" showSearch>
+              {properties.map((prop: any) => (
+                <Option key={prop.id} value={prop.id}>
+                  {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
                 </Option>
               ))}
             </Select>
@@ -1148,6 +1073,7 @@ export const PaymentPlansPage: React.FC = () => {
             </Select>
           </Form.Item>
 
+          {/* Live Preview */}
           <Form.Item noStyle shouldUpdate={(prev, curr) => 
             prev.totalAmount !== curr.totalAmount || 
             prev.downPayment !== curr.downPayment ||
@@ -1206,7 +1132,7 @@ export const PaymentPlansPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button type="primary" htmlType="submit" loading={createPaymentPlan.isPending}>
                 Create Payment Plan
               </Button>
               <Button onClick={() => {
@@ -1311,6 +1237,7 @@ export const PaymentPlansPage: React.FC = () => {
             </Select>
           </Form.Item>
 
+          {/* Live Preview */}
           <Form.Item noStyle shouldUpdate={(prev, curr) => 
             prev.totalAmount !== curr.totalAmount || 
             prev.downPayment !== curr.downPayment ||
@@ -1369,7 +1296,7 @@ export const PaymentPlansPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button type="primary" htmlType="submit" loading={updatePaymentPlan.isPending}>
                 Update Payment Plan
               </Button>
               <Button onClick={() => {

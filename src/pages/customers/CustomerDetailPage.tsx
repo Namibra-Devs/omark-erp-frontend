@@ -5,7 +5,7 @@ import {
   Card, Row, Col, Typography, Tag, Button, Space, Tabs, Table,
   Descriptions, Avatar, Badge, Progress, Timeline, Modal, Form,
   Input, Select, DatePicker, message, Divider, Empty, Spin,
-  Statistic, List, Tooltip, Popconfirm, InputNumber
+  Statistic, List, Tooltip, Popconfirm, InputNumber, Alert
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -36,6 +36,11 @@ import { MoneyText } from '@/components/shared/MoneyText';
 import { ProgressCell } from '@/components/shared/ProgressCell';
 import { tokens } from '@/constants/tokens';
 import { paymentPlanStatusLabels } from '@/constants/enums';
+import { useCustomerQuery } from '@/api/customers';
+import { usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
+import { usePropertyQuery } from '@/api/properties';
+import { usePaymentsQuery, useRecordPaymentMutation } from '@/api/payments';
+import { useGenerateDeedMutation, useDeedDocumentQuery } from '@/api/deeds';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -47,113 +52,111 @@ const { Title, Text } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 
-// Mock data for customer detail
-const mockCustomerDetail = {
-  id: 'c1',
-  firstName: 'John',
-  lastName: 'Doe',
-  phoneNumber: '+233241234567',
-  address: '123 Main St, Accra, Ghana',
-  type: 'payment_plan' as const,
-  propertyId: 'prop1',
-  createdAt: '2024-01-15T10:00:00Z',
-  updatedAt: '2024-01-20T14:30:00Z',
-};
-
-const mockPaymentPlan = {
-  id: 'pp1',
-  customerId: 'c1',
-  propertyId: 'prop1',
-  totalAmountMinor: 15000000,
-  downPaymentMinor: 3000000,
-  balanceMinor: 12000000,
-  numMonths: 12,
-  monthlyAmountMinor: 1000000,
-  currency: 'GHS',
-  startDate: '2024-01-15',
-  status: 'active' as const,
-  progressPercent: 25,
-  progressBand: 'red' as const,
-  createdAt: '2024-01-15T10:00:00Z',
-  updatedAt: '2024-01-20T14:30:00Z',
-};
-
-const mockInstallments = [
-  { id: 'i1', sequence: 1, dueDate: '2024-02-15', expectedAmountMinor: 1000000, isPaid: true, paidAt: '2024-02-15T10:00:00Z' },
-  { id: 'i2', sequence: 2, dueDate: '2024-03-15', expectedAmountMinor: 1000000, isPaid: true, paidAt: '2024-03-15T10:00:00Z' },
-  { id: 'i3', sequence: 3, dueDate: '2024-04-15', expectedAmountMinor: 1000000, isPaid: false },
-  { id: 'i4', sequence: 4, dueDate: '2024-05-15', expectedAmountMinor: 1000000, isPaid: false },
-];
-
-const mockPayments = [
-  { id: 'p1', amountMinor: 1000000, paidOn: '2024-02-15T10:00:00Z', method: 'bank_transfer', reference: 'TRX-001', recordedByUserId: '1', createdAt: '2024-02-15T10:00:00Z' },
-  { id: 'p2', amountMinor: 1000000, paidOn: '2024-03-15T10:00:00Z', method: 'mobile_money', reference: 'MM-002', recordedByUserId: '1', createdAt: '2024-03-15T10:00:00Z' },
-];
-
-const mockProperty = {
-  id: 'prop1',
-  houseNumber: 'H-102',
-  offerNumber: 'OF-2024-001',
-  priceMinor: 15000000,
-  currency: 'GHS',
-  description: 'Beautiful 3-bedroom house in Accra',
-  createdAt: '2024-01-01T00:00:00Z',
-  updatedAt: '2024-01-01T00:00:00Z',
-};
-
 export const CustomerDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
   
-  const [loading, setLoading] = useState(true);
-  const [customer, setCustomer] = useState<any>(null);
-  const [paymentPlan, setPaymentPlan] = useState<any>(null);
-  const [installments, setInstallments] = useState<any[]>([]);
-  const [payments, setPayments] = useState<any[]>([]);
-  const [property, setProperty] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('overview');
   const [recordPaymentModal, setRecordPaymentModal] = useState(false);
+  const [generateDeedModal, setGenerateDeedModal] = useState(false);
   const [form] = Form.useForm();
+  const [deedForm] = Form.useForm();
 
-  useEffect(() => {
-    // Simulate API call
-    setTimeout(() => {
-      setCustomer(mockCustomerDetail);
-      setPaymentPlan(mockPaymentPlan);
-      setInstallments(mockInstallments);
-      setPayments(mockPayments);
-      setProperty(mockProperty);
-      setLoading(false);
-    }, 800);
-  }, [id]);
+  // ── API Queries ────────────────────────────────────────────────────────────
+  const { 
+    data: customerData, 
+    isLoading: customerLoading,
+    error: customerError,
+    refetch: refetchCustomer
+  } = useCustomerQuery(id || '');
 
-  const handleRecordPayment = (values: any) => {
-    const newPayment = {
-      id: `p${Date.now()}`,
-      amountMinor: values.amountMinor,
-      paidOn: values.paidOn.toISOString(),
-      method: values.method,
-      reference: values.reference || '',
-      recordedByUserId: user?.id || '1',
-      createdAt: new Date().toISOString(),
-    };
-    setPayments([newPayment, ...payments]);
-    setRecordPaymentModal(false);
-    form.resetFields();
-    message.success('Payment recorded successfully!');
+  const { 
+    data: paymentPlanData, 
+    isLoading: paymentPlanLoading,
+    refetch: refetchPaymentPlan
+  } = usePaymentPlanQuery(id || '');
+
+  const { 
+    data: installmentsData, 
+    isLoading: installmentsLoading,
+    refetch: refetchInstallments
+  } = useInstallmentsQuery(id || '');
+
+  const { 
+    data: paymentsData, 
+    isLoading: paymentsLoading,
+    refetch: refetchPayments
+  } = usePaymentsQuery({ customerId: id });
+
+  const { 
+    data: propertyData, 
+    isLoading: propertyLoading 
+  } = usePropertyQuery(customerData?.propertyId || '');
+
+  // ── API Mutations ──────────────────────────────────────────────────────────
+  const recordPayment = useRecordPaymentMutation();
+  const generateDeed = useGenerateDeedMutation();
+
+  // ── Extract Data ──────────────────────────────────────────────────────────
+  const customer = customerData as any;
+  const paymentPlan = paymentPlanData as any;
+  const installments = installmentsData?.data || [];
+  const payments = paymentsData?.data || [];
+  const property = propertyData as any;
+
+  const isFullyPaid = customer?.type === 'fully_paid' || paymentPlan?.status === 'completed';
+
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleRecordPayment = async (values: any) => {
+    try {
+      await recordPayment.mutateAsync({
+        customerId: id || '',
+        paymentPlanId: paymentPlan?.id,
+        amountMinor: Math.round(values.amountGHS * 100),
+        paidOn: values.paidOn.toISOString(),
+        method: values.method,
+        reference: values.reference || '',
+        notes: values.notes || '',
+      });
+      
+      message.success('Payment recorded successfully!');
+      setRecordPaymentModal(false);
+      form.resetFields();
+      
+      // Refresh data
+      refetchPaymentPlan();
+      refetchInstallments();
+      refetchPayments();
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to record payment');
+    }
   };
 
-  const handleGenerateDeed = () => {
-    message.info('Deed generation coming soon!');
+  const handleGenerateDeed = async (values: any) => {
+    try {
+      await generateDeed.mutateAsync({
+        customerId: id || '',
+        propertyId: customer?.propertyId || '',
+        deedType: values.deedType,
+        notes: values.notes || '',
+      });
+      
+      message.success('Deed generated successfully!');
+      setGenerateDeedModal(false);
+      deedForm.resetFields();
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to generate deed');
+    }
   };
 
-  const handleGeneratePDF = () => {
-    message.info('PDF generation coming soon!');
+  const handleDownloadDeed = (deedId: string) => {
+    // Will be implemented when deed document endpoint is ready
+    message.info('Deed download coming soon!');
   };
 
-  // ── Loading / not found states ────────────────────────────────────────────
-  if (loading) {
+  // ── Loading state ─────────────────────────────────────────────────────────
+  if (customerLoading || paymentPlanLoading || propertyLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '400px' }}>
         <Spin size="large" tip="Loading customer details..." />
@@ -161,18 +164,128 @@ export const CustomerDetailPage: React.FC = () => {
     );
   }
 
-  if (!customer) {
+  // ── Error state ───────────────────────────────────────────────────────────
+  if (customerError || !customer) {
     return (
-      <div style={{ textAlign: 'center', padding: '50px' }}>
-        <Empty description="Customer not found" />
-        <Button type="primary" onClick={() => navigate('/customers')} style={{ marginTop: 16 }}>
+      <div style={{ padding: 24 }}>
+        <Alert
+          message="Error Loading Customer"
+          description="There was an error loading the customer details. Please try again."
+          type="error"
+          showIcon
+          action={
+            <Button size="small" type="primary" onClick={() => refetchCustomer()}>
+              Retry
+            </Button>
+          }
+        />
+        <Button 
+          type="primary" 
+          onClick={() => navigate('/customers')} 
+          style={{ marginTop: 16 }}
+        >
           Back to Customers
         </Button>
       </div>
     );
   }
 
-  const isFullyPaid = customer.type === 'fully_paid';
+  // ── Installments columns ──────────────────────────────────────────────────
+  const installmentsColumns = [
+    { 
+      title: '#', 
+      dataIndex: 'sequence', 
+      key: 'sequence', 
+      width: 80 
+    },
+    {
+      title: 'Due Date',
+      dataIndex: 'dueDate',
+      key: 'dueDate',
+      render: (date: string) => dayjs(date).format('MMMM DD, YYYY'),
+      sorter: (a: any, b: any) => dayjs(a.dueDate).unix() - dayjs(b.dueDate).unix(),
+    },
+    {
+      title: 'Expected Amount',
+      dataIndex: 'expectedAmountMinor',
+      key: 'expectedAmountMinor',
+      render: (value: number) => <MoneyText minor={value} />,
+      sorter: (a: any, b: any) => a.expectedAmountMinor - b.expectedAmountMinor,
+    },
+    {
+      title: 'Status',
+      dataIndex: 'isPaid',
+      key: 'isPaid',
+      render: (isPaid: boolean, record: any) => (
+        <Tag color={isPaid ? 'green' : 'red'}>
+          {isPaid ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
+          {isPaid ? ' Paid' : ' Pending'}
+        </Tag>
+      ),
+      filters: [
+        { text: 'Paid', value: true },
+        { text: 'Pending', value: false },
+      ],
+      onFilter: (value: any, record: any) => record.isPaid === value,
+    },
+    {
+      title: 'Paid Date',
+      dataIndex: 'paidAt',
+      key: 'paidAt',
+      render: (date: string) => date ? dayjs(date).format('MMMM DD, YYYY') : '-',
+    },
+  ];
+
+  // ── Payments columns ──────────────────────────────────────────────────────
+  const paymentsColumns = [
+    {
+      title: 'Date',
+      dataIndex: 'paidOn',
+      key: 'paidOn',
+      render: (date: string) => dayjs(date).format('MMMM DD, YYYY HH:mm'),
+      sorter: (a: any, b: any) => dayjs(a.paidOn).unix() - dayjs(b.paidOn).unix(),
+    },
+    {
+      title: 'Amount',
+      dataIndex: 'amountMinor',
+      key: 'amountMinor',
+      render: (value: number) => <MoneyText minor={value} />,
+      sorter: (a: any, b: any) => a.amountMinor - b.amountMinor,
+    },
+    {
+      title: 'Method',
+      dataIndex: 'method',
+      key: 'method',
+      render: (method: string) => {
+        const configs: Record<string, { color: string; label: string }> = {
+          cash: { color: 'gold', label: 'Cash' },
+          bank_transfer: { color: 'blue', label: 'Bank Transfer' },
+          mobile_money: { color: 'green', label: 'Mobile Money' },
+          cheque: { color: 'purple', label: 'Cheque' },
+          other: { color: 'default', label: 'Other' },
+        };
+        const config = configs[method] || configs.other;
+        return <Tag color={config.color}>{config.label}</Tag>;
+      },
+    },
+    { 
+      title: 'Reference', 
+      dataIndex: 'reference', 
+      key: 'reference',
+      render: (ref: string) => ref || '-',
+    },
+    {
+      title: 'Recorded By',
+      dataIndex: 'recordedBy',
+      key: 'recordedBy',
+      render: (recordedBy: any) => {
+        if (recordedBy && typeof recordedBy === 'object') {
+          return `${recordedBy.firstName || ''} ${recordedBy.lastName || ''}`.trim() || recordedBy.email || 'Unknown';
+        }
+        return recordedBy || 'Unknown';
+      },
+    },
+  ];
 
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
@@ -188,12 +301,23 @@ export const CustomerDetailPage: React.FC = () => {
             label: 'Record Payment',
             onClick: () => setRecordPaymentModal(true),
             icon: <PlusOutlined />,
-            disabled: isFullyPaid || !plan,
+            disabled: isFullyPaid || !paymentPlan,
           },
           {
             label: 'Generate Deed',
-            onClick: handleGenerateDeed,
+            onClick: () => setGenerateDeedModal(true),
             icon: <FileOutlined />,
+          },
+          {
+            label: 'Refresh',
+            onClick: () => {
+              refetchCustomer();
+              refetchPaymentPlan();
+              refetchInstallments();
+              refetchPayments();
+              message.success('Refreshed!');
+            },
+            icon: <ReloadOutlined />,
           },
         ]}
       />
@@ -221,7 +345,7 @@ export const CustomerDetailPage: React.FC = () => {
                     {customer.address}
                   </Descriptions.Item>
                   <Descriptions.Item label="Property">
-                    {customer.propertyId || 'N/A'}
+                    {property ? `${property.houseNumber} - ${property.offerNumber}` : customer.propertyId || 'N/A'}
                   </Descriptions.Item>
                   <Descriptions.Item label="Joined">
                     {dayjs(customer.createdAt).format('MMMM DD, YYYY')}
@@ -237,23 +361,23 @@ export const CustomerDetailPage: React.FC = () => {
               <div>
                 <Text type="secondary">Total Paid</Text>
                 <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-                  {plan ? (
-                    <MoneyText minor={plan.totalAmountMinor - plan.balanceMinor} />
+                  {paymentPlan ? (
+                    <MoneyText minor={paymentPlan.totalAmountMinor - paymentPlan.balanceMinor} />
                   ) : 'GHS 0.00'}
                 </div>
               </div>
               <div>
                 <Text type="secondary">Balance</Text>
-                <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-                  {plan ? (
-                    <MoneyText minor={plan.balanceMinor} />
+                <div style={{ fontSize: 20, fontWeight: 'bold', color: paymentPlan?.balanceMinor > 0 ? '#ff4d4f' : '#52c41a' }}>
+                  {paymentPlan ? (
+                    <MoneyText minor={paymentPlan.balanceMinor} />
                   ) : 'GHS 0.00'}
                 </div>
               </div>
               <div>
                 <Text type="secondary">Progress</Text>
                 <div style={{ fontSize: 20, fontWeight: 'bold' }}>
-                  {isFullyPaid ? '100%' : plan ? `${plan.progressPercent}%` : '0%'}
+                  {isFullyPaid ? '100%' : paymentPlan ? `${paymentPlan.progressPercent}%` : '0%'}
                 </div>
               </div>
             </div>
@@ -279,40 +403,69 @@ export const CustomerDetailPage: React.FC = () => {
                         <Title level={4} style={{ marginTop: 16 }}>Fully Paid</Title>
                         <Text type="secondary">This customer has fully paid for their property</Text>
                       </div>
-                    ) : plan ? (
+                    ) : paymentPlan ? (
                       <div>
                         <div style={{ marginBottom: 16 }}>
-                          <ProgressCell percent={plan.progressPercent} band={plan.progressBand} />
+                          <ProgressCell percent={paymentPlan.progressPercent} band={paymentPlan.progressBand} />
                         </div>
                         <Descriptions column={2} size="small" bordered>
                           <Descriptions.Item label="Total Amount" span={2}>
-                            <MoneyText minor={plan.totalAmountMinor} />
+                            <MoneyText minor={paymentPlan.totalAmountMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Down Payment">
-                            <MoneyText minor={plan.downPaymentMinor} />
+                            <MoneyText minor={paymentPlan.downPaymentMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Balance">
-                            <MoneyText minor={plan.balanceMinor} />
+                            <MoneyText minor={paymentPlan.balanceMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Monthly Amount">
-                            <MoneyText minor={plan.monthlyAmountMinor} />
+                            <MoneyText minor={paymentPlan.monthlyAmountMinor} />
                           </Descriptions.Item>
                           <Descriptions.Item label="Duration">
-                            {plan.numMonths} months
+                            {paymentPlan.numMonths} months
                           </Descriptions.Item>
                           <Descriptions.Item label="Start Date">
-                            {dayjs(plan.startDate).format('MMMM DD, YYYY')}
+                            {dayjs(paymentPlan.startDate).format('MMMM DD, YYYY')}
                           </Descriptions.Item>
                           <Descriptions.Item label="Status" span={2}>
-                            <StatusTag status={plan.status} type="paymentPlan" />
+                            <StatusTag status={paymentPlan.status} type="paymentPlan" />
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Next Payment" span={2}>
+                            {installments.filter((i: any) => !i.isPaid).length > 0 ? (
+                              <>
+                                <Text strong>
+                                  {dayjs(installments.filter((i: any) => !i.isPaid)[0].dueDate).format('MMMM DD, YYYY')}
+                                </Text>
+                                <br />
+                                <Text type="secondary">
+                                  Amount: <MoneyText minor={installments.filter((i: any) => !i.isPaid)[0].expectedAmountMinor} />
+                                </Text>
+                              </>
+                            ) : (
+                              <Text type="secondary">All installments paid</Text>
+                            )}
                           </Descriptions.Item>
                         </Descriptions>
-                        <div style={{ marginTop: 16, display: 'flex', gap: 8 }}>
-                          <Button type="primary" icon={<DownloadOutlined />} onClick={handleGeneratePDF}>
+                        <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          <Button 
+                            type="primary" 
+                            icon={<DownloadOutlined />} 
+                            onClick={() => message.info('PDF generation coming soon!')}
+                          >
                             Generate PDF
                           </Button>
-                          <Button icon={<FileOutlined />} onClick={handleGenerateDeed}>
+                          <Button 
+                            icon={<FileOutlined />} 
+                            onClick={() => setGenerateDeedModal(true)}
+                          >
                             Generate Deed
+                          </Button>
+                          <Button 
+                            icon={<PlusOutlined />} 
+                            onClick={() => setRecordPaymentModal(true)}
+                            disabled={isFullyPaid}
+                          >
+                            Record Payment
                           </Button>
                         </div>
                       </div>
@@ -322,24 +475,28 @@ export const CustomerDetailPage: React.FC = () => {
                   </Card>
                 </Col>
                 <Col xs={24} lg={12}>
-                  <Card title="Customer Details">
-                    <Descriptions column={1} size="small" bordered>
-                      <Descriptions.Item label="Full Name">
-                        <Text strong>{customer.firstName} {customer.lastName}</Text>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Phone">
-                        <a href={`tel:${customer.phoneNumber}`}>{customer.phoneNumber}</a>
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Address">
-                        {customer.address}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Property ID">
-                        {customer.propertyId || 'N/A'}
-                      </Descriptions.Item>
-                      <Descriptions.Item label="Customer Since">
-                        {dayjs(customer.createdAt).format('MMMM DD, YYYY')}
-                      </Descriptions.Item>
-                    </Descriptions>
+                  <Card title="Property Details">
+                    {property ? (
+                      <Descriptions column={1} size="small" bordered>
+                        <Descriptions.Item label="House Number">
+                          <Text strong>{property.houseNumber}</Text>
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Offer Number">
+                          {property.offerNumber}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Price">
+                          <MoneyText minor={property.priceMinor} />
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Description">
+                          {property.description || 'No description'}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Added">
+                          {dayjs(property.createdAt).format('MMMM DD, YYYY')}
+                        </Descriptions.Item>
+                      </Descriptions>
+                    ) : (
+                      <Empty description="No property assigned" />
+                    )}
                   </Card>
                 </Col>
               </Row>
@@ -347,47 +504,38 @@ export const CustomerDetailPage: React.FC = () => {
           },
           {
             key: 'installments',
-            label: 'Installments',
+            label: `Installments (${installments.filter((i: any) => !i.isPaid).length} pending)`,
             children: (
               <Card>
+                <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                  <Space>
+                    <Text type="secondary">
+                      Total: {installments.length} installments
+                    </Text>
+                    <Text type="secondary">
+                      Paid: {installments.filter((i: any) => i.isPaid).length}
+                    </Text>
+                    <Text type="secondary">
+                      Pending: {installments.filter((i: any) => !i.isPaid).length}
+                    </Text>
+                  </Space>
+                  {installments.filter((i: any) => !i.isPaid).length > 0 && (
+                    <Button 
+                      type="primary" 
+                      icon={<PlusOutlined />}
+                      onClick={() => setRecordPaymentModal(true)}
+                    >
+                      Record Payment
+                    </Button>
+                  )}
+                </div>
                 <Spin spinning={installmentsLoading}>
                   <Table
-                    columns={[
-                      { title: '#', dataIndex: 'sequence', key: 'sequence', width: 80 },
-                      {
-                        title: 'Due Date',
-                        dataIndex: 'dueDate',
-                        key: 'dueDate',
-                        render: (date: string) => dayjs(date).format('MMMM DD, YYYY'),
-                      },
-                      {
-                        title: 'Expected Amount',
-                        dataIndex: 'expectedAmountMinor',
-                        key: 'expectedAmountMinor',
-                        render: (value: number) => <MoneyText minor={value} />,
-                      },
-                      {
-                        title: 'Status',
-                        dataIndex: 'isPaid',
-                        key: 'isPaid',
-                        render: (isPaid: boolean) => (
-                          <Tag color={isPaid ? 'green' : 'red'}>
-                            {isPaid ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-                            {isPaid ? ' Paid' : ' Pending'}
-                          </Tag>
-                        ),
-                      },
-                      {
-                        title: 'Paid Date',
-                        dataIndex: 'paidAt',
-                        key: 'paidAt',
-                        render: (date: string) => date ? dayjs(date).format('MMMM DD, YYYY') : '-',
-                      },
-                    ]}
-                    dataSource={installments as any[]}
+                    columns={installmentsColumns}
+                    dataSource={installments}
                     rowKey="id"
-                    pagination={false}
-                    locale={{ emptyText: plan ? 'No installments found' : 'No payment plan attached' }}
+                    pagination={{ pageSize: 10 }}
+                    locale={{ emptyText: paymentPlan ? 'No installments found' : 'No payment plan attached' }}
                   />
                 </Spin>
               </Card>
@@ -395,10 +543,18 @@ export const CustomerDetailPage: React.FC = () => {
           },
           {
             key: 'payments',
-            label: 'Payments',
+            label: `Payments (${payments.length})`,
             children: (
               <Card>
-                <div style={{ marginBottom: 16 }}>
+                <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+                  <Space>
+                    <Text type="secondary">
+                      Total Payments: {payments.length}
+                    </Text>
+                    <Text type="secondary">
+                      Total Amount: <MoneyText minor={payments.reduce((sum: number, p: any) => sum + p.amountMinor, 0)} />
+                    </Text>
+                  </Space>
                   <Button 
                     type="primary" 
                     icon={<PlusOutlined />}
@@ -408,42 +564,15 @@ export const CustomerDetailPage: React.FC = () => {
                     Record Payment
                   </Button>
                 </div>
-                <Table
-                  columns={[
-                    {
-                      title: 'Date',
-                      dataIndex: 'paidOn',
-                      key: 'paidOn',
-                      render: (date: string) => dayjs(date).format('MMMM DD, YYYY'),
-                    },
-                    {
-                      title: 'Amount',
-                      dataIndex: 'amountMinor',
-                      key: 'amountMinor',
-                      render: (value: number) => <MoneyText minor={value} />,
-                    },
-                    {
-                      title: 'Method',
-                      dataIndex: 'method',
-                      key: 'method',
-                      render: (method: string) => (
-                        <Tag color={method === 'bank_transfer' ? 'blue' : method === 'mobile_money' ? 'green' : 'default'}>
-                          {method.replace('_', ' ').toUpperCase()}
-                        </Tag>
-                      ),
-                    },
-                    { title: 'Reference', dataIndex: 'reference', key: 'reference' },
-                    {
-                      title: 'Recorded By',
-                      dataIndex: 'recordedByUserId',
-                      key: 'recordedByUserId',
-                      render: (id: string) => `User #${id}`,
-                    },
-                  ]}
-                  dataSource={plan?.payments || []}
-                  rowKey="id"
-                  pagination={{ pageSize: 5 }}
-                />
+                <Spin spinning={paymentsLoading}>
+                  <Table
+                    columns={paymentsColumns}
+                    dataSource={payments}
+                    rowKey="id"
+                    pagination={{ pageSize: 10 }}
+                    locale={{ emptyText: 'No payments recorded yet' }}
+                  />
+                </Spin>
               </Card>
             ),
           },
@@ -452,16 +581,17 @@ export const CustomerDetailPage: React.FC = () => {
             label: 'Deeds',
             children: (
               <Card>
-                <Button 
-                  type="primary" 
-                  icon={<PlusOutlined />}
-                  onClick={handleGenerateDeed}
-                  style={{ marginBottom: 16 }}
-                >
-                  Generate Deed
-                </Button>
+                <div style={{ marginBottom: 16 }}>
+                  <Button 
+                    type="primary" 
+                    icon={<PlusOutlined />}
+                    onClick={() => setGenerateDeedModal(true)}
+                  >
+                    Generate Deed
+                  </Button>
+                </div>
                 <Empty description="No deeds generated yet">
-                  <Button type="primary" onClick={handleGenerateDeed}>
+                  <Button type="primary" onClick={() => setGenerateDeedModal(true)}>
                     Generate First Deed
                   </Button>
                 </Empty>
@@ -473,7 +603,12 @@ export const CustomerDetailPage: React.FC = () => {
 
       {/* Record Payment Modal */}
       <Modal
-        title="Record Payment"
+        title={
+          <Space>
+            <PlusOutlined style={{ color: tokens.primary }} />
+            <Text strong>Record Payment</Text>
+          </Space>
+        }
         open={recordPaymentModal}
         onCancel={() => {
           setRecordPaymentModal(false);
@@ -485,10 +620,32 @@ export const CustomerDetailPage: React.FC = () => {
         bodyStyle={{ padding: '16px' }}
       >
         <Form form={form} layout="vertical" onFinish={handleRecordPayment}>
+          <Alert
+            message={`Recording payment for ${customer.firstName} ${customer.lastName}`}
+            description={
+              paymentPlan ? (
+                <>
+                  Balance: <MoneyText minor={paymentPlan.balanceMinor} />
+                  <br />
+                  Next due: {installments.filter((i: any) => !i.isPaid).length > 0 ? 
+                    dayjs(installments.filter((i: any) => !i.isPaid)[0].dueDate).format('MMMM DD, YYYY') : 
+                    'All paid'
+                  }
+                </>
+              ) : 'No active payment plan'
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+
           <Form.Item
             name="amountGHS"
             label="Amount (GHS)"
-            rules={[{ required: true, message: 'Please enter amount' }]}
+            rules={[
+              { required: true, message: 'Please enter amount' },
+              { type: 'number', min: 0.01, message: 'Amount must be greater than 0' }
+            ]}
           >
             <InputNumber
               style={{ width: '100%' }}
@@ -504,7 +661,7 @@ export const CustomerDetailPage: React.FC = () => {
             label="Payment Date"
             rules={[{ required: true, message: 'Please select payment date' }]}
           >
-            <DatePicker style={{ width: '100%' }} />
+            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
           </Form.Item>
 
           <Form.Item
@@ -528,18 +685,101 @@ export const CustomerDetailPage: React.FC = () => {
             <Input placeholder="Enter reference number" />
           </Form.Item>
 
+          <Form.Item
+            name="notes"
+            label="Notes (Optional)"
+          >
+            <TextArea rows={2} placeholder="Add any notes about this payment" />
+          </Form.Item>
+
           <Form.Item>
             <Space>
               <Button
                 type="primary"
                 htmlType="submit"
-                loading={recordPaymentMutation.isPending}
+                loading={recordPayment.isPending}
               >
                 Record Payment
               </Button>
               <Button onClick={() => {
                 setRecordPaymentModal(false);
                 form.resetFields();
+              }}>
+                Cancel
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Generate Deed Modal */}
+      <Modal
+        title={
+          <Space>
+            <FileOutlined style={{ color: tokens.primary }} />
+            <Text strong>Generate Deed</Text>
+          </Space>
+        }
+        open={generateDeedModal}
+        onCancel={() => {
+          setGenerateDeedModal(false);
+          deedForm.resetFields();
+        }}
+        footer={null}
+        width={500}
+        style={{ maxWidth: '95%', top: 20 }}
+        bodyStyle={{ padding: '16px' }}
+      >
+        <Form form={deedForm} layout="vertical" onFinish={handleGenerateDeed}>
+          <Alert
+            message={`Generating deed for ${customer.firstName} ${customer.lastName}`}
+            description={
+              property ? (
+                <>
+                  Property: {property.houseNumber} - {property.offerNumber}
+                  <br />
+                  Price: <MoneyText minor={property.priceMinor} />
+                </>
+              ) : 'No property assigned'
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+
+          <Form.Item
+            name="deedType"
+            label="Deed Type"
+            rules={[{ required: true, message: 'Please select deed type' }]}
+          >
+            <Select>
+              <Option value="sale">Sale Agreement</Option>
+              <Option value="transfer">Property Transfer</Option>
+              <Option value="mortgage">Mortgage</Option>
+              <Option value="lease">Lease Agreement</Option>
+              <Option value="other">Other</Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="notes"
+            label="Notes (Optional)"
+          >
+            <TextArea rows={3} placeholder="Add any notes or special instructions" />
+          </Form.Item>
+
+          <Form.Item>
+            <Space>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={generateDeed.isPending}
+              >
+                Generate Deed
+              </Button>
+              <Button onClick={() => {
+                setGenerateDeedModal(false);
+                deedForm.resetFields();
               }}>
                 Cancel
               </Button>

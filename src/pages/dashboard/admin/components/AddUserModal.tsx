@@ -1,7 +1,7 @@
 // src/pages/dashboard/admin/components/AddUserModal.tsx
 import React, { useState } from 'react';
 import {
-  Modal, Form, Input, Select, Row, Col, Button, Tag, Typography, Avatar, Divider,
+  Modal, Form, Input, Select, Row, Col, Button, Tag, Typography, Avatar, Divider, message,
 } from 'antd';
 import {
   UserOutlined, MailOutlined, LockOutlined, TeamOutlined,
@@ -28,9 +28,9 @@ const ROLES = [
     value: 'marketing_director',
     label: 'Marketing Director',
     icon: <BarChartOutlined />,
-    color: '#090d2dff',
+    color: '#722ed1',
     bg: '#f9f0ff',
-    border: '#a598efff',
+    border: '#d3adf7',
     desc: 'Manage campaigns & team',
   },
   {
@@ -155,7 +155,7 @@ const RolePicker: React.FC<{
       return (
         <div
           key={r.value}
-          onClick={() => onChange?.(r.value)} // Correctly passes event back up to Ant Design
+          onClick={() => onChange?.(r.value)}
           style={{
             border: `2px solid ${selected ? r.color : '#e8e8e8'}`,
             borderRadius: 12,
@@ -300,7 +300,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
 
   const nextStep = async () => {
     const fieldsPerStep: Record<number, string[]> = {
-      1: ['firstName', 'lastName', 'email', 'phone'],
+      1: ['firstName', 'lastName', 'email', 'phoneNumber'],
       2: ['role', 'department'],
     };
     try {
@@ -313,7 +313,6 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
     }
   };
 
-  // Intercept changes here using a wrapper method to cleanly pass down value updates
   const handleRoleChange = (role: string) => {
     form.setFieldsValue({
       role: role,
@@ -322,21 +321,81 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
     setPreview((p) => ({ ...p, role }));
   };
 
-  const handleFinish = (values: any) => {
-    // values here will now contain clean attributes for firstName, role, department, etc.
-    onAdd(values);
-    reset();
+  const handleFinish = async (values: any) => {
+    try {
+      console.log('🔍 AddUserModal - Form values received:', values);
+
+      // Build the complete payload with all required fields
+      const fullName = `${values.firstName?.trim() || ''} ${values.lastName?.trim() || ''}`.trim();
+
+      const payload = {
+        name: fullName,
+        firstName: values.firstName?.trim() || '',
+        lastName: values.lastName?.trim() || '',
+        email: values.email?.trim() || '',
+        phone: values.phoneNumber?.trim() || '',
+        phoneNumber: values.phoneNumber?.trim() || '',
+        password: values.password || '',
+        role: values.role || 'marketing_staff',
+        department: values.department || 'Marketing',
+        isActive: true,
+      };
+
+      console.log('📤 AddUserModal - Payload being sent to addUser:', payload);
+
+      // Validate required fields
+      if (!payload.firstName) {
+        console.error('❌ First name is empty in payload');
+        message.error('First name is required');
+        return;
+      }
+      if (!payload.lastName) {
+        console.error('❌ Last name is empty in payload');
+        message.error('Last name is required');
+        return;
+      }
+      if (!payload.email) {
+        console.error('❌ Email is empty in payload');
+        message.error('Email is required');
+        return;
+      }
+      if (!payload.phoneNumber) {
+        console.error('❌ Phone number is empty in payload');
+        message.error('Phone number is required');
+        return;
+      }
+      if (!payload.password || payload.password.length < 8) {
+        console.error('❌ Password is invalid:', payload.password);
+        message.error('Password must be at least 8 characters');
+        return;
+      }
+
+      await onAdd(payload);
+      reset();
+    } catch (error: any) {
+      console.error('❌ Error in AddUserModal handleFinish:', error);
+      message.error(error?.message || 'Failed to add user');
+    }
   };
 
+  // ── Step content ─────────────────────────────────────────────────────────
+  // IMPORTANT: all three steps stay mounted at all times. We only toggle
+  // visibility with CSS `display`. Previously this used `STEP_CONTENT[step]`
+  // rendered inside a `<div key={step}>`, which fully unmounted the
+  // Form.Items of steps you'd already filled in — antd's `preserve` flag
+  // could not reliably save you from that, so firstName/lastName/email/
+  // phoneNumber/role/department were silently missing from the payload by
+  // the time step 3 submitted. Keeping every Form.Item mounted guarantees
+  // the form store always has every field's value.
   const STEP_CONTENT: Record<number, React.ReactNode> = {
     1: (
-      <>
+      <div style={{ display: step === 1 ? 'block' : 'none' }}>
         <Row gutter={14}>
           <Col span={12}>
             <Form.Item
               name="firstName"
               label="First Name"
-              rules={[{ required: true, message: 'Required' }]}
+              rules={[{ required: true, message: 'First name is required' }]}
             >
               <Input
                 prefix={<UserOutlined style={{ color: '#bbb' }} />}
@@ -349,7 +408,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             <Form.Item
               name="lastName"
               label="Last Name"
-              rules={[{ required: true, message: 'Required' }]}
+              rules={[{ required: true, message: 'Last name is required' }]}
             >
               <Input
                 prefix={<UserOutlined style={{ color: '#bbb' }} />}
@@ -364,8 +423,8 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           name="email"
           label="Email Address"
           rules={[
-            { required: true, message: 'Required' },
-            { type: 'email', message: 'Enter a valid email' },
+            { required: true, message: 'Email is required' },
+            { type: 'email', message: 'Enter a valid email address' },
           ]}
         >
           <Input
@@ -374,26 +433,30 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           />
         </Form.Item>
 
-        <Form.Item name="phone" label="Phone Number">
+        <Form.Item
+          name="phoneNumber"
+          label="Phone Number"
+          rules={[{ required: true, message: 'Phone number is required' }]}
+        >
           <PhoneInput placeholder="+233 XX XXX XXXX" />
         </Form.Item>
-      </>
+      </div>
     ),
 
     2: (
-      <>
+      <div style={{ display: step === 2 ? 'block' : 'none' }}>
         <Form.Item
           name="role"
           rules={[{ required: true, message: 'Please select a role' }]}
           style={{ marginBottom: 8 }}
         >
-          {/* Custom onChange bypassed previously. Now we bridge AntD's internal updates via handleRoleChange */}
           <RolePicker onChange={handleRoleChange} />
         </Form.Item>
 
         <Form.Item
           name="department"
           label="Department"
+          rules={[{ required: true, message: 'Department is required' }]}
           style={{ marginTop: 12 }}
         >
           <Input
@@ -401,19 +464,19 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             placeholder="Auto-filled or enter manually"
           />
         </Form.Item>
-      </>
+      </div>
     ),
 
     3: (
-      <>
+      <div style={{ display: step === 3 ? 'block' : 'none' }}>
         <UserPreview {...preview} />
 
         <Form.Item
           name="password"
           label="Temporary Password"
           rules={[
-            { required: true, message: 'Required' },
-            { min: 8, message: 'At least 8 characters' },
+            { required: true, message: 'Password is required' },
+            { min: 8, message: 'Password must be at least 8 characters' },
           ]}
           extra="The staff member will be prompted to change this on first login."
         >
@@ -428,7 +491,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           label="Confirm Password"
           dependencies={['password']}
           rules={[
-            { required: true, message: 'Required' },
+            { required: true, message: 'Please confirm your password' },
             ({ getFieldValue }) => ({
               validator(_, value) {
                 if (!value || getFieldValue('password') === value) return Promise.resolve();
@@ -442,7 +505,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             placeholder="Repeat password"
           />
         </Form.Item>
-      </>
+      </div>
     ),
   };
 
@@ -453,7 +516,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
       onCancel={handleCancel}
       footer={null}
       width={580}
-      destroyOnHidden={false} /* Prevents unmounted multi-step data from dumping out prematurely */
+      destroyOnHidden={false}
       styles={{
         content: { borderRadius: 16, padding: 0, overflow: 'hidden' },
         body: { padding: 0 },
@@ -482,22 +545,22 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           layout="vertical"
           onFinish={handleFinish}
           requiredMark={false}
-          preserve={true} /* Crucial: ensures values from stepped-out views persist on submit */
+          preserve={true}
         >
-          {/* Animated step content */}
-          <div
-            key={step}
-            style={{
-              animation: 'stepIn 0.25s ease both',
-            }}
-          >
+          {/* All three steps are mounted simultaneously — see STEP_CONTENT
+              comment above. This div no longer uses `key={step}`, since
+              that was forcing a full unmount/remount of previous steps'
+              Form.Items and wiping their values from the form store. */}
+          <div style={{ animation: 'stepIn 0.25s ease both' }}>
             <style>{`
               @keyframes stepIn {
                 from { opacity: 0; transform: translateX(16px); }
                 to   { opacity: 1; transform: translateX(0); }
               }
             `}</style>
-            {STEP_CONTENT[step]}
+            {STEP_CONTENT[1]}
+            {STEP_CONTENT[2]}
+            {STEP_CONTENT[3]}
           </div>
 
           <Divider style={{ margin: '16px 0' }} />
@@ -516,7 +579,6 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
               <Button
                 type="primary"
                 onClick={nextStep}
-                iconPosition="end"
                 icon={<ArrowRightOutlined />}
                 style={{ borderRadius: 8, minWidth: 110 }}
               >

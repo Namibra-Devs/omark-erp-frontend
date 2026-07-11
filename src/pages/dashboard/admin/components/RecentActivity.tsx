@@ -1,6 +1,6 @@
 // src/pages/dashboard/admin/components/RecentActivity.tsx
 import React, { useEffect, useRef, useState } from 'react';
-import { Card, Typography, Button, Skeleton } from 'antd';
+import { Card, Typography, Button, Skeleton, Empty, Tooltip, Space } from 'antd';
 import {
   CheckCircleFilled,
   InfoCircleFilled,
@@ -9,6 +9,8 @@ import {
   ClockCircleOutlined,
   UserOutlined,
   ThunderboltOutlined,
+  EyeOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
 import type { ActivityLog } from '../types';
 
@@ -79,7 +81,8 @@ const ActivityItem: React.FC<{
   log: ActivityLog;
   index: number;
   isLast: boolean;
-}> = ({ log, index, isLast }) => {
+  onClick?: () => void;
+}> = ({ log, index, isLast, onClick }) => {
   const { ref, visible } = useReveal(index * 110);
   const [hovered, setHovered] = useState(false);
   const cfg = TYPE_CONFIG[log.type as keyof typeof TYPE_CONFIG] ?? TYPE_CONFIG.info;
@@ -139,17 +142,18 @@ const ActivityItem: React.FC<{
       </div>
 
       {/* ── Right column: content card ── */}
-      <div style={{ flex: 1, paddingBottom: isLast ? 0 : 16 }}>
+      <div style={{ flex: 1, paddingBottom: isLast ? 0 : 16, cursor: onClick ? 'pointer' : 'default' }}>
         <div
           onMouseEnter={() => setHovered(true)}
           onMouseLeave={() => setHovered(false)}
+          onClick={onClick}
           style={{
             padding: '10px 14px',
             borderRadius: 10,
             border: `1px solid ${hovered ? cfg.border : '#f0f0f0'}`,
             background: hovered ? cfg.bg : '#fafafa',
             transition: 'all 0.2s ease',
-            cursor: 'default',
+            cursor: onClick ? 'pointer' : 'default',
           }}
         >
           {/* Top row: action + type pill + timestamp */}
@@ -161,7 +165,7 @@ const ActivityItem: React.FC<{
             gap: 6,
             marginBottom: 5,
           }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <Text strong style={{ fontSize: 13, color: '#1a1a2e' }}>
                 {log.action}
               </Text>
@@ -182,7 +186,7 @@ const ActivityItem: React.FC<{
                 {cfg.label}
               </span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
               <ClockCircleOutlined style={{ fontSize: 11, color: '#bbb' }} />
               <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
                 {log.timestamp}
@@ -227,14 +231,21 @@ interface RecentActivityProps {
   activities: ActivityLog[];
   loading?: boolean;
   onViewAll?: () => void;
+  onRefresh?: () => void;
+  onActivityClick?: (log: ActivityLog) => void;
+  maxItems?: number;
 }
 
 export const RecentActivity: React.FC<RecentActivityProps> = ({
   activities,
   loading,
   onViewAll,
+  onRefresh,
+  onActivityClick,
+  maxItems = 5,
 }) => {
-  const displayed = activities.slice(0, 5);
+  const displayed = activities.slice(0, maxItems);
+  const hasMore = activities.length > maxItems;
 
   return (
     <Card
@@ -245,17 +256,50 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
           {/* Live pulse dot */}
           <span style={{ position: 'relative', display: 'inline-flex', marginLeft: 2 }}>
             <span style={{
-              width: 7, height: 7, borderRadius: '50%', background: '#52c41a',
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: '#52c41a',
               display: 'inline-block',
               animation: 'ra-pulse 2s ease-in-out infinite',
             }} />
           </span>
+          {activities.length > 0 && (
+            <Tooltip title={`${activities.length} total activities`}>
+              <span style={{
+                background: '#f0f0f0',
+                borderRadius: 10,
+                padding: '0 8px',
+                fontSize: 11,
+                fontWeight: 600,
+                color: '#888',
+                lineHeight: '20px',
+              }}>
+                {activities.length}
+              </span>
+            </Tooltip>
+          )}
         </div>
       }
       extra={
-        <Button type="link" onClick={onViewAll} style={{ padding: 0, fontWeight: 500 }}>
-          View all →
-        </Button>
+        <Space>
+          {onRefresh && (
+            <Tooltip title="Refresh activities">
+              <Button 
+                type="text" 
+                size="small" 
+                icon={<ReloadOutlined spin={loading} />} 
+                onClick={onRefresh}
+                disabled={loading}
+              />
+            </Tooltip>
+          )}
+          {onViewAll && (
+            <Button type="link" onClick={onViewAll} style={{ padding: 0, fontWeight: 500 }}>
+              {hasMore ? `View all ${activities.length} →` : 'View all →'}
+            </Button>
+          )}
+        </Space>
       }
       style={{
         marginBottom: 24,
@@ -282,18 +326,31 @@ export const RecentActivity: React.FC<RecentActivityProps> = ({
               log={log}
               index={i}
               isLast={i === displayed.length - 1}
+              onClick={onActivityClick ? () => onActivityClick(log) : undefined}
             />
           ))}
+          {hasMore && onViewAll && (
+            <div style={{ textAlign: 'center', marginTop: 12 }}>
+              <Button type="link" onClick={onViewAll}>
+                <EyeOutlined /> View all {activities.length} activities
+              </Button>
+            </div>
+          )}
         </div>
       ) : (
-        <div style={{
-          textAlign: 'center',
-          padding: '40px 0',
-          color: '#bbb',
-        }}>
-          <ClockCircleOutlined style={{ fontSize: 32, marginBottom: 10, display: 'block', margin: '0 auto 10px' }} />
-          <Text type="secondary">No recent activity to display</Text>
-        </div>
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={
+            <div>
+              <Text type="secondary">No recent activity</Text>
+              <br />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                Activities will appear here as users interact with the system
+              </Text>
+            </div>
+          }
+          style={{ padding: '20px 0' }}
+        />
       )}
     </Card>
   );

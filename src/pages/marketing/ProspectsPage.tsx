@@ -9,7 +9,7 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
-import { useProspects, useCreateProspect, useUpdateProspect } from '@/api/prospects';
+import { useProspects, useCreateProspect } from '@/api/prospects';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -24,16 +24,15 @@ export const ProspectsPage: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   // React Query hooks
-  const { data: prospectsResponse, isLoading, refetch } = useProspects({
+  const { data: prospects, isLoading } = useProspects({
     source: 'marketing',
     status: statusFilter === 'all' ? undefined : statusFilter,
     q: searchText || undefined,
   });
 
   const createProspectMutation = useCreateProspect();
-  const updateProspectMutation = useUpdateProspect();
 
-  const prospects = prospectsResponse?.data || [];
+  const prospectList: import('@/types').Prospect[] = Array.isArray(prospects) ? prospects : [];
 
   const handleAddProspect = async (values: any) => {
     try {
@@ -49,19 +48,6 @@ export const ProspectsPage: React.FC = () => {
     } catch (err: any) {
       console.error('Failed to add prospect:', err);
       message.error(err.error?.message || 'Failed to add prospect. Please try again.');
-    }
-  };
-
-  const handleStatusChange = async (id: string, newStatus: ProspectStatus) => {
-    try {
-      await updateProspectMutation.mutateAsync({
-        id,
-        data: { status: newStatus },
-      });
-      message.success(`Status updated to ${prospectStatusLabels[newStatus]}`);
-    } catch (err: any) {
-      console.error('Failed to update status:', err);
-      message.error(err.error?.message || 'Failed to update status.');
     }
   };
 
@@ -117,32 +103,19 @@ export const ProspectsPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 240,
+      width: 100,
       fixed: 'right' as any,
       render: (_: any, record: Prospect) => (
         <Space size={[4, 4]} wrap onClick={(e) => e.stopPropagation()}>
           <Button
-            type="link"
+            type="primary"
+            ghost
             icon={<EyeOutlined />}
             onClick={() => navigate(`/marketing/prospects/${record.id}`)}
-            style={{ padding: '0 4px' }}
+            size="small"
           >
             View
           </Button>
-          <Select
-            value={record.status}
-            style={{ width: 130, minWidth: 100 }}
-            size="small"
-            onChange={(value) => handleStatusChange(record.id, value as ProspectStatus)}
-            dropdownMatchSelectWidth={false}
-          >
-            <Option value="new">New</Option>
-            <Option value="meeting_scheduled">Schedule</Option>
-            <Option value="meeting_completed">Complete</Option>
-            <Option value="suspended">Suspend</Option>
-            <Option value="postponed">Postpone</Option>
-            <Option value="canceled">Cancel</Option>
-          </Select>
         </Space>
       ),
     },
@@ -195,7 +168,7 @@ export const ProspectsPage: React.FC = () => {
           </Col>
           <Col xs={24} sm={24} md={8}>
             <Text type="secondary" style={{ display: 'block', textAlign: 'right' }}>
-              Total: {prospects.length} prospects
+              Total: {prospectList.length} prospects
             </Text>
           </Col>
         </Row>
@@ -205,7 +178,7 @@ export const ProspectsPage: React.FC = () => {
       <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
         <Table
           columns={columns}
-          dataSource={prospects}
+          dataSource={prospectList}
           rowKey="id"
           loading={isLoading}
           size="middle"

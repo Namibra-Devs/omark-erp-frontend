@@ -1,7 +1,7 @@
 // src/pages/dashboard/admin/components/AuditLog.tsx
 import React, { useState, useMemo } from 'react';
 import {
-  Modal, Table, Tag, Input, Select, DatePicker, Button, Typography, Avatar, Tooltip,
+  Modal, Table, Tag, Input, Select, DatePicker, Button, Typography, Avatar, Tooltip, message,
 } from 'antd';
 import {
   SearchOutlined, DownloadOutlined,
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons';
 import type { ActivityLog } from '../types';
 import type { Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
 
 const { RangePicker } = DatePicker;
 const { Text } = Typography;
@@ -91,9 +92,16 @@ interface AuditLogProps {
   onCancel: () => void;
   logs: ActivityLog[];
   loading?: boolean;
+  onExport?: () => void;
 }
 
-export const AuditLog: React.FC<AuditLogProps> = ({ open, onCancel, logs, loading }) => {
+export const AuditLog: React.FC<AuditLogProps> = ({ 
+  open, 
+  onCancel, 
+  logs, 
+  loading,
+  onExport 
+}) => {
   const [searchText, setSearchText] = useState('');
   const [filterType, setFilterType] = useState('all');
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
@@ -106,15 +114,48 @@ export const AuditLog: React.FC<AuditLogProps> = ({ open, onCancel, logs, loadin
     error:   logs.filter(l => l.type === 'error').length,
   }), [logs]);
 
-  const filteredLogs = useMemo(() => logs.filter(log => {
-    const q = searchText.toLowerCase();
-    const matchSearch =
-      log.action.toLowerCase().includes(q) ||
-      log.details.toLowerCase().includes(q) ||
-      log.user.toLowerCase().includes(q);
-    const matchType = filterType === 'all' || log.type === filterType;
-    return matchSearch && matchType;
-  }), [logs, searchText, filterType]);
+  const filteredLogs = useMemo(() => {
+    return logs.filter(log => {
+      const q = searchText.toLowerCase();
+      const matchSearch =
+        log.action.toLowerCase().includes(q) ||
+        log.details.toLowerCase().includes(q) ||
+        log.user.toLowerCase().includes(q);
+      const matchType = filterType === 'all' || log.type === filterType;
+      
+      // Date range filter
+      let matchDate = true;
+      if (dateRange && dateRange[0] && dateRange[1]) {
+        const logDate = dayjs(log.timestamp);
+        matchDate = logDate.isAfter(dateRange[0]) && logDate.isBefore(dateRange[1]);
+      }
+      
+      return matchSearch && matchType && matchDate;
+    });
+  }, [logs, searchText, filterType, dateRange]);
+
+  const handleExport = () => {
+    if (onExport) {
+      onExport();
+    } else {
+      // Default export as JSON
+      try {
+        const dataStr = JSON.stringify(filteredLogs, null, 2);
+        const blob = new Blob([dataStr], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `audit-log-${dayjs().format('YYYY-MM-DD-HHmmss')}.json`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+        message.success('Audit log exported successfully!');
+      } catch (error) {
+        message.error('Failed to export audit log');
+      }
+    }
+  };
 
   const columns = [
     {
@@ -134,7 +175,7 @@ export const AuditLog: React.FC<AuditLogProps> = ({ open, onCancel, logs, loadin
               flexShrink: 0,
             }}
           >
-            {user !== 'System' ? user[0].toUpperCase() : undefined}
+            {user !== 'System' ? user[0]?.toUpperCase() : undefined}
           </Avatar>
           <Text style={{ fontSize: 13, fontWeight: 500 }}>{user}</Text>
         </div>
@@ -220,7 +261,7 @@ export const AuditLog: React.FC<AuditLogProps> = ({ open, onCancel, logs, loadin
       onCancel={onCancel}
       footer={null}
       width={1020}
-      destroyOnHidden
+      destroyOnClose
       styles={{
         content: { borderRadius: 16, padding: 0, overflow: 'hidden' },
         body: { padding: 0 },
@@ -248,7 +289,7 @@ export const AuditLog: React.FC<AuditLogProps> = ({ open, onCancel, logs, loadin
         </div>
         <Button
           icon={<DownloadOutlined />}
-          onClick={() => {}}
+          onClick={handleExport}
           style={{
             borderRadius: 8,
             background: 'rgba(255,255,255,0.1)',
@@ -339,7 +380,7 @@ export const AuditLog: React.FC<AuditLogProps> = ({ open, onCancel, logs, loadin
           size="middle"
           pagination={{
             pageSize: 8,
-            showSizeChanger: false,
+            showSizeChanger: true,
             showTotal: total => `${total} entries`,
             style: { marginTop: 16 },
           }}

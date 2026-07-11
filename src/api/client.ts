@@ -53,10 +53,8 @@ addAuthInterceptor(erpClient);
 const addResponseInterceptor = (instance: AxiosInstance) => {
   instance.interceptors.response.use(
     (response) => {
-      // Unwrap the response to return just the data/meta if standard envelope
-      if (response.data && 'data' in response.data) {
-        return response.data;
-      }
+      // Return the full axios response so that hooks can access response.data
+      // Each API hook handles its own unwrapping of the server envelope
       return response;
     },
     async (error: AxiosError<ApiError>) => {
@@ -81,9 +79,9 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
             throw new Error('No refresh token available');
           }
           // Request refresh from backend using standalone axios to avoid interceptor side effects
-          const refreshRes = await axios.post(`${BASE_URL}/api/auth/refresh`, { refreshToken });
-          const newAccessToken = refreshRes.data.accessToken;
-          const newRefreshToken = refreshRes.data.refreshToken;
+          const refreshRes = await axios.post(`${BASE_URL}/api/v1/auth/refresh`, { refreshToken });
+          const newAccessToken = refreshRes.data.data.accessToken;
+          const newRefreshToken = refreshRes.data.data.refreshToken;
 
           setTokens(newAccessToken, newRefreshToken);
           onTokenRefreshed(newAccessToken);

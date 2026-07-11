@@ -6,7 +6,7 @@ import {
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
   DatePicker, Statistic, Divider, Empty, Dropdown, Popconfirm,
   Alert, Drawer, Descriptions, Timeline, Tabs, Progress,
-  Radio, Switch, InputNumber, List, Collapse, Checkbox
+  Radio, Switch, InputNumber, List, Collapse, Checkbox, Spin
 } from 'antd';
 import {
   PlusOutlined,
@@ -70,7 +70,9 @@ import {
   BulbOutlined,
   ThunderboltOutlined,
   SoundOutlined,
-  CustomerServiceOutlined
+  CustomerServiceOutlined,
+  ReadOutlined,
+  CheckCircleTwoTone,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -79,6 +81,19 @@ import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { notificationStatusLabels, notificationTypeLabels } from '@/constants/enums';
+import {
+  useNotificationsQuery,
+  useSendNotificationMutation,
+  useResendNotificationMutation,
+  useDeleteNotificationMutation,
+  useSendTestSMSMutation,
+  useMarkAsReadMutation,
+  useMarkAllAsReadMutation,
+  type Notification,
+  type SendNotificationPayload
+} from '@/api/notifications';
+import { useCustomersQuery } from '@/api/customers';
+import type { Customer } from '@/types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -90,253 +105,267 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { Text, Title } = Typography;
 
-// Mock Notifications Data
-const mockNotifications = [
-  {
-    id: 'n1',
-    customerId: 'c1',
-    phoneNumber: '+233241234567',
-    type: 'contribution_due_soon',
-    messageBody: 'Dear John Doe, your monthly contribution of GHS 1,000.00 is due on 2024-02-15. Please make payment to avoid late fees.',
-    status: 'sent',
-    providerMessageId: 'SMS-123456789',
-    sentAt: '2024-01-15T08:00:00Z',
-    createdAt: '2024-01-15T08:00:00Z',
-  },
-  {
-    id: 'n2',
-    customerId: 'c3',
-    phoneNumber: '+233241234569',
-    type: 'contribution_overdue',
-    messageBody: 'Dear Michael Johnson, your monthly contribution of GHS 625.00 is overdue by 5 days. Please make immediate payment.',
-    status: 'pending',
-    providerMessageId: null,
-    sentAt: null,
-    createdAt: '2024-01-20T10:30:00Z',
-  },
-  {
-    id: 'n3',
-    customerId: 'c4',
-    phoneNumber: '+233241234570',
-    type: 'contribution_due_soon',
-    messageBody: 'Dear Sarah Williams, your monthly contribution of GHS 800.00 is due on 2024-02-10. Please make payment to avoid late fees.',
-    status: 'sent',
-    providerMessageId: 'SMS-987654321',
-    sentAt: '2024-01-18T09:00:00Z',
-    createdAt: '2024-01-18T09:00:00Z',
-  },
-  {
-    id: 'n4',
-    customerId: 'c6',
-    phoneNumber: '+233241234572',
-    type: 'contribution_overdue',
-    messageBody: 'Dear Emily Davis, your monthly contribution of GHS 533,333.00 is overdue by 12 days. Immediate payment required.',
-    status: 'failed',
-    providerMessageId: 'SMS-456789123',
-    sentAt: '2024-01-16T14:00:00Z',
-    createdAt: '2024-01-16T14:00:00Z',
-  },
-  {
-    id: 'n5',
-    customerId: 'c7',
-    phoneNumber: '+233241234573',
-    type: 'contribution_due_soon',
-    messageBody: 'Dear David Wilson, your monthly contribution of GHS 800.00 is due on 2024-02-20. Please make payment to avoid late fees.',
-    status: 'pending',
-    providerMessageId: null,
-    sentAt: null,
-    createdAt: '2024-01-22T11:15:00Z',
-  },
-  {
-    id: 'n6',
-    customerId: 'c8',
-    phoneNumber: '+233241234574',
-    type: 'contribution_overdue',
-    messageBody: 'Dear Lisa Taylor, your monthly contribution of GHS 583,333.00 is overdue by 3 days. Please make payment.',
-    status: 'sent',
-    providerMessageId: 'SMS-789456123',
-    sentAt: '2024-01-19T16:30:00Z',
-    createdAt: '2024-01-19T16:30:00Z',
-  },
-  {
-    id: 'n7',
-    customerId: 'c1',
-    phoneNumber: '+233241234567',
-    type: 'contribution_due_soon',
-    messageBody: 'Dear John Doe, your monthly contribution of GHS 1,000.00 is due on 2024-02-15. Please make payment to avoid late fees.',
-    status: 'sent',
-    providerMessageId: 'SMS-321654987',
-    sentAt: '2024-01-14T07:00:00Z',
-    createdAt: '2024-01-14T07:00:00Z',
-  },
-  {
-    id: 'n8',
-    customerId: 'c3',
-    phoneNumber: '+233241234569',
-    type: 'contribution_due_soon',
-    messageBody: 'Dear Michael Johnson, your monthly contribution of GHS 625.00 is due on 2024-02-08. Please make payment.',
-    status: 'sent',
-    providerMessageId: 'SMS-654987321',
-    sentAt: '2024-01-12T10:00:00Z',
-    createdAt: '2024-01-12T10:00:00Z',
-  },
-];
-
-// Mock Customers
-const mockCustomers: Record<string, { name: string; phone: string }> = {
-  'c1': { name: 'John Doe', phone: '+233241234567' },
-  'c3': { name: 'Michael Johnson', phone: '+233241234569' },
-  'c4': { name: 'Sarah Williams', phone: '+233241234570' },
-  'c6': { name: 'Emily Davis', phone: '+233241234572' },
-  'c7': { name: 'David Wilson', phone: '+233241234573' },
-  'c8': { name: 'Lisa Taylor', phone: '+233241234574' },
-};
-
-// Mock Payment Plans for reference
-const mockPaymentPlans: Record<string, { amount: number; dueDate: string }> = {
-  'c1': { amount: 100000, dueDate: '2024-02-15' },
-  'c3': { amount: 62500, dueDate: '2024-02-08' },
-  'c4': { amount: 80000, dueDate: '2024-02-10' },
-  'c6': { amount: 53333, dueDate: '2024-01-15' },
-  'c7': { amount: 80000, dueDate: '2024-02-20' },
-  'c8': { amount: 58333, dueDate: '2024-01-22' },
-};
-
 export const NotificationsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   
   // States
-  const [loading, setLoading] = useState(false);
-  const [notifications, setNotifications] = useState<any[]>(mockNotifications);
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [selectedNotification, setSelectedNotification] = useState<any | null>(null);
+  const [selectedNotification, setSelectedNotification] = useState<Notification | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [sendModal, setSendModal] = useState(false);
   const [selectedNotifications, setSelectedNotifications] = useState<string[]>([]);
   const [form] = Form.useForm();
   const [sendForm] = Form.useForm();
+  const [testSMSSent, setTestSMSSent] = useState(false);
 
   // Export states
   const [exportModal, setExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
   const [exportLoading, setExportLoading] = useState(false);
 
-  // Get customer name
+  // ── API Queries ────────────────────────────────────────────────────────────
+  const { 
+    data: notificationsData, 
+    isLoading: notificationsLoading,
+    error: notificationsError,
+    refetch: refetchNotifications
+  } = useNotificationsQuery({
+    type: typeFilter !== 'all' ? typeFilter : undefined,
+    status: statusFilter !== 'all' ? statusFilter : undefined,
+  });
+
+  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ limit: 100 });
+
+  // ── API Mutations ──────────────────────────────────────────────────────────
+  const sendNotification = useSendNotificationMutation();
+  const resendNotification = useResendNotificationMutation();
+  const deleteNotification = useDeleteNotificationMutation();
+  const sendTestSMS = useSendTestSMSMutation();
+  const markAsRead = useMarkAsReadMutation();
+  const markAllAsRead = useMarkAllAsReadMutation();
+
+  // ── Data Mapping ──────────────────────────────────────────────────────────
+  // Extract data with proper fallbacks
+  const notifications: Notification[] = React.useMemo(() => {
+    if (!notificationsData) return [];
+    const data = (notificationsData as any).data ?? notificationsData;
+    if (Array.isArray(data)) return data;
+    if (data?.items) return data.items;
+    return [];
+  }, [notificationsData]);
+
+  const customers: Customer[] = React.useMemo(() => {
+    if (!customersData) return [];
+    const data = (customersData as any).data ?? customersData;
+    if (Array.isArray(data)) return data;
+    if (data?.items) return data.items;
+    return [];
+  }, [customersData]);
+
+  // Create map for quick lookups
+  const customerMap = React.useMemo(() => {
+    return customers.reduce((acc, customer) => {
+      acc[customer.id] = customer;
+      return acc;
+    }, {} as Record<string, Customer>);
+  }, [customers]);
+
+  // ── Helper Functions ──────────────────────────────────────────────────────
   const getCustomerName = (customerId: string) => {
-    return mockCustomers[customerId]?.name || 'Unknown Customer';
+    return customerMap[customerId] ? 
+      `${customerMap[customerId].firstName} ${customerMap[customerId].lastName}` : 
+      'Unknown Customer';
   };
 
   const getCustomerPhone = (customerId: string) => {
-    return mockCustomers[customerId]?.phone || '';
+    return customerMap[customerId]?.phoneNumber || '';
   };
 
-  // Filter notifications
+  // ── Filter Notifications ──────────────────────────────────────────────────
   const filteredNotifications = notifications.filter(notification => {
     const customerName = getCustomerName(notification.customerId).toLowerCase();
     const matchesSearch = customerName.includes(searchText.toLowerCase()) ||
-                          notification.phoneNumber.includes(searchText) ||
+                          notification.phoneNumber?.includes(searchText) ||
                           notification.id.toLowerCase().includes(searchText.toLowerCase()) ||
-                          notification.messageBody.toLowerCase().includes(searchText.toLowerCase());
+                          notification.messageBody?.toLowerCase().includes(searchText.toLowerCase());
     const matchesType = typeFilter === 'all' || notification.type === typeFilter;
     const matchesStatus = statusFilter === 'all' || notification.status === statusFilter;
     return matchesSearch && matchesType && matchesStatus;
   });
 
-  // Stats
+  // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = {
     total: notifications.length,
-    sent: notifications.filter(n => n.status === 'sent').length,
-    pending: notifications.filter(n => n.status === 'pending').length,
+    sent: notifications.filter(n => n.status === 'sent' || n.status === 'read').length,
+    pending: notifications.filter(n => n.status === 'pending' || n.status === 'unread').length,
     failed: notifications.filter(n => n.status === 'failed').length,
     dueSoon: notifications.filter(n => n.type === 'contribution_due_soon').length,
     overdue: notifications.filter(n => n.type === 'contribution_overdue').length,
+    unread: notifications.filter(n => n.status === 'pending' || n.status === 'unread').length,
   };
 
-  // Send notification
-  const handleSendNotification = (values: any) => {
-    setLoading(true);
-    setTimeout(() => {
-      const newNotification = {
-        id: `n${Date.now()}`,
+  // ── Handlers ──────────────────────────────────────────────────────────────
+  const handleSendNotification = async (values: any) => {
+    try {
+      // Check if it's a test SMS
+      if (values.isTest) {
+        await handleSendTestSMS(values);
+        return;
+      }
+
+      const customer = customerMap[values.customerId];
+      if (!customer) {
+        message.error('Customer not found');
+        return;
+      }
+
+      const payload: SendNotificationPayload = {
         customerId: values.customerId,
-        phoneNumber: mockCustomers[values.customerId]?.phone || '',
         type: values.type,
         messageBody: values.messageBody,
-        status: 'sent',
-        providerMessageId: `SMS-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-        sentAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
+        phoneNumber: customer.phoneNumber,
       };
-      setNotifications([newNotification, ...notifications]);
-      setLoading(false);
+
+      await sendNotification.mutateAsync(payload);
+      message.success('Notification sent successfully!');
       setSendModal(false);
       sendForm.resetFields();
-      message.success('Notification sent successfully!');
-    }, 1000);
+      setTestSMSSent(false);
+      
+      // Refetch with delay
+      setTimeout(() => {
+        refetchNotifications();
+      }, 500);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to send notification');
+    }
   };
 
-  // Resend notification
-  const handleResendNotification = (id: string) => {
-    setLoading(true);
-    setTimeout(() => {
-      setNotifications(notifications.map(n => 
-        n.id === id 
-          ? { 
-              ...n, 
-              status: 'sent', 
-              sentAt: new Date().toISOString(),
-              providerMessageId: `SMS-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
-            }
-          : n
-      ));
-      setLoading(false);
+  const handleSendTestSMS = async (values: any) => {
+    try {
+      const phoneNumber = values.testPhoneNumber || values.phoneNumber;
+      if (!phoneNumber) {
+        message.error('Phone number is required for test SMS');
+        return;
+      }
+
+      await sendTestSMS.mutateAsync({
+        phoneNumber: phoneNumber,
+        message: values.messageBody,
+      });
+      message.success('Test SMS sent successfully!');
+      setTestSMSSent(true);
+      // Don't close modal so user can send another test
+      
+      // Refetch with delay
+      setTimeout(() => {
+        refetchNotifications();
+      }, 500);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to send test SMS');
+    }
+  };
+
+  const handleResendNotification = async (id: string) => {
+    try {
+      await resendNotification.mutateAsync(id);
       message.success('Notification resent successfully!');
-    }, 800);
+      setTimeout(() => {
+        refetchNotifications();
+      }, 500);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to resend notification');
+    }
   };
 
-  // Delete notification
-  const handleDeleteNotification = (id: string) => {
-    setNotifications(notifications.filter(n => n.id !== id));
-    message.success('Notification deleted successfully!');
+  const handleDeleteNotification = async (id: string) => {
+    try {
+      await deleteNotification.mutateAsync(id);
+      message.success('Notification deleted successfully!');
+      setTimeout(() => {
+        refetchNotifications();
+      }, 300);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to delete notification');
+    }
   };
 
-  // Bulk send selected notifications
-  const handleBulkSend = () => {
+  const handleMarkAsRead = async (id: string) => {
+    try {
+      await markAsRead.mutateAsync(id);
+      message.success('Notification marked as read');
+      setTimeout(() => {
+        refetchNotifications();
+      }, 300);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to mark as read');
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      const unreadIds = notifications.filter(n => n.status === 'pending' || n.status === 'unread').map(n => n.id);
+      if (unreadIds.length === 0) {
+        message.info('No unread notifications');
+        return;
+      }
+      
+      await markAllAsRead.mutateAsync();
+      message.success('All notifications marked as read');
+      setTimeout(() => {
+        refetchNotifications();
+      }, 500);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to mark all as read');
+    }
+  };
+
+  // ── Bulk Send ─────────────────────────────────────────────────────────────
+  const handleBulkSend = async () => {
     if (selectedNotifications.length === 0) {
       message.warning('Please select at least one notification');
       return;
     }
-    setLoading(true);
-    setTimeout(() => {
-      setNotifications(notifications.map(n => 
-        selectedNotifications.includes(n.id) && n.status === 'pending'
-          ? { 
-              ...n, 
-              status: 'sent', 
-              sentAt: new Date().toISOString(),
-              providerMessageId: `SMS-${Math.random().toString(36).substring(2, 10).toUpperCase()}`
-            }
-          : n
-      ));
+
+    try {
+      const pendingIds = selectedNotifications.filter(id => {
+        const notification = notifications.find(n => n.id === id);
+        return notification?.status === 'pending' || notification?.status === 'failed';
+      });
+
+      if (pendingIds.length === 0) {
+        message.warning('Selected notifications are already sent');
+        return;
+      }
+
+      // Send each pending notification
+      for (const id of pendingIds) {
+        await resendNotification.mutateAsync(id);
+      }
+
+      message.success(`${pendingIds.length} notifications sent successfully!`);
       setSelectedNotifications([]);
-      setLoading(false);
-      message.success(`${selectedNotifications.length} notifications sent successfully!`);
-    }, 1500);
+      setTimeout(() => {
+        refetchNotifications();
+      }, 500);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to send bulk notifications');
+    }
   };
 
-  // Export function
+  // ── Export function ──────────────────────────────────────────────────────
   const handleExport = () => {
     setExportLoading(true);
     const dataToExport = filteredNotifications.map(notification => ({
       'ID': notification.id,
       'Customer': getCustomerName(notification.customerId),
-      'Phone': notification.phoneNumber,
-      'Type': notificationTypeLabels[notification.type as keyof typeof notificationTypeLabels],
+      'Phone': notification.phoneNumber || '',
+      'Type': notificationTypeLabels[notification.type as keyof typeof notificationTypeLabels] || notification.type,
       'Message': notification.messageBody,
-      'Status': notificationStatusLabels[notification.status as keyof typeof notificationStatusLabels],
+      'Status': notificationStatusLabels[notification.status as keyof typeof notificationStatusLabels] || notification.status,
       'Provider ID': notification.providerMessageId || 'N/A',
       'Sent At': notification.sentAt ? dayjs(notification.sentAt).format('YYYY-MM-DD HH:mm') : 'N/A',
       'Created': dayjs(notification.createdAt).format('YYYY-MM-DD HH:mm'),
@@ -409,7 +438,7 @@ export const NotificationsPage: React.FC = () => {
     }, 1000);
   };
 
-  // Table Columns
+  // ── Table Columns ─────────────────────────────────────────────────────────
   const columns = [
     {
       title: (
@@ -427,7 +456,7 @@ export const NotificationsPage: React.FC = () => {
       ),
       key: 'select',
       width: 50,
-      render: (_: any, record: any) => (
+      render: (_: any, record: Notification) => (
         <Checkbox
           checked={selectedNotifications.includes(record.id)}
           onChange={(e) => {
@@ -441,17 +470,30 @@ export const NotificationsPage: React.FC = () => {
       ),
     },
     {
+      title: 'Status',
+      key: 'status',
+      width: 80,
+      render: (_: any, record: Notification) => {
+        const isUnread = record.status === 'pending' || record.status === 'unread';
+        return isUnread ? (
+          <Badge dot status="processing" text={<Text type="secondary">Unread</Text>} />
+        ) : (
+          <CheckCircleTwoTone twoToneColor="#52c41a" />
+        );
+      },
+    },
+    {
       title: 'Customer',
       key: 'customer',
       width: 180,
-      render: (_: any, record: any) => (
+      render: (_: any, record: Notification) => (
         <Space>
           <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
           <div>
             <Text strong>{getCustomerName(record.customerId)}</Text>
             <br />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              <PhoneOutlined /> {record.phoneNumber}
+              <PhoneOutlined /> {record.phoneNumber || 'N/A'}
             </Text>
           </div>
         </Space>
@@ -463,12 +505,14 @@ export const NotificationsPage: React.FC = () => {
       key: 'type',
       width: 140,
       render: (type: string) => {
-        const config = {
+        const config: Record<string, { color: string; icon: any; label: string }> = {
           contribution_due_soon: { color: 'blue', icon: <BellOutlined />, label: 'Due Soon' },
           contribution_overdue: { color: 'red', icon: <WarningOutlined />, label: 'Overdue' },
+          payment_confirmation: { color: 'green', icon: <CheckCircleOutlined />, label: 'Payment Confirmed' },
+          general: { color: 'default', icon: <NotificationOutlined />, label: 'General' },
         };
-        const { color, icon, label } = config[type as keyof typeof config] || config.contribution_due_soon;
-        return <Tag color={color} icon={icon}>{label}</Tag>;
+        const configs = config[type] || config.general;
+        return <Tag color={configs.color} icon={configs.icon}>{configs.label}</Tag>;
       },
     },
     {
@@ -479,7 +523,7 @@ export const NotificationsPage: React.FC = () => {
       ellipsis: true,
       render: (text: string) => (
         <Tooltip title={text}>
-          <Text>{text.length > 100 ? `${text.substring(0, 100)}...` : text}</Text>
+          <Text>{text?.length > 100 ? `${text.substring(0, 100)}...` : text || 'No message'}</Text>
         </Tooltip>
       ),
     },
@@ -489,26 +533,30 @@ export const NotificationsPage: React.FC = () => {
       key: 'status',
       width: 140,
       render: (status: string) => {
-        const config = {
+        const config: Record<string, { color: string; icon: any; label: string }> = {
           sent: { color: 'green', icon: <CheckCircleOutlined />, label: 'Sent' },
           pending: { color: 'blue', icon: <ClockCircleOutlined />, label: 'Pending' },
           failed: { color: 'red', icon: <CloseCircleOutlined />, label: 'Failed' },
+          unread: { color: 'blue', icon: <ClockCircleOutlined />, label: 'Unread' },
+          read: { color: 'green', icon: <CheckCircleOutlined />, label: 'Read' },
         };
-        const { color, icon, label } = config[status as keyof typeof config] || config.pending;
-        return <Tag color={color} icon={icon}>{label}</Tag>;
+        const configs = config[status] || config.pending;
+        return <Tag color={configs.color} icon={configs.icon}>{configs.label}</Tag>;
       },
       filters: [
         { text: 'Sent', value: 'sent' },
         { text: 'Pending', value: 'pending' },
         { text: 'Failed', value: 'failed' },
+        { text: 'Unread', value: 'unread' },
+        { text: 'Read', value: 'read' },
       ],
-      onFilter: (value: any, record: any) => record.status === value,
+      onFilter: (value: any, record: Notification) => record.status === value,
     },
     {
       title: 'Sent At',
       key: 'sentAt',
       width: 160,
-      render: (_: any, record: any) => {
+      render: (_: any, record: Notification) => {
         if (!record.sentAt) {
           return <Tag color="blue">Pending</Tag>;
         }
@@ -524,25 +572,18 @@ export const NotificationsPage: React.FC = () => {
           </Tooltip>
         );
       },
-      sorter: (a: any, b: any) => {
+      sorter: (a: Notification, b: Notification) => {
         if (!a.sentAt) return 1;
         if (!b.sentAt) return -1;
         return dayjs(a.sentAt).unix() - dayjs(b.sentAt).unix();
       },
     },
     {
-      title: 'Provider ID',
-      dataIndex: 'providerMessageId',
-      key: 'providerMessageId',
-      width: 120,
-      render: (id: string) => id || <Tag color="default">N/A</Tag>,
-    },
-    {
       title: 'Actions',
       key: 'actions',
-      width: 180,
+      width: 220,
       fixed: 'right' as const,
-      render: (_: any, record: any) => (
+      render: (_: any, record: Notification) => (
         <Space>
           <Tooltip title="View Details">
             <Button 
@@ -555,12 +596,21 @@ export const NotificationsPage: React.FC = () => {
               }}
             />
           </Tooltip>
-          {record.status !== 'sent' && (
+          {(record.status === 'pending' || record.status === 'unread') && (
+            <Tooltip title="Mark as Read">
+              <Button 
+                icon={<ReadOutlined />} 
+                onClick={() => handleMarkAsRead(record.id)}
+                loading={markAsRead.isPending}
+              />
+            </Tooltip>
+          )}
+          {(record.status === 'pending' || record.status === 'failed') && (
             <Tooltip title="Resend">
               <Button 
                 icon={<SendOutlined />} 
                 onClick={() => handleResendNotification(record.id)}
-                loading={loading}
+                loading={resendNotification.isPending}
               />
             </Tooltip>
           )}
@@ -580,12 +630,41 @@ export const NotificationsPage: React.FC = () => {
     },
   ];
 
-  // Render Drawer Content
+  // ── Loading state ─────────────────────────────────────────────────────────
+  if (notificationsLoading || customersLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+        <Spin size="large" tip="Loading notifications..." />
+      </div>
+    );
+  }
+
+  // ── Error state ───────────────────────────────────────────────────────────
+  if (notificationsError) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Alert
+          message="Error Loading Notifications"
+          description="There was an error loading the notifications. Please try again."
+          type="error"
+          showIcon
+          action={
+            <Button size="small" type="primary" onClick={() => refetchNotifications()}>
+              Retry
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  // ── Render Drawer Content ─────────────────────────────────────────────────
   const renderDrawerContent = () => {
     if (!selectedNotification) return null;
 
     const customerName = getCustomerName(selectedNotification.customerId);
     const customerPhone = getCustomerPhone(selectedNotification.customerId);
+    const isUnread = selectedNotification.status === 'pending' || selectedNotification.status === 'unread';
 
     return (
       <div style={{ height: '100%' }}>
@@ -623,10 +702,10 @@ export const NotificationsPage: React.FC = () => {
 
         {/* Status Banner */}
         <div style={{
-          background: selectedNotification.status === 'sent' ? '#f6ffed' : 
-                     selectedNotification.status === 'pending' ? '#e6f7ff' : '#fff2e8',
-          border: `1px solid ${selectedNotification.status === 'sent' ? '#b7eb8f' : 
-                               selectedNotification.status === 'pending' ? '#91d5ff' : '#ffccc7'}`,
+          background: selectedNotification.status === 'sent' || selectedNotification.status === 'read' ? '#f6ffed' : 
+                     selectedNotification.status === 'pending' || selectedNotification.status === 'unread' ? '#e6f7ff' : '#fff2e8',
+          border: `1px solid ${selectedNotification.status === 'sent' || selectedNotification.status === 'read' ? '#b7eb8f' : 
+                               selectedNotification.status === 'pending' || selectedNotification.status === 'unread' ? '#91d5ff' : '#ffccc7'}`,
           borderRadius: 8,
           padding: '12px 16px',
           marginBottom: 24,
@@ -635,16 +714,16 @@ export const NotificationsPage: React.FC = () => {
           justifyContent: 'space-between'
         }}>
           <Space>
-            {selectedNotification.status === 'sent' && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
-            {selectedNotification.status === 'pending' && <ClockCircleOutlined style={{ color: '#1890ff' }} />}
+            {(selectedNotification.status === 'sent' || selectedNotification.status === 'read') && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
+            {(selectedNotification.status === 'pending' || selectedNotification.status === 'unread') && <ClockCircleOutlined style={{ color: '#1890ff' }} />}
             {selectedNotification.status === 'failed' && <CloseCircleOutlined style={{ color: '#ff4d4f' }} />}
             <Text strong>
-              Status: {notificationStatusLabels[selectedNotification.status as keyof typeof notificationStatusLabels]}
+              Status: {notificationStatusLabels[selectedNotification.status as keyof typeof notificationStatusLabels] || selectedNotification.status}
             </Text>
           </Space>
           <Badge 
-            status={selectedNotification.status === 'sent' ? 'success' : 
-                   selectedNotification.status === 'pending' ? 'processing' : 'error'} 
+            status={selectedNotification.status === 'sent' || selectedNotification.status === 'read' ? 'success' : 
+                   selectedNotification.status === 'pending' || selectedNotification.status === 'unread' ? 'processing' : 'error'} 
             text={selectedNotification.status.toUpperCase()}
           />
         </div>
@@ -652,12 +731,25 @@ export const NotificationsPage: React.FC = () => {
         {/* Quick Actions */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
-            {selectedNotification.status !== 'sent' && (
+            {isUnread && (
+              <Button 
+                type="primary" 
+                icon={<ReadOutlined />}
+                onClick={() => {
+                  handleMarkAsRead(selectedNotification.id);
+                  setViewDrawerOpen(false);
+                }}
+                loading={markAsRead.isPending}
+              >
+                Mark as Read
+              </Button>
+            )}
+            {(selectedNotification.status === 'pending' || selectedNotification.status === 'failed') && (
               <Button 
                 type="primary" 
                 icon={<SendOutlined />}
                 onClick={() => handleResendNotification(selectedNotification.id)}
-                loading={loading}
+                loading={resendNotification.isPending}
               >
                 Resend Notification
               </Button>
@@ -692,8 +784,9 @@ export const NotificationsPage: React.FC = () => {
             <Card size="small" title="Notification Details" bordered={false} style={{ background: '#fafafa' }}>
               <Descriptions column={1} size="small">
                 <Descriptions.Item label={<Space><BellOutlined /> Type</Space>}>
-                  <Tag color={selectedNotification.type === 'contribution_due_soon' ? 'blue' : 'red'}>
-                    {notificationTypeLabels[selectedNotification.type as keyof typeof notificationTypeLabels]}
+                  <Tag color={selectedNotification.type === 'contribution_due_soon' ? 'blue' : 
+                           selectedNotification.type === 'contribution_overdue' ? 'red' : 'default'}>
+                    {notificationTypeLabels[selectedNotification.type as keyof typeof notificationTypeLabels] || selectedNotification.type}
                   </Tag>
                 </Descriptions.Item>
                 <Descriptions.Item label={<Space><MessageOutlined /> Message</Space>}>
@@ -729,6 +822,11 @@ export const NotificationsPage: React.FC = () => {
                 <Descriptions.Item label={<Space><ClockCircleOutlined /> Created</Space>}>
                   {dayjs(selectedNotification.createdAt).format('MMMM DD, YYYY HH:mm')}
                 </Descriptions.Item>
+                {selectedNotification.readAt && (
+                  <Descriptions.Item label={<Space><ReadOutlined /> Read At</Space>}>
+                    {dayjs(selectedNotification.readAt).format('MMMM DD, YYYY HH:mm')}
+                  </Descriptions.Item>
+                )}
               </Descriptions>
             </Card>
           </Col>
@@ -746,16 +844,31 @@ export const NotificationsPage: React.FC = () => {
             <Button icon={<PrinterOutlined />}>Print</Button>
             <Button icon={<ShareAltOutlined />}>Share</Button>
           </Space>
-          {selectedNotification.status !== 'sent' && (
-            <Button 
-              type="primary" 
-              icon={<SendOutlined />}
-              onClick={() => handleResendNotification(selectedNotification.id)}
-              loading={loading}
-            >
-              Resend
-            </Button>
-          )}
+          <Space>
+            {isUnread && (
+              <Button 
+                type="primary" 
+                icon={<ReadOutlined />}
+                onClick={() => {
+                  handleMarkAsRead(selectedNotification.id);
+                  setViewDrawerOpen(false);
+                }}
+                loading={markAsRead.isPending}
+              >
+                Mark as Read
+              </Button>
+            )}
+            {(selectedNotification.status === 'pending' || selectedNotification.status === 'failed') && (
+              <Button 
+                type="primary" 
+                icon={<SendOutlined />}
+                onClick={() => handleResendNotification(selectedNotification.id)}
+                loading={resendNotification.isPending}
+              >
+                Resend
+              </Button>
+            )}
+          </Space>
         </div>
       </div>
     );
@@ -772,19 +885,27 @@ export const NotificationsPage: React.FC = () => {
             icon: <SendOutlined />,
           },
           {
+            label: 'Send Test SMS',
+            onClick: () => {
+              setSendModal(true);
+              sendForm.setFieldsValue({ isTest: true });
+            },
+            icon: <PhoneOutlined />,
+          },
+          {
+            label: 'Mark All as Read',
+            onClick: handleMarkAllAsRead,
+            icon: <ReadOutlined />,
+            disabled: stats.unread === 0,
+          },
+          {
             label: 'Export',
             onClick: () => setExportModal(true),
             icon: <ExportOutlined />,
           },
           {
             label: 'Refresh',
-            onClick: () => {
-              setLoading(true);
-              setTimeout(() => {
-                setLoading(false);
-                message.success('Refreshed!');
-              }, 500);
-            },
+            onClick: () => refetchNotifications(),
             icon: <ReloadOutlined />,
           },
         ]}
@@ -805,6 +926,16 @@ export const NotificationsPage: React.FC = () => {
         <Col xs={24} sm={12} md={4}>
           <Card size="small">
             <Statistic
+              title="Unread"
+              value={stats.unread}
+              prefix={<BellOutlined />}
+              valueStyle={{ color: '#1890ff' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={4}>
+          <Card size="small">
+            <Statistic
               title="Sent"
               value={stats.sent}
               prefix={<CheckCircleOutlined />}
@@ -818,7 +949,7 @@ export const NotificationsPage: React.FC = () => {
               title="Pending"
               value={stats.pending}
               prefix={<ClockCircleOutlined />}
-              valueStyle={{ color: '#1890ff' }}
+              valueStyle={{ color: '#faad14' }}
             />
           </Card>
         </Col>
@@ -839,16 +970,6 @@ export const NotificationsPage: React.FC = () => {
               value={stats.dueSoon}
               prefix={<BellOutlined />}
               valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Overdue"
-              value={stats.overdue}
-              prefix={<WarningOutlined />}
-              valueStyle={{ color: '#ff4d4f' }}
             />
           </Card>
         </Col>
@@ -879,6 +1000,8 @@ export const NotificationsPage: React.FC = () => {
               <Option value="all">All Types</Option>
               <Option value="contribution_due_soon">Due Soon</Option>
               <Option value="contribution_overdue">Overdue</Option>
+              <Option value="payment_confirmation">Payment Confirmed</Option>
+              <Option value="general">General</Option>
             </Select>
           </Col>
           <Col xs={12} md={4}>
@@ -894,6 +1017,8 @@ export const NotificationsPage: React.FC = () => {
               <Option value="sent">Sent</Option>
               <Option value="pending">Pending</Option>
               <Option value="failed">Failed</Option>
+              <Option value="unread">Unread</Option>
+              <Option value="read">Read</Option>
             </Select>
           </Col>
           <Col xs={24} md={10}>
@@ -903,9 +1028,17 @@ export const NotificationsPage: React.FC = () => {
                 icon={<SendOutlined />}
                 onClick={handleBulkSend}
                 disabled={selectedNotifications.length === 0}
-                loading={loading}
+                loading={sendNotification.isPending}
               >
                 Send Selected ({selectedNotifications.length})
+              </Button>
+              <Button 
+                icon={<ReadOutlined />}
+                onClick={handleMarkAllAsRead}
+                disabled={stats.unread === 0}
+                loading={markAllAsRead.isPending}
+              >
+                Mark All as Read
               </Button>
               <Button 
                 icon={<ReloadOutlined />}
@@ -928,7 +1061,7 @@ export const NotificationsPage: React.FC = () => {
           columns={columns}
           dataSource={filteredNotifications}
           rowKey="id"
-          loading={loading}
+          loading={notificationsLoading}
           size="middle"
           scroll={{ x: 1400 }}
           pagination={{
@@ -945,13 +1078,16 @@ export const NotificationsPage: React.FC = () => {
         title={
           <Space>
             <SendOutlined style={{ color: tokens.primary }} />
-            <Text strong>Send SMS Notification</Text>
+            <Text strong>
+              {sendForm.getFieldValue('isTest') ? 'Send Test SMS' : 'Send SMS Notification'}
+            </Text>
           </Space>
         }
         open={sendModal}
         onCancel={() => {
           setSendModal(false);
           sendForm.resetFields();
+          setTestSMSSent(false);
         }}
         footer={null}
         width={600}
@@ -959,9 +1095,11 @@ export const NotificationsPage: React.FC = () => {
         bodyStyle={{ padding: '16px', maxHeight: '70vh', overflowY: 'auto' }}
       >
         <Alert
-          message="SMS Notification"
-          description="Send an SMS notification to a customer about their payment status."
-          type="info"
+          message={sendForm.getFieldValue('isTest') ? "Send Test SMS" : "SMS Notification"}
+          description={sendForm.getFieldValue('isTest') 
+            ? "Send a test SMS to verify your phone number and message formatting. No customer will be notified." 
+            : "Send an SMS notification to a customer about their payment status."}
+          type={sendForm.getFieldValue('isTest') ? "warning" : "info"}
           showIcon
           style={{ marginBottom: 24 }}
         />
@@ -970,20 +1108,63 @@ export const NotificationsPage: React.FC = () => {
           form={sendForm}
           layout="vertical"
           onFinish={handleSendNotification}
-          initialValues={{ type: 'contribution_due_soon' }}
+          initialValues={{ type: 'contribution_due_soon', isTest: false }}
         >
           <Form.Item
-            name="customerId"
-            label="Customer"
-            rules={[{ required: true, message: 'Please select a customer' }]}
+            name="isTest"
+            label="Mode"
           >
-            <Select placeholder="Select customer" showSearch>
-              {Object.entries(mockCustomers).map(([id, data]) => (
-                <Option key={id} value={id}>
-                  {data.name} - {data.phone}
-                </Option>
-              ))}
+            <Select 
+              onChange={(value) => {
+                setTestSMSSent(false);
+                sendForm.setFieldsValue({ 
+                  customerId: undefined,
+                  testPhoneNumber: undefined,
+                });
+              }}
+            >
+              <Option value={false}>Send to Customer</Option>
+              <Option value={true}>Send Test SMS</Option>
             </Select>
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.isTest !== curr.isTest}>
+            {({ getFieldValue }) => {
+              const isTest = getFieldValue('isTest');
+              
+              if (isTest) {
+                return (
+                  <Form.Item
+                    name="testPhoneNumber"
+                    label="Test Phone Number"
+                    rules={[{ required: true, message: 'Please enter a phone number' }]}
+                    extra="Enter a valid phone number to receive the test SMS"
+                  >
+                    <PhoneInput placeholder="Enter test phone number" />
+                  </Form.Item>
+                );
+              }
+
+              return (
+                <Form.Item
+                  name="customerId"
+                  label="Select Customer"
+                  rules={[{ required: true, message: 'Please select a customer' }]}
+                >
+                  <Select 
+                    placeholder="Select customer" 
+                    showSearch
+                    optionFilterProp="children"
+                  >
+                    {customers.map(customer => (
+                      <Option key={customer.id} value={customer.id}>
+                        {customer.firstName} {customer.lastName} - {customer.phoneNumber}
+                      </Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              );
+            }}
           </Form.Item>
 
           <Form.Item
@@ -994,6 +1175,8 @@ export const NotificationsPage: React.FC = () => {
             <Select>
               <Option value="contribution_due_soon">Due Soon</Option>
               <Option value="contribution_overdue">Overdue</Option>
+              <Option value="payment_confirmation">Payment Confirmed</Option>
+              <Option value="general">General</Option>
             </Select>
           </Form.Item>
 
@@ -1013,45 +1196,76 @@ export const NotificationsPage: React.FC = () => {
             />
           </Form.Item>
 
-          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.customerId !== curr.customerId || prev.type !== curr.type}>
+          <Form.Item noStyle shouldUpdate={(prev, curr) => 
+            prev.customerId !== curr.customerId || 
+            prev.isTest !== curr.isTest ||
+            prev.type !== curr.type ||
+            prev.messageBody !== curr.messageBody ||
+            prev.testPhoneNumber !== curr.testPhoneNumber
+          }>
             {({ getFieldValue }) => {
+              const isTest = getFieldValue('isTest');
               const customerId = getFieldValue('customerId');
-              const type = getFieldValue('type');
-              if (!customerId) return null;
+              const testPhoneNumber = getFieldValue('testPhoneNumber');
+              const messageBody = getFieldValue('messageBody');
+              
+              // For test mode, require phone number
+              if (isTest && !testPhoneNumber) return null;
+              
+              // For customer mode, require customer
+              if (!isTest && !customerId) return null;
 
-              const customer = mockCustomers[customerId];
-              const plan = mockPaymentPlans[customerId];
+              const customer = customerMap[customerId];
+              const phoneNumber = isTest ? testPhoneNumber : customer?.phoneNumber;
+              const customerName = isTest ? 'Test Number' : (customer ? `${customer.firstName} ${customer.lastName}` : 'Unknown');
               
               return (
                 <div style={{ 
-                  background: '#f5f7fa', 
-                  padding: 12, 
+                  background: isTest ? '#fff7e6' : '#f5f7fa', 
+                  padding: 16, 
                   borderRadius: 8,
                   marginBottom: 16,
-                  border: '1px solid #e8e8e8'
+                  border: `1px solid ${isTest ? '#ffd591' : '#e8e8e8'}`
                 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
                     <Text strong>Message Preview</Text>
-                    <Tag color="blue">Auto-generated</Tag>
+                    <Tag color={isTest ? 'orange' : 'blue'}>
+                      {isTest ? '🔬 Test Mode' : '📤 Live'}
+                    </Tag>
                   </div>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    <UserOutlined /> {customer.name}
-                  </Text>
-                  <br />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    <PhoneOutlined /> {customer.phone}
-                  </Text>
-                  {plan && (
-                    <>
+                  <div style={{ 
+                    background: '#fff', 
+                    padding: 12, 
+                    borderRadius: 6,
+                    border: '1px solid #e8e8e8'
+                  }}>
+                    <div style={{ marginBottom: 8 }}>
+                      <Space>
+                        <UserOutlined />
+                        <Text>{customerName}</Text>
+                      </Space>
                       <br />
+                      <Space>
+                        <PhoneOutlined />
+                        <Text>{phoneNumber || 'N/A'}</Text>
+                      </Space>
+                    </div>
+                    <Divider style={{ margin: '8px 0' }} />
+                    <Text>{messageBody || 'Message will appear here...'}</Text>
+                  </div>
+                  {!isTest && customer && (
+                    <div style={{ marginTop: 12 }}>
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        <DollarOutlined /> Monthly Amount: GHS {(plan.amount / 100).toLocaleString()}
+                        <InfoCircleOutlined /> This message will be sent to {customer.firstName} {customer.lastName}
                       </Text>
-                      <br />
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        <CalendarOutlined /> Due Date: {dayjs(plan.dueDate).format('MMMM DD, YYYY')}
+                    </div>
+                  )}
+                  {isTest && (
+                    <div style={{ marginTop: 12 }}>
+                      <Text type="secondary" style={{ fontSize: 12, color: '#faad14' }}>
+                        <WarningOutlined /> This is a test SMS. No customer will be notified.
                       </Text>
-                    </>
+                    </div>
                   )}
                 </div>
               );
@@ -1059,18 +1273,35 @@ export const NotificationsPage: React.FC = () => {
           </Form.Item>
 
           <Form.Item>
-            <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
-                <SendOutlined /> Send Notification
+            <Space>
+              <Button 
+                type="primary" 
+                htmlType="submit" 
+                loading={sendNotification.isPending || sendTestSMS.isPending}
+                icon={<SendOutlined />}
+              >
+                {sendForm.getFieldValue('isTest') ? 'Send Test SMS' : 'Send Notification'}
               </Button>
               <Button onClick={() => {
                 setSendModal(false);
                 sendForm.resetFields();
+                setTestSMSSent(false);
               }}>
                 Cancel
               </Button>
             </Space>
           </Form.Item>
+
+          {testSMSSent && (
+            <Alert
+              message="Test SMS Sent Successfully!"
+              description="The test SMS has been sent to the provided phone number. Check your device for the message."
+              type="success"
+              showIcon
+              closable
+              style={{ marginTop: 16 }}
+            />
+          )}
         </Form>
       </Modal>
 

@@ -1,6 +1,6 @@
 // src/pages/dashboard/admin/components/EditUserDrawer.tsx
 import React, { useEffect } from 'react';
-import { Drawer, Form, Input, Select, Space, Button, Typography } from 'antd';
+import { Drawer, Form, Input, Select, Space, Button, Typography, message } from 'antd';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import type { User } from '../types';
 
@@ -26,19 +26,81 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
 
   useEffect(() => {
     if (user && open) {
-      form.setFieldsValue({
-        name: user.name,
-        email: user.email,
-        phone: user.phone,
-        role: user.role,
-        status: user.status,
-        department: user.department,
-      });
+      // Map user data to form fields
+      const formValues = {
+        firstName: user.firstName || '',
+        lastName: user.lastName || '',
+        name: user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim(),
+        email: user.email || '',
+        phone: user.phone || '',
+        phoneNumber: user.phone || '',
+        role: user.role || '',
+        status: user.status || 'active',
+        department: user.department || '',
+        isActive: user.status === 'active',
+      };
+      
+      console.log('📝 Setting form values:', formValues);
+      form.setFieldsValue(formValues);
     }
   }, [user, open, form]);
 
   const handleSubmit = (values: any) => {
-    onEdit(values);
+    console.log('📤 Edit form submitted:', values);
+    
+    // Build the payload with proper field mapping
+    const payload: any = {};
+    
+    // Handle name
+    if (values.name) {
+      const nameParts = values.name.trim().split(' ');
+      payload.firstName = nameParts[0] || '';
+      payload.lastName = nameParts.slice(1).join(' ') || '';
+    } else {
+      // Use individual fields if name is not provided
+      if (values.firstName) payload.firstName = values.firstName;
+      if (values.lastName) payload.lastName = values.lastName;
+    }
+    
+    // Email
+    if (values.email) payload.email = values.email;
+    
+    // Phone - handle both field names
+    if (values.phoneNumber) payload.phoneNumber = values.phoneNumber;
+    else if (values.phone) payload.phoneNumber = values.phone;
+    
+    // Role
+    if (values.role) payload.role = values.role;
+    
+    // Department
+    if (values.department) payload.department = values.department;
+    
+    // Status - convert to isActive boolean
+    if (values.status) {
+      payload.isActive = values.status === 'active';
+    } else if (values.isActive !== undefined) {
+      payload.isActive = values.isActive;
+    }
+
+    console.log('📤 Sending payload:', payload);
+    
+    // Validate required fields
+    if (!payload.firstName || !payload.lastName) {
+      message.error('Full name is required');
+      return;
+    }
+    
+    if (!payload.email) {
+      message.error('Email is required');
+      return;
+    }
+    
+    onEdit(payload);
+  };
+
+  const handleClose = () => {
+    form.resetFields();
+    onClose();
   };
 
   return (
@@ -48,26 +110,30 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
           <Text strong>Edit User</Text>
           <br />
           <Text type="secondary" style={{ fontSize: 12 }}>
-            {user?.email}
+            {user?.email || 'User Details'}
           </Text>
         </div>
       }
       open={open}
-      onClose={onClose}
+      onClose={handleClose}
       width={500}
+      destroyOnClose
     >
       {user && (
         <Form
           form={form}
           layout="vertical"
           onFinish={handleSubmit}
+          initialValues={{
+            status: 'active',
+          }}
         >
           <Form.Item
             name="name"
             label="Full Name"
-            rules={[{ required: true, message: 'Please enter name' }]}
+            rules={[{ required: true, message: 'Please enter full name' }]}
           >
-            <Input />
+            <Input placeholder="Enter full name" />
           </Form.Item>
 
           <Form.Item
@@ -78,14 +144,15 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
               { type: 'email', message: 'Please enter a valid email' }
             ]}
           >
-            <Input />
+            <Input placeholder="Enter email address" />
           </Form.Item>
 
           <Form.Item
             name="phone"
-            label="Phone"
+            label="Phone Number"
+            rules={[{ required: true, message: 'Please enter phone number' }]}
           >
-            <PhoneInput />
+            <PhoneInput placeholder="Enter phone number" />
           </Form.Item>
 
           <Form.Item
@@ -93,10 +160,10 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
             label="Role"
             rules={[{ required: true, message: 'Please select a role' }]}
           >
-            <Select>
+            <Select placeholder="Select role">
               <Option value="admin">Administrator</Option>
-              <Option value="marketing_staff">Marketing Staff</Option>
               <Option value="marketing_director">Marketing Director</Option>
+              <Option value="marketing_staff">Marketing Staff</Option>
               <Option value="customer_service">Customer Service</Option>
               <Option value="secretary">Secretary</Option>
               <Option value="accounts">Accounts</Option>
@@ -107,14 +174,15 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
             name="department"
             label="Department"
           >
-            <Input />
+            <Input placeholder="Enter department" />
           </Form.Item>
 
           <Form.Item
             name="status"
             label="Status"
+            rules={[{ required: true, message: 'Please select a status' }]}
           >
-            <Select>
+            <Select placeholder="Select status">
               <Option value="active">Active</Option>
               <Option value="inactive">Inactive</Option>
               <Option value="suspended">Suspended</Option>
@@ -126,7 +194,7 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
               <Button type="primary" htmlType="submit" loading={loading}>
                 Update User
               </Button>
-              <Button onClick={onClose}>
+              <Button onClick={handleClose}>
                 Cancel
               </Button>
             </Space>

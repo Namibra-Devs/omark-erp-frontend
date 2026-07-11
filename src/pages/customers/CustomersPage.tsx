@@ -1,14 +1,21 @@
 // src/pages/customers/CustomersPage.tsx
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCustomers, useDeleteCustomer, useUpdateCustomer } from '@/api/customers';
+import {
+  useCustomersQuery,
+  useDeleteCustomerMutation,
+  useCreateCustomerMutation,
+  useUpdateCustomerMutation,
+} from '@/api/customers';
+import { usePaymentPlansQuery, useCreatePaymentPlanMutation, useUpdatePaymentPlanMutation, useDeletePaymentPlanMutation } from '@/api/paymentPlans';
+import { usePropertiesQuery } from '@/api/properties';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
   DatePicker, Statistic, Divider, Empty, Dropdown, Popconfirm,
   Alert, Drawer, Descriptions, Timeline, Tabs, Progress,
-  Radio, Switch, InputNumber, Upload, List, Collapse
+  Radio, Switch, InputNumber, Upload, List, Collapse, Spin
 } from 'antd';
 import {
   PlusOutlined,
@@ -77,171 +84,6 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { Text, Title } = Typography;
 
-// Mock Customers Data
-const mockCustomers: Customer[] = [
-  {
-    id: 'c1',
-    prospectId: 'p1',
-    firstName: 'John',
-    lastName: 'Doe',
-    phoneNumber: '+233241234567',
-    address: '123 Main St, Accra, Ghana',
-    type: 'payment_plan',
-    propertyId: 'prop1',
-    createdAt: '2024-01-15T10:00:00Z',
-    updatedAt: '2024-01-20T14:30:00Z',
-  },
-  {
-    id: 'c2',
-    prospectId: 'p2',
-    firstName: 'Jane',
-    lastName: 'Smith',
-    phoneNumber: '+233241234568',
-    address: '456 Independence Ave, Kumasi, Ghana',
-    type: 'fully_paid',
-    propertyId: 'prop2',
-    createdAt: '2024-01-10T09:00:00Z',
-    updatedAt: '2024-01-18T16:20:00Z',
-  },
-  {
-    id: 'c3',
-    prospectId: 'p3',
-    firstName: 'Michael',
-    lastName: 'Johnson',
-    phoneNumber: '+233241234569',
-    address: '789 Liberation Rd, Tema, Ghana',
-    type: 'payment_plan',
-    propertyId: 'prop3',
-    createdAt: '2024-01-08T11:30:00Z',
-    updatedAt: '2024-01-15T08:45:00Z',
-  },
-  {
-    id: 'c4',
-    prospectId: 'p4',
-    firstName: 'Sarah',
-    lastName: 'Williams',
-    phoneNumber: '+233241234570',
-    address: '321 Castle Rd, Cape Coast, Ghana',
-    type: 'payment_plan',
-    propertyId: 'prop4',
-    createdAt: '2024-01-05T14:15:00Z',
-    updatedAt: '2024-01-12T10:00:00Z',
-  },
-  {
-    id: 'c5',
-    prospectId: 'p5',
-    firstName: 'Robert',
-    lastName: 'Brown',
-    phoneNumber: '+233241234571',
-    address: '654 Ocean Dr, Takoradi, Ghana',
-    type: 'fully_paid',
-    propertyId: 'prop5',
-    createdAt: '2024-01-03T08:00:00Z',
-    updatedAt: '2024-01-10T11:30:00Z',
-  },
-  {
-    id: 'c6',
-    prospectId: 'p6',
-    firstName: 'Emily',
-    lastName: 'Davis',
-    phoneNumber: '+233241234572',
-    address: '987 Park Ave, Accra, Ghana',
-    type: 'payment_plan',
-    propertyId: 'prop6',
-    createdAt: '2024-01-01T16:45:00Z',
-    updatedAt: '2024-01-08T09:15:00Z',
-  },
-];
-
-// Mock Payment Plans
-const mockPaymentPlans: Record<string, PaymentPlan> = {
-  'c1': {
-    id: 'pp1',
-    customerId: 'c1',
-    propertyId: 'prop1',
-    totalAmountMinor: 15000000,
-    downPaymentMinor: 3000000,
-    balanceMinor: 12000000,
-    numMonths: 12,
-    monthlyAmountMinor: 1000000,
-    currency: 'GHS',
-    startDate: '2024-01-15',
-    status: 'active',
-    progressPercent: 25,
-    progressBand: 'red',
-    createdAt: '2024-01-15T10:00:00Z',
-    updatedAt: '2024-01-20T14:30:00Z',
-  },
-  'c3': {
-    id: 'pp3',
-    customerId: 'c3',
-    propertyId: 'prop3',
-    totalAmountMinor: 20000000,
-    downPaymentMinor: 5000000,
-    balanceMinor: 15000000,
-    numMonths: 24,
-    monthlyAmountMinor: 625000,
-    currency: 'GHS',
-    startDate: '2024-01-08',
-    status: 'active',
-    progressPercent: 15,
-    progressBand: 'red',
-    createdAt: '2024-01-08T11:30:00Z',
-    updatedAt: '2024-01-15T08:45:00Z',
-  },
-  'c4': {
-    id: 'pp4',
-    customerId: 'c4',
-    propertyId: 'prop4',
-    totalAmountMinor: 10000000,
-    downPaymentMinor: 2000000,
-    balanceMinor: 8000000,
-    numMonths: 10,
-    monthlyAmountMinor: 800000,
-    currency: 'GHS',
-    startDate: '2024-01-05',
-    status: 'active',
-    progressPercent: 60,
-    progressBand: 'yellow',
-    createdAt: '2024-01-05T14:15:00Z',
-    updatedAt: '2024-01-12T10:00:00Z',
-  },
-  'c6': {
-    id: 'pp6',
-    customerId: 'c6',
-    propertyId: 'prop6',
-    totalAmountMinor: 12000000,
-    downPaymentMinor: 2400000,
-    balanceMinor: 9600000,
-    numMonths: 18,
-    monthlyAmountMinor: 533333,
-    currency: 'GHS',
-    startDate: '2024-01-01',
-    status: 'defaulted',
-    progressPercent: 30,
-    progressBand: 'red',
-    createdAt: '2024-01-01T16:45:00Z',
-    updatedAt: '2024-01-08T09:15:00Z',
-  },
-};
-
-// Mock Properties
-const mockProperties: Record<string, { houseNumber: string; offerNumber: string; priceMinor: number }> = {
-  'prop1': { houseNumber: 'H-102', offerNumber: 'OF-2024-001', priceMinor: 15000000 },
-  'prop2': { houseNumber: 'H-205', offerNumber: 'OF-2024-002', priceMinor: 18000000 },
-  'prop3': { houseNumber: 'H-301', offerNumber: 'OF-2024-003', priceMinor: 20000000 },
-  'prop4': { houseNumber: 'H-108', offerNumber: 'OF-2024-004', priceMinor: 10000000 },
-  'prop5': { houseNumber: 'H-412', offerNumber: 'OF-2024-005', priceMinor: 25000000 },
-  'prop6': { houseNumber: 'H-203', offerNumber: 'OF-2024-006', priceMinor: 12000000 },
-};
-
-// Mock Prospects for dropdown
-const mockProspects = [
-  { id: 'p1', name: 'John Doe (Prospect)', phone: '+233241234567' },
-  { id: 'p2', name: 'Jane Smith (Prospect)', phone: '+233241234568' },
-  { id: 'p3', name: 'Michael Johnson (Prospect)', phone: '+233241234569' },
-];
-
 // Helper function to calculate progress band
 const getProgressBand = (percent: number): ProgressBand => {
   if (percent >= 90) return 'green';
@@ -263,21 +105,92 @@ export const CustomersPage: React.FC = () => {
   const PAGE_SIZE = 20;
 
   // ── Live API data ─────────────────────────────────────────────────────────
-  const { data: customersResponse, isLoading: customersLoading, refetch } = useCustomers({
+  const { 
+    data: customersResponse, 
+    isLoading: customersLoading, 
+    refetch: refetchCustomers,
+    error: customersError
+  } = useCustomersQuery({
     type: (typeFilter !== 'all' ? typeFilter : undefined) as any,
     q: searchText || undefined,
     page,
-    pageSize: PAGE_SIZE,
+    limit: PAGE_SIZE,
   });
 
-  const customers: Customer[] = (customersResponse as any)?.data ?? [];
-  const customersMeta = (customersResponse as any)?.meta;
+  const { data: paymentPlansResponse, isLoading: paymentPlansLoading, refetch: refetchPaymentPlans } = usePaymentPlansQuery({
+    limit: 100,
+  });
 
-  const deleteCustomerMutation = useDeleteCustomer();
+  const { data: propertiesResponse, isLoading: propertiesLoading } = usePropertiesQuery({
+    limit: 100,
+  });
 
-  // Keep UI states for modals/drawers
+  // API Mutations
+  const createCustomer = useCreateCustomerMutation();
+  const updateCustomer = useUpdateCustomerMutation();
+  const deleteCustomer = useDeleteCustomerMutation();
+  const createPaymentPlan = useCreatePaymentPlanMutation();
+  const updatePaymentPlan = useUpdatePaymentPlanMutation();
+  const deletePaymentPlan = useDeletePaymentPlanMutation();
+
+  // Extract data from responses with proper fallbacks
+  const customers: Customer[] = React.useMemo(() => {
+    if (!customersResponse) return [];
+    // Handle both wrapped and unwrapped responses
+    const data = (customersResponse as any).data ?? customersResponse;
+    if (Array.isArray(data)) return data;
+    if (data?.items) return data.items;
+    return [];
+  }, [customersResponse]);
+
+  const customersMeta = React.useMemo(() => {
+    if (!customersResponse) return { total: 0 };
+    const data = (customersResponse as any).data ?? customersResponse;
+    return {
+      total: data?.total ?? data?.length ?? 0,
+    };
+  }, [customersResponse]);
+
+  const paymentPlans: PaymentPlan[] = React.useMemo(() => {
+    if (!paymentPlansResponse) return [];
+    const data = (paymentPlansResponse as any).data ?? paymentPlansResponse;
+    if (Array.isArray(data)) return data;
+    if (data?.items) return data.items;
+    return [];
+  }, [paymentPlansResponse]);
+
+  const properties = React.useMemo(() => {
+    if (!propertiesResponse) return [];
+    const data = (propertiesResponse as any).data ?? propertiesResponse;
+    if (Array.isArray(data)) return data;
+    if (data?.items) return data.items;
+    return [];
+  }, [propertiesResponse]);
+
+  // Log data for debugging
+  useEffect(() => {
+    console.log('📊 Customers Response:', customersResponse);
+    console.log('📊 Extracted Customers:', customers);
+    console.log('📊 Customers Meta:', customersMeta);
+  }, [customersResponse, customers, customersMeta]);
+
+  // Create maps for quick lookups
+  const paymentPlanMap = React.useMemo(() => {
+    return paymentPlans.reduce((acc, plan) => {
+      acc[plan.customerId] = plan;
+      return acc;
+    }, {} as Record<string, PaymentPlan>);
+  }, [paymentPlans]);
+
+  const propertyMap = React.useMemo(() => {
+    return properties.reduce((acc, prop) => {
+      acc[prop.id] = prop;
+      return acc;
+    }, {} as Record<string, any>);
+  }, [properties]);
+
+  // UI States
   const [loading, setLoading] = useState(false);
-  const [paymentPlans] = useState<Record<string, PaymentPlan>>(mockPaymentPlans); // local cache for plan display
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [editModal, setEditModal] = useState(false);
@@ -308,7 +221,6 @@ export const CustomersPage: React.FC = () => {
       numMonths = Math.ceil(balanceMinor / monthlyAmountMinor);
     }
 
-    // Calculate progress based on down payment
     const paidSoFar = downPaymentMinor;
     const progressPercent = Math.round((paidSoFar / totalAmountMinor) * 100);
     const progressBand = getProgressBand(progressPercent);
@@ -335,35 +247,210 @@ export const CustomersPage: React.FC = () => {
 
   // Get payment plan for customer
   const getPaymentPlan = (customerId: string): PaymentPlan | null => {
-    return paymentPlans[customerId] || null;
+    return paymentPlanMap[customerId] || null;
   };
 
   // Get property details
   const getPropertyDetails = (propertyId: string) => {
-    return mockProperties[propertyId] || null;
+    return propertyMap[propertyId] || null;
   };
 
-  // Add Customer — navigates to prospects convert flow or shows info message
-  const handleAddCustomer = (values: any) => {
-    // Customer creation goes through the prospect-convert flow on the backend.
-    // If a prospect ID is provided we can trigger the conversion.
-    message.info('To add a customer, please convert a prospect from the Prospects page.');
+
+
+// ── Add Customer ──────────────────────────────────────────────────────────
+const handleAddCustomer = async (values: any) => {
+  try {
+    setLoading(true);
+    
+    // Base customer data
+    const customerData: any = {
+      firstName: values.firstName,
+      lastName: values.lastName,
+      phoneNumber: values.phoneNumber,
+      address: values.address,
+      type: values.type,
+      propertyId: values.propertyId,
+    };
+
+    // Add optional fields
+    if (values.email) {
+      customerData.email = values.email;
+    }
+    if (values.prospectId) {
+      customerData.prospectId = values.prospectId;
+    }
+    if (values.notes) {
+      customerData.notes = values.notes;
+    }
+
+    // If payment plan, add createPlan object
+    if (values.type === 'payment_plan' && values.totalAmount > 0) {
+      const planData = calculatePaymentPlan(values);
+      
+      // Determine plan basis
+      let planBasis: 'months' | 'monthly_amount' = 'months';
+      if (values.paymentBasis === 'monthly') {
+        planBasis = 'monthly_amount';
+      }
+
+      customerData.createPlan = {
+        totalAmountMinor: planData.totalAmountMinor,
+        downPaymentMinor: planData.downPaymentMinor,
+        planBasis: planBasis,
+        startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+      };
+
+      // Add the appropriate field based on plan basis
+      if (planBasis === 'months') {
+        customerData.createPlan.numMonths = planData.numMonths;
+      } else {
+        customerData.createPlan.monthlyAmountMinor = planData.monthlyAmountMinor;
+      }
+    }
+
+    console.log('📤 Creating customer with payload:', customerData);
+
+    const newCustomer = await createCustomer.mutateAsync(customerData);
+    message.success('Customer created successfully!');
+
     setAddModal(false);
+    addForm.resetFields();
+    
+    // Refetch data with delay
+    setTimeout(() => {
+      refetchCustomers();
+      refetchPaymentPlans();
+    }, 500);
+  } catch (error: any) {
+    console.error('Error creating customer:', error);
+    const errorMsg = error?.response?.data?.message || error?.message || 'Failed to create customer';
+    message.error(errorMsg);
+  } finally {
+    setLoading(false);
+  }
+};
+
+  // ── Update Customer ──────────────────────────────────────────────────────
+  const handleUpdateCustomer = async (values: any) => {
+    if (!selectedCustomer) return;
+
+    try {
+      setLoading(true);
+
+      // Update customer
+      const customerData = {
+        firstName: values.firstName,
+        lastName: values.lastName,
+        phoneNumber: values.phoneNumber,
+        email: values.email,
+        address: values.address,
+        type: values.type,
+        propertyId: values.propertyId,
+      };
+
+      await updateCustomer.mutateAsync({
+        id: selectedCustomer.id,
+        data: customerData,
+      });
+
+      // Handle payment plan
+      if (values.type === 'fully_paid') {
+        // Remove payment plan if exists
+        const existingPlan = getPaymentPlan(selectedCustomer.id);
+        if (existingPlan) {
+          await deletePaymentPlan.mutateAsync(existingPlan.id);
+        }
+        message.success('Customer marked as Fully Paid!');
+      } else if (values.type === 'payment_plan') {
+        const existingPlan = getPaymentPlan(selectedCustomer.id);
+        const planData = calculatePaymentPlan(values);
+        const planStatus = planData.balanceMinor === 0 ? 'completed' : (values.planStatus || 'active');
+
+        if (existingPlan) {
+          // Update existing plan
+          await updatePaymentPlan.mutateAsync({
+            id: existingPlan.id,
+            data: {
+              totalAmountMinor: planData.totalAmountMinor,
+              downPaymentMinor: planData.downPaymentMinor,
+              balanceMinor: planData.balanceMinor,
+              numMonths: planData.numMonths,
+              monthlyAmountMinor: planData.monthlyAmountMinor,
+              startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : existingPlan.startDate,
+              status: planStatus,
+              progressPercent: planData.progressPercent,
+              progressBand: planData.progressBand,
+            },
+          });
+          message.success('Payment plan updated successfully!');
+        } else {
+          // Create new plan
+          await createPaymentPlan.mutateAsync({
+            customerId: selectedCustomer.id,
+            propertyId: values.propertyId,
+            totalAmountMinor: planData.totalAmountMinor,
+            downPaymentMinor: planData.downPaymentMinor,
+            balanceMinor: planData.balanceMinor,
+            numMonths: planData.numMonths,
+            monthlyAmountMinor: planData.monthlyAmountMinor,
+            currency: 'GHS',
+            startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+            status: planStatus,
+            progressPercent: planData.progressPercent,
+            progressBand: planData.progressBand,
+          });
+          message.success('Payment plan created successfully!');
+        }
+      }
+
+      setEditModal(false);
+      setSelectedCustomer(null);
+      setEditPaymentPlan(null);
+      form.resetFields();
+      
+      setTimeout(() => {
+        refetchCustomers();
+        refetchPaymentPlans();
+      }, 500);
+    } catch (error: any) {
+      console.error('Error updating customer:', error);
+      message.error(error?.message || 'Failed to update customer');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Delete customer via API
+  // ── Delete Customer ──────────────────────────────────────────────────────
   const handleDeleteCustomer = (id: string) => {
-    deleteCustomerMutation.mutate(id, {
-      onSuccess: () => {
-        message.success('Customer deleted successfully!');
-      },
-      onError: () => {
-        message.error('Failed to delete customer. Please try again.');
+    Modal.confirm({
+      title: 'Delete Customer',
+      content: 'Are you sure you want to delete this customer? This action cannot be undone.',
+      okText: 'Yes, Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          // Delete payment plan first if exists
+          const plan = getPaymentPlan(id);
+          if (plan) {
+            await deletePaymentPlan.mutateAsync(plan.id);
+          }
+          
+          await deleteCustomer.mutateAsync(id);
+          message.success('Customer deleted successfully!');
+          
+          setTimeout(() => {
+            refetchCustomers();
+            refetchPaymentPlans();
+          }, 500);
+        } catch (error: any) {
+          message.error(error?.message || 'Failed to delete customer');
+        }
       },
     });
   };
 
-  // Export function
+  // ── Export ────────────────────────────────────────────────────────────────
   const handleExport = () => {
     setExportLoading(true);
     const dataToExport = filteredCustomers.map(customer => {
@@ -455,20 +542,20 @@ export const CustomersPage: React.FC = () => {
     }, 1000);
   };
 
-  // Client-side tab filter (tab selection refines existing type filter)
+  // Client-side tab filter
   const filteredCustomers = customers.filter(customer => {
     const matchesTab = activeTab === 'all' || customer.type === activeTab;
     return matchesTab;
   });
 
-  // Stats — derived from live data
+  // Stats
   const stats = {
     total: customersMeta?.total ?? customers.length,
     paymentPlan: customers.filter(c => c.type === 'payment_plan').length,
     fullyPaid: customers.filter(c => c.type === 'fully_paid').length,
-    activePlans: Object.values(paymentPlans).filter(p => p.status === 'active').length,
-    defaultedPlans: Object.values(paymentPlans).filter(p => p.status === 'defaulted').length,
-    completedPlans: Object.values(paymentPlans).filter(p => p.status === 'completed').length,
+    activePlans: paymentPlans.filter(p => p.status === 'active').length,
+    defaultedPlans: paymentPlans.filter(p => p.status === 'defaulted').length,
+    completedPlans: paymentPlans.filter(p => p.status === 'completed').length,
   };
 
   // Table Columns
@@ -649,14 +736,7 @@ export const CustomersPage: React.FC = () => {
           <Popconfirm
             title="Delete Customer"
             description={`Are you sure you want to delete ${record.firstName} ${record.lastName}?`}
-            onConfirm={() => {
-              setCustomers(customers.filter(c => c.id !== record.id));
-              // Also remove payment plan if exists
-              const newPaymentPlans = { ...paymentPlans };
-              delete newPaymentPlans[record.id];
-              setPaymentPlans(newPaymentPlans);
-              message.success('Customer deleted successfully!');
-            }}
+            onConfirm={() => handleDeleteCustomer(record.id)}
             okText="Yes"
             cancelText="No"
           >
@@ -669,229 +749,33 @@ export const CustomersPage: React.FC = () => {
     },
   ];
 
-  // Render Drawer Content
-  const renderDrawerContent = () => {
-    if (!selectedCustomer) return null;
-
-    const plan = getPaymentPlan(selectedCustomer.id);
-    const property = getPropertyDetails(selectedCustomer.propertyId);
-    const isFullyPaid = selectedCustomer.type === 'fully_paid';
-
+  // Loading state
+  if (customersLoading || paymentPlansLoading || propertiesLoading) {
     return (
-      <div style={{ height: '100%' }}>
-        {/* Header */}
-        <div style={{ 
-          display: 'flex', 
-          justifyContent: 'space-between', 
-          alignItems: 'center',
-          marginBottom: 24,
-          paddingBottom: 16,
-          borderBottom: '1px solid #f0f0f0'
-        }}>
-          <Space>
-            <Avatar 
-              size={48} 
-              icon={<UserOutlined />} 
-              style={{ backgroundColor: tokens.primary }}
-            />
-            <div>
-              <Title level={4} style={{ margin: 0 }}>
-                {selectedCustomer.firstName} {selectedCustomer.lastName}
-              </Title>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                <IdcardOutlined /> ID: {selectedCustomer.id}
-              </Text>
-            </div>
-          </Space>
-          <Button 
-            type="text" 
-            icon={<CloseOutlined />} 
-            onClick={() => setViewDrawerOpen(false)}
-            style={{ fontSize: 18 }}
-          />
-        </div>
-
-        {/* Customer Type Banner */}
-        <div style={{
-          background: isFullyPaid ? '#f6ffed' : '#e6f7ff',
-          border: `1px solid ${isFullyPaid ? '#b7eb8f' : '#91d5ff'}`,
-          borderRadius: 8,
-          padding: '12px 16px',
-          marginBottom: 24,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between'
-        }}>
-          <Space>
-            {isFullyPaid ? <CheckCircleOutlined style={{ color: '#52c41a' }} /> : <BankOutlined style={{ color: '#1890ff' }} />}
-            <Text strong>{isFullyPaid ? 'Fully Paid Customer' : 'Payment Plan Customer'}</Text>
-          </Space>
-          {!isFullyPaid && plan && (
-            <Tag color={plan.status === 'active' ? 'green' : plan.status === 'defaulted' ? 'red' : 'default'}>
-              {paymentPlanStatusLabels[plan.status]}
-            </Tag>
-          )}
-        </div>
-
-        {/* Quick Actions */}
-        <div style={{ marginBottom: 24 }}>
-          <Space wrap>
-            <Button 
-              type="primary" 
-              icon={<EditOutlined />}
-              onClick={() => {
-                setEditModal(true);
-                const plan = getPaymentPlan(selectedCustomer.id);
-                setEditPaymentPlan(plan || null);
-                form.setFieldsValue({
-                  firstName: selectedCustomer.firstName,
-                  lastName: selectedCustomer.lastName,
-                  phoneNumber: selectedCustomer.phoneNumber,
-                  address: selectedCustomer.address,
-                  type: selectedCustomer.type,
-                  propertyId: selectedCustomer.propertyId,
-                });
-                if (plan) {
-                  form.setFieldsValue({
-                    totalAmount: plan.totalAmountMinor / 100,
-                    downPayment: plan.downPaymentMinor / 100,
-                    paymentBasis: 'months',
-                    numMonths: plan.numMonths,
-                    monthlyAmount: plan.monthlyAmountMinor / 100,
-                    startDate: dayjs(plan.startDate),
-                    planStatus: plan.status,
-                  });
-                }
-                setViewDrawerOpen(false);
-              }}
-            >
-              Edit Customer
-            </Button>
-            <Button icon={<PhoneOutlined />}>
-              Call
-            </Button>
-            <Button icon={<MessageOutlined />}>
-              Message
-            </Button>
-            {!isFullyPaid && plan && (
-              <Button icon={<FileOutlined />}>
-                View Plan
-              </Button>
-            )}
-          </Space>
-        </div>
-
-        {/* Customer Info */}
-        <Row gutter={[16, 16]}>
-          <Col span={24}>
-            <Card size="small" title="Personal Information" bordered={false} style={{ background: '#fafafa' }}>
-              <Descriptions column={1} size="small">
-                <Descriptions.Item label={<Space><UserOutlined /> Full Name</Space>}>
-                  <Text strong>{selectedCustomer.firstName} {selectedCustomer.lastName}</Text>
-                </Descriptions.Item>
-                <Descriptions.Item label={<Space><PhoneOutlined /> Phone</Space>}>
-                  <a href={`tel:${selectedCustomer.phoneNumber}`}>
-                    {selectedCustomer.phoneNumber}
-                  </a>
-                </Descriptions.Item>
-                <Descriptions.Item label={<Space><EnvironmentOutlined /> Address</Space>}>
-                  {selectedCustomer.address}
-                </Descriptions.Item>
-                <Descriptions.Item label={<Space><HomeOutlined /> Property</Space>}>
-                  {property ? `${property.houseNumber} - ${property.offerNumber}` : 'N/A'}
-                </Descriptions.Item>
-                <Descriptions.Item label={<Space><DollarOutlined /> Price</Space>}>
-                  {property ? <MoneyText minor={property.priceMinor} /> : 'N/A'}
-                </Descriptions.Item>
-              </Descriptions>
-            </Card>
-          </Col>
-        </Row>
-
-        {/* Payment Plan Details */}
-        {plan && (
-          <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-            <Col span={24}>
-              <Card size="small" title="Payment Plan Details" bordered={false} style={{ background: '#fafafa' }}>
-                <div style={{ marginBottom: 16 }}>
-                  <ProgressCell percent={plan.progressPercent} band={plan.progressBand} />
-                </div>
-                <Descriptions column={2} size="small">
-                  <Descriptions.Item label="Total Amount">
-                    <MoneyText minor={plan.totalAmountMinor} />
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Down Payment">
-                    <MoneyText minor={plan.downPaymentMinor} />
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Balance">
-                    <MoneyText minor={plan.balanceMinor} />
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Monthly Amount">
-                    <MoneyText minor={plan.monthlyAmountMinor} />
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Duration">
-                    {plan.numMonths} months
-                  </Descriptions.Item>
-                  <Descriptions.Item label="Start Date">
-                    {dayjs(plan.startDate).format('MMMM DD, YYYY')}
-                  </Descriptions.Item>
-                </Descriptions>
-              </Card>
-            </Col>
-          </Row>
-        )}
-
-        {/* Timeline */}
-        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
-          <Col span={24}>
-            <Card size="small" title="Activity Timeline" bordered={false} style={{ background: '#fafafa' }}>
-              <Timeline>
-                <Timeline.Item color="blue">
-                  <Text>Customer created</Text>
-                  <br />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {dayjs(selectedCustomer.createdAt).format('MMMM DD, YYYY HH:mm')}
-                  </Text>
-                </Timeline.Item>
-                {plan && (
-                  <Timeline.Item color={plan.status === 'active' ? 'green' : 'red'}>
-                    <Text>Payment plan {plan.status}</Text>
-                    <br />
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      {plan.progressPercent}% complete
-                    </Text>
-                  </Timeline.Item>
-                )}
-                <Timeline.Item color="gray">
-                  <Text>Last updated {dayjs(selectedCustomer.updatedAt).fromNow()}</Text>
-                </Timeline.Item>
-              </Timeline>
-            </Card>
-          </Col>
-        </Row>
-
-        {/* Footer */}
-        <div style={{ 
-          marginTop: 24, 
-          paddingTop: 16, 
-          borderTop: '1px solid #f0f0f0',
-          display: 'flex',
-          justifyContent: 'space-between'
-        }}>
-          <Space>
-            <Button icon={<PrinterOutlined />}>Print</Button>
-            <Button icon={<ShareAltOutlined />}>Share</Button>
-          </Space>
-          <Button 
-            type="primary" 
-            onClick={() => navigate(`/customers/${selectedCustomer.id}`)}
-          >
-            View Full Details
-          </Button>
-        </div>
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
+        <Spin size="large" tip="Loading customers..." />
       </div>
     );
-  };
+  }
+
+  // Error state
+  if (customersError) {
+    return (
+      <div style={{ padding: 24 }}>
+        <Alert
+          message="Error Loading Customers"
+          description="There was an error loading the customers. Please try again."
+          type="error"
+          showIcon
+          action={
+            <Button size="small" type="primary" onClick={() => refetchCustomers()}>
+              Retry
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
 
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
@@ -911,11 +795,9 @@ export const CustomersPage: React.FC = () => {
           {
             label: 'Refresh',
             onClick: () => {
-              setLoading(true);
-              setTimeout(() => {
-                setLoading(false);
-                message.success('Refreshed!');
-              }, 500);
+              refetchCustomers();
+              refetchPaymentPlans();
+              message.success('Refreshed!');
             },
             icon: <ReloadOutlined />,
           },
@@ -1050,7 +932,7 @@ export const CustomersPage: React.FC = () => {
         />
       </div>
 
-      {/* Add Customer Modal with Payment Plan */}
+      {/* ── Add Customer Modal ────────────────────────────────────────────── */}
       <Modal
         title={
           <Space>
@@ -1074,19 +956,6 @@ export const CustomersPage: React.FC = () => {
           onFinish={handleAddCustomer}
           initialValues={{ type: 'payment_plan', paymentBasis: 'months' }}
         >
-          <Form.Item
-            name="prospectId"
-            label="Convert from Prospect (Optional)"
-          >
-            <Select placeholder="Select a prospect to convert" allowClear>
-              {mockProspects.map(p => (
-                <Option key={p.id} value={p.id}>
-                  {p.name} - {p.phone}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
           <Divider>Customer Information</Divider>
 
           <Row gutter={[8, 0]}>
@@ -1119,6 +988,14 @@ export const CustomersPage: React.FC = () => {
           </Form.Item>
 
           <Form.Item
+            name="email"
+            label="Email (Optional)"
+            rules={[{ type: 'email', message: 'Please enter a valid email' }]}
+          >
+            <Input placeholder="Email address" />
+          </Form.Item>
+
+          <Form.Item
             name="address"
             label="Address"
             rules={[{ required: true, message: 'Address is required' }]}
@@ -1142,9 +1019,13 @@ export const CustomersPage: React.FC = () => {
             label="Property"
             rules={[{ required: true, message: 'Property is required' }]}
           >
-            <Select placeholder="Select property">
-              {Object.entries(mockProperties).map(([id, prop]) => (
-                <Option key={id} value={id}>
+            <Select 
+              placeholder="Select property"
+              showSearch
+              optionFilterProp="children"
+            >
+              {properties.map((prop: any) => (
+                <Option key={prop.id} value={prop.id}>
                   {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
                 </Option>
               ))}
@@ -1157,7 +1038,13 @@ export const CustomersPage: React.FC = () => {
             {({ getFieldValue }) => {
               const type = getFieldValue('type');
               if (type !== 'payment_plan') {
-                return null;
+                return (
+                  <div style={{ textAlign: 'center', padding: '20px 0' }}>
+                    <CheckCircleOutlined style={{ fontSize: 32, color: '#52c41a' }} />
+                    <Title level={5} style={{ marginTop: 8 }}>Fully Paid Customer</Title>
+                    <Text type="secondary">No payment plan required</Text>
+                  </div>
+                );
               }
               return (
                 <>
@@ -1250,6 +1137,7 @@ export const CustomersPage: React.FC = () => {
                     <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
                   </Form.Item>
 
+                  {/* Live Preview */}
                   <Form.Item noStyle shouldUpdate={(prev, curr) => 
                     prev.totalAmount !== curr.totalAmount || 
                     prev.downPayment !== curr.downPayment ||
@@ -1277,18 +1165,23 @@ export const CustomersPage: React.FC = () => {
 
                       const progressPercent = totalMinor > 0 ? Math.round((downMinor / totalMinor) * 100) : 0;
                       const band = getProgressBand(progressPercent);
+                      const isFullyPaid = balanceMinor === 0;
 
                       return (
                         <div style={{ 
-                          background: '#f5f7fa', 
+                          background: isFullyPaid ? '#f6ffed' : '#f5f7fa', 
                           padding: 16, 
                           borderRadius: 8,
                           marginTop: 8,
-                          border: '1px solid #e8e8e8'
+                          border: `1px solid ${isFullyPaid ? '#b7eb8f' : '#e8e8e8'}`
                         }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
                             <Text strong>Payment Plan Preview</Text>
-                            <Tag color="blue">Auto-calculated</Tag>
+                            {isFullyPaid ? (
+                              <Tag color="green">Fully Paid ✓</Tag>
+                            ) : (
+                              <Tag color="blue">Auto-calculated</Tag>
+                            )}
                           </div>
                           <Row gutter={[8, 8]}>
                             <Col span={12}>
@@ -1301,26 +1194,44 @@ export const CustomersPage: React.FC = () => {
                             </Col>
                             <Col span={12}>
                               <Text type="secondary">Balance</Text>
-                              <div><MoneyText minor={balanceMinor} /></div>
+                              <div>
+                                {isFullyPaid ? (
+                                  <Tag color="green">GHS 0.00</Tag>
+                                ) : (
+                                  <MoneyText minor={balanceMinor} />
+                                )}
+                              </div>
                             </Col>
                             <Col span={12}>
                               <Text type="secondary">Monthly Amount</Text>
-                              <div><MoneyText minor={monthlyMinor} /></div>
+                              <div>
+                                {isFullyPaid ? (
+                                  <Tag color="green">N/A</Tag>
+                                ) : (
+                                  <MoneyText minor={monthlyMinor} />
+                                )}
+                              </div>
                             </Col>
                             <Col span={12}>
                               <Text type="secondary">Number of Months</Text>
-                              <div><Text strong>{numMonths}</Text></div>
+                              <div>
+                                {isFullyPaid ? (
+                                  <Tag color="green">0</Tag>
+                                ) : (
+                                  <Text strong>{numMonths}</Text>
+                                )}
+                              </div>
                             </Col>
                             <Col span={12}>
                               <Text type="secondary">Progress</Text>
                               <div>
                                 <Progress 
-                                  percent={progressPercent} 
-                                  strokeColor={tokens.band[band]}
+                                  percent={isFullyPaid ? 100 : progressPercent} 
+                                  strokeColor={isFullyPaid ? '#52c41a' : tokens.band[band]}
                                   size="small"
                                 />
                                 <Text type="secondary" style={{ fontSize: 12 }}>
-                                  {progressPercent}% - {band.toUpperCase()}
+                                  {isFullyPaid ? '100% - COMPLETE' : `${progressPercent}% - ${band.toUpperCase()}`}
                                 </Text>
                               </div>
                             </Col>
@@ -1336,7 +1247,11 @@ export const CustomersPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button 
+                type="primary" 
+                htmlType="submit" 
+                loading={createCustomer.isPending || loading}
+              >
                 Add Customer
               </Button>
               <Button onClick={() => {
@@ -1350,7 +1265,7 @@ export const CustomersPage: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* Enhanced Edit Modal with Fully Paid Handling */}
+      {/* ── Edit Modal ────────────────────────────────────────────────────── */}
       <Modal
         title={
           <Space>
@@ -1373,118 +1288,7 @@ export const CustomersPage: React.FC = () => {
         <Form
           form={form}
           layout="vertical"
-          onFinish={(values) => {
-            if (selectedCustomer) {
-              // Update customer
-              const updatedCustomer = {
-                ...selectedCustomer,
-                ...values,
-                updatedAt: new Date().toISOString(),
-              };
-              
-              // If customer type is fully_paid, remove payment plan and set to completed
-              if (values.type === 'fully_paid') {
-                // Remove payment plan if exists
-                const newPaymentPlans = { ...paymentPlans };
-                delete newPaymentPlans[selectedCustomer.id];
-                setPaymentPlans(newPaymentPlans);
-                setEditPaymentPlan(null);
-                
-                // Update customer
-                setCustomers(customers.map(c => 
-                  c.id === selectedCustomer.id ? updatedCustomer : c
-                ));
-                
-                setEditModal(false);
-                setSelectedCustomer(null);
-                setEditPaymentPlan(null);
-                form.resetFields();
-                message.success('Customer marked as Fully Paid! Payment plan removed.');
-                return;
-              }
-              
-              // If payment plan exists and type is payment_plan, update it
-              if (values.type === 'payment_plan') {
-                // Check if we have a payment plan, if not create one
-                const totalAmountMinor = Math.round((values.totalAmount || 0) * 100);
-                const downPaymentMinor = Math.round((values.downPayment || 0) * 100);
-                const balanceMinor = totalAmountMinor - downPaymentMinor;
-                let numMonths = values.numMonths || 0;
-                let monthlyAmountMinor = 0;
-
-                if (values.paymentBasis === 'months') {
-                  numMonths = values.numMonths || 1;
-                  monthlyAmountMinor = Math.ceil(balanceMinor / numMonths);
-                } else {
-                  monthlyAmountMinor = Math.round((values.monthlyAmount || 0) * 100);
-                  numMonths = Math.ceil(balanceMinor / monthlyAmountMinor);
-                }
-
-                const paidSoFar = downPaymentMinor;
-                const progressPercent = Math.round((paidSoFar / totalAmountMinor) * 100);
-                const progressBand = getProgressBand(progressPercent);
-
-                // If balance is 0, mark as completed
-                const planStatus = balanceMinor === 0 ? 'completed' : (values.planStatus || 'active');
-
-                if (editPaymentPlan) {
-                  // Update existing plan
-                  const updatedPlan: PaymentPlan = {
-                    ...editPaymentPlan,
-                    totalAmountMinor,
-                    downPaymentMinor,
-                    balanceMinor,
-                    numMonths,
-                    monthlyAmountMinor,
-                    startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : editPaymentPlan.startDate,
-                    status: planStatus,
-                    progressPercent,
-                    progressBand,
-                    updatedAt: new Date().toISOString(),
-                  };
-                  setPaymentPlans({ ...paymentPlans, [selectedCustomer.id]: updatedPlan });
-                } else {
-                  // Create new plan
-                  const newPlan: PaymentPlan = {
-                    id: `pp${Date.now()}`,
-                    customerId: selectedCustomer.id,
-                    propertyId: selectedCustomer.propertyId,
-                    totalAmountMinor,
-                    downPaymentMinor,
-                    balanceMinor,
-                    numMonths,
-                    monthlyAmountMinor,
-                    currency: 'GHS',
-                    startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-                    status: planStatus,
-                    progressPercent,
-                    progressBand,
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                  };
-                  setPaymentPlans({ ...paymentPlans, [selectedCustomer.id]: newPlan });
-                }
-              }
-
-              setCustomers(customers.map(c => 
-                c.id === selectedCustomer.id ? updatedCustomer : c
-              ));
-
-              setEditModal(false);
-              setSelectedCustomer(null);
-              setEditPaymentPlan(null);
-              form.resetFields();
-              message.success('Customer updated successfully!');
-            }
-          }}
-          initialValues={{
-            firstName: selectedCustomer?.firstName,
-            lastName: selectedCustomer?.lastName,
-            phoneNumber: selectedCustomer?.phoneNumber,
-            address: selectedCustomer?.address,
-            type: selectedCustomer?.type,
-            propertyId: selectedCustomer?.propertyId,
-          }}
+          onFinish={handleUpdateCustomer}
         >
           <Tabs
             items={[
@@ -1536,8 +1340,8 @@ export const CustomersPage: React.FC = () => {
                       rules={[{ required: true, message: 'Property is required' }]}
                     >
                       <Select placeholder="Select property">
-                        {Object.entries(mockProperties).map(([id, prop]) => (
-                          <Option key={id} value={id}>
+                        {properties.map((prop: any) => (
+                          <Option key={prop.id} value={prop.id}>
                             {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
                           </Option>
                         ))}
@@ -1553,7 +1357,6 @@ export const CustomersPage: React.FC = () => {
                         placeholder="Select customer type"
                         onChange={(value) => {
                           if (value === 'fully_paid') {
-                            // If switching to fully paid, show confirmation
                             Modal.confirm({
                               title: 'Mark as Fully Paid',
                               content: 'This will remove the payment plan and mark the customer as fully paid. Continue?',
@@ -1561,7 +1364,6 @@ export const CustomersPage: React.FC = () => {
                               okType: 'primary',
                               cancelText: 'Cancel',
                               onOk: () => {
-                                // Clear payment plan fields
                                 form.setFieldsValue({
                                   totalAmount: undefined,
                                   downPayment: undefined,
@@ -1575,41 +1377,6 @@ export const CustomersPage: React.FC = () => {
                                 message.info('Customer will be marked as fully paid');
                               },
                             });
-                          } else if (value === 'payment_plan' && selectedCustomer) {
-                            // If switching to payment plan, load existing or create new
-                            const existingPlan = getPaymentPlan(selectedCustomer.id);
-                            if (existingPlan) {
-                              setEditPaymentPlan(existingPlan);
-                              form.setFieldsValue({
-                                totalAmount: existingPlan.totalAmountMinor / 100,
-                                downPayment: existingPlan.downPaymentMinor / 100,
-                                paymentBasis: 'months',
-                                numMonths: existingPlan.numMonths,
-                                monthlyAmount: existingPlan.monthlyAmountMinor / 100,
-                                startDate: dayjs(existingPlan.startDate),
-                                planStatus: existingPlan.status,
-                              });
-                            } else {
-                              // Create default plan
-                              const defaultPlan: PaymentPlan = {
-                                id: `pp${Date.now()}`,
-                                customerId: selectedCustomer.id,
-                                propertyId: selectedCustomer.propertyId,
-                                totalAmountMinor: 0,
-                                downPaymentMinor: 0,
-                                balanceMinor: 0,
-                                numMonths: 12,
-                                monthlyAmountMinor: 0,
-                                currency: 'GHS',
-                                startDate: dayjs().format('YYYY-MM-DD'),
-                                status: 'active',
-                                progressPercent: 0,
-                                progressBand: 'red',
-                                createdAt: new Date().toISOString(),
-                                updatedAt: new Date().toISOString(),
-                              };
-                              setEditPaymentPlan(defaultPlan);
-                            }
                           }
                         }}
                       >
@@ -1642,28 +1409,6 @@ export const CustomersPage: React.FC = () => {
                         );
                       }
 
-                      // If no payment plan exists, create a default one
-                      if (!editPaymentPlan && selectedCustomer) {
-                        const defaultPlan = {
-                          id: `pp${Date.now()}`,
-                          customerId: selectedCustomer.id,
-                          propertyId: selectedCustomer.propertyId,
-                          totalAmountMinor: 0,
-                          downPaymentMinor: 0,
-                          balanceMinor: 0,
-                          numMonths: 12,
-                          monthlyAmountMinor: 0,
-                          currency: 'GHS',
-                          startDate: dayjs().format('YYYY-MM-DD'),
-                          status: 'active' as const,
-                          progressPercent: 0,
-                          progressBand: 'red' as const,
-                          createdAt: new Date().toISOString(),
-                          updatedAt: new Date().toISOString(),
-                        };
-                        setEditPaymentPlan(defaultPlan);
-                      }
-
                       return (
                         <>
                           <div style={{ 
@@ -1692,27 +1437,6 @@ export const CustomersPage: React.FC = () => {
                                   precision={2}
                                   placeholder="e.g., 150000"
                                   min={0}
-                                  onChange={() => {
-                                    // Trigger recalculation
-                                    const total = form.getFieldValue('totalAmount') || 0;
-                                    const down = form.getFieldValue('downPayment') || 0;
-                                    if (total > 0 && down > 0) {
-                                      const totalMinor = Math.round(total * 100);
-                                      const downMinor = Math.round(down * 100);
-                                      const progress = Math.round((downMinor / totalMinor) * 100);
-                                      const band = getProgressBand(progress);
-                                      if (editPaymentPlan) {
-                                        setEditPaymentPlan({
-                                          ...editPaymentPlan,
-                                          totalAmountMinor: totalMinor,
-                                          downPaymentMinor: downMinor,
-                                          balanceMinor: totalMinor - downMinor,
-                                          progressPercent: progress,
-                                          progressBand: band,
-                                        });
-                                      }
-                                    }
-                                  }}
                                 />
                               </Form.Item>
                             </Col>
@@ -1728,27 +1452,6 @@ export const CustomersPage: React.FC = () => {
                                   precision={2}
                                   placeholder="e.g., 30000"
                                   min={0}
-                                  onChange={() => {
-                                    // Trigger recalculation
-                                    const total = form.getFieldValue('totalAmount') || 0;
-                                    const down = form.getFieldValue('downPayment') || 0;
-                                    if (total > 0 && down > 0) {
-                                      const totalMinor = Math.round(total * 100);
-                                      const downMinor = Math.round(down * 100);
-                                      const progress = Math.round((downMinor / totalMinor) * 100);
-                                      const band = getProgressBand(progress);
-                                      if (editPaymentPlan) {
-                                        setEditPaymentPlan({
-                                          ...editPaymentPlan,
-                                          totalAmountMinor: totalMinor,
-                                          downPaymentMinor: downMinor,
-                                          balanceMinor: totalMinor - downMinor,
-                                          progressPercent: progress,
-                                          progressBand: band,
-                                        });
-                                      }
-                                    }
-                                  }}
                                 />
                               </Form.Item>
                             </Col>
@@ -1789,22 +1492,6 @@ export const CustomersPage: React.FC = () => {
                                       min={1}
                                       max={360}
                                       placeholder="e.g., 12"
-                                      onChange={(value) => {
-                                        if (editPaymentPlan && value) {
-                                          const total = form.getFieldValue('totalAmount') || 0;
-                                          const down = form.getFieldValue('downPayment') || 0;
-                                          const totalMinor = Math.round(total * 100);
-                                          const downMinor = Math.round(down * 100);
-                                          const balanceMinor = totalMinor - downMinor;
-                                          const monthlyMinor = Math.ceil(balanceMinor / value);
-                                          setEditPaymentPlan({
-                                            ...editPaymentPlan,
-                                            numMonths: value,
-                                            monthlyAmountMinor: monthlyMinor,
-                                            balanceMinor: balanceMinor,
-                                          });
-                                        }
-                                      }}
                                     />
                                   </Form.Item>
                                 );
@@ -1821,23 +1508,6 @@ export const CustomersPage: React.FC = () => {
                                     precision={2}
                                     placeholder="e.g., 10000"
                                     min={0}
-                                    onChange={(value) => {
-                                      if (editPaymentPlan && value) {
-                                        const total = form.getFieldValue('totalAmount') || 0;
-                                        const down = form.getFieldValue('downPayment') || 0;
-                                        const totalMinor = Math.round(total * 100);
-                                        const downMinor = Math.round(down * 100);
-                                        const balanceMinor = totalMinor - downMinor;
-                                        const monthlyMinor = Math.round(value * 100);
-                                        const numMonths = Math.ceil(balanceMinor / monthlyMinor);
-                                        setEditPaymentPlan({
-                                          ...editPaymentPlan,
-                                          monthlyAmountMinor: monthlyMinor,
-                                          numMonths: numMonths,
-                                          balanceMinor: balanceMinor,
-                                        });
-                                      }
-                                    }}
                                   />
                                 </Form.Item>
                               );
@@ -1986,7 +1656,7 @@ export const CustomersPage: React.FC = () => {
           
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button type="primary" htmlType="submit" loading={updateCustomer.isPending || loading}>
                 Save Changes
               </Button>
               <Button onClick={() => {
@@ -2007,19 +1677,23 @@ export const CustomersPage: React.FC = () => {
                       okText: 'Yes, Remove',
                       okType: 'danger',
                       cancelText: 'No, Keep',
-                      onOk: () => {
+                      onOk: async () => {
                         if (selectedCustomer) {
-                          const newPaymentPlans = { ...paymentPlans };
-                          delete newPaymentPlans[selectedCustomer.id];
-                          setPaymentPlans(newPaymentPlans);
-                          setEditPaymentPlan(null);
-                          // Update customer type to fully paid
-                          setCustomers(customers.map(c => 
-                            c.id === selectedCustomer.id 
-                              ? { ...c, type: 'fully_paid', updatedAt: new Date().toISOString() }
-                              : c
-                          ));
-                          message.success('Payment plan removed successfully!');
+                          try {
+                            const plan = getPaymentPlan(selectedCustomer.id);
+                            if (plan) {
+                              await deletePaymentPlan.mutateAsync(plan.id);
+                              await updateCustomer.mutateAsync({
+                                id: selectedCustomer.id,
+                                data: { type: 'fully_paid' },
+                              });
+                              message.success('Payment plan removed successfully!');
+                              refetchCustomers();
+                              refetchPaymentPlans();
+                            }
+                          } catch (error: any) {
+                            message.error(error?.message || 'Failed to remove payment plan');
+                          }
                         }
                       },
                     });
@@ -2033,7 +1707,7 @@ export const CustomersPage: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* Export Modal */}
+      {/* ── Export Modal ───────────────────────────────────────────────────── */}
       <Modal
         title={
           <Space>
@@ -2139,7 +1813,7 @@ export const CustomersPage: React.FC = () => {
         </div>
       </Modal>
 
-      {/* Premium Drawer */}
+      {/* ── View Drawer ───────────────────────────────────────────────────── */}
       <Drawer
         title={null}
         placement="right"
@@ -2160,7 +1834,226 @@ export const CustomersPage: React.FC = () => {
         maskStyle={{ background: 'rgba(0,0,0,0.3)' }}
         push={false}
       >
-        {renderDrawerContent()}
+        {selectedCustomer && (
+          <div style={{ height: '100%' }}>
+            {/* Header */}
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center',
+              marginBottom: 24,
+              paddingBottom: 16,
+              borderBottom: '1px solid #f0f0f0'
+            }}>
+              <Space>
+                <Avatar 
+                  size={48} 
+                  icon={<UserOutlined />} 
+                  style={{ backgroundColor: tokens.primary }}
+                />
+                <div>
+                  <Title level={4} style={{ margin: 0 }}>
+                    {selectedCustomer.firstName} {selectedCustomer.lastName}
+                  </Title>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    <IdcardOutlined /> ID: {selectedCustomer.id}
+                  </Text>
+                </div>
+              </Space>
+              <Button 
+                type="text" 
+                icon={<CloseOutlined />} 
+                onClick={() => setViewDrawerOpen(false)}
+                style={{ fontSize: 18 }}
+              />
+            </div>
+
+            {/* Customer Type Banner */}
+            <div style={{
+              background: selectedCustomer.type === 'fully_paid' ? '#f6ffed' : '#e6f7ff',
+              border: `1px solid ${selectedCustomer.type === 'fully_paid' ? '#b7eb8f' : '#91d5ff'}`,
+              borderRadius: 8,
+              padding: '12px 16px',
+              marginBottom: 24,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between'
+            }}>
+              <Space>
+                {selectedCustomer.type === 'fully_paid' ? (
+                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                ) : (
+                  <BankOutlined style={{ color: '#1890ff' }} />
+                )}
+                <Text strong>
+                  {selectedCustomer.type === 'fully_paid' ? 'Fully Paid Customer' : 'Payment Plan Customer'}
+                </Text>
+              </Space>
+              {selectedCustomer.type === 'payment_plan' && (
+                <Tag color={getPaymentPlan(selectedCustomer.id)?.status === 'active' ? 'green' : 'red'}>
+                  {paymentPlanStatusLabels[getPaymentPlan(selectedCustomer.id)?.status || 'active']}
+                </Tag>
+              )}
+            </div>
+
+            {/* Quick Actions */}
+            <div style={{ marginBottom: 24 }}>
+              <Space wrap>
+                <Button 
+                  type="primary" 
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    setEditModal(true);
+                    const plan = getPaymentPlan(selectedCustomer.id);
+                    setEditPaymentPlan(plan || null);
+                    form.setFieldsValue({
+                      firstName: selectedCustomer.firstName,
+                      lastName: selectedCustomer.lastName,
+                      phoneNumber: selectedCustomer.phoneNumber,
+                      address: selectedCustomer.address,
+                      type: selectedCustomer.type,
+                      propertyId: selectedCustomer.propertyId,
+                    });
+                    if (plan) {
+                      form.setFieldsValue({
+                        totalAmount: plan.totalAmountMinor / 100,
+                        downPayment: plan.downPaymentMinor / 100,
+                        paymentBasis: 'months',
+                        numMonths: plan.numMonths,
+                        monthlyAmount: plan.monthlyAmountMinor / 100,
+                        startDate: dayjs(plan.startDate),
+                        planStatus: plan.status,
+                      });
+                    }
+                    setViewDrawerOpen(false);
+                  }}
+                >
+                  Edit Customer
+                </Button>
+                <Button icon={<PhoneOutlined />}>
+                  Call
+                </Button>
+                <Button icon={<MessageOutlined />}>
+                  Message
+                </Button>
+                {selectedCustomer.type === 'payment_plan' && getPaymentPlan(selectedCustomer.id) && (
+                  <Button icon={<FileOutlined />}>
+                    View Plan
+                  </Button>
+                )}
+              </Space>
+            </div>
+
+            {/* Customer Info */}
+            <Row gutter={[16, 16]}>
+              <Col span={24}>
+                <Card size="small" title="Personal Information" bordered={false} style={{ background: '#fafafa' }}>
+                  <Descriptions column={1} size="small">
+                    <Descriptions.Item label={<Space><UserOutlined /> Full Name</Space>}>
+                      <Text strong>{selectedCustomer.firstName} {selectedCustomer.lastName}</Text>
+                    </Descriptions.Item>
+                    <Descriptions.Item label={<Space><PhoneOutlined /> Phone</Space>}>
+                      <a href={`tel:${selectedCustomer.phoneNumber}`}>
+                        {selectedCustomer.phoneNumber}
+                      </a>
+                    </Descriptions.Item>
+                    <Descriptions.Item label={<Space><EnvironmentOutlined /> Address</Space>}>
+                      {selectedCustomer.address}
+                    </Descriptions.Item>
+                    <Descriptions.Item label={<Space><HomeOutlined /> Property</Space>}>
+                      {getPropertyDetails(selectedCustomer.propertyId)?.houseNumber || 'N/A'}
+                    </Descriptions.Item>
+                  </Descriptions>
+                </Card>
+              </Col>
+            </Row>
+
+            {/* Payment Plan Details */}
+            {selectedCustomer.type === 'payment_plan' && getPaymentPlan(selectedCustomer.id) && (
+              <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+                <Col span={24}>
+                  <Card size="small" title="Payment Plan Details" bordered={false} style={{ background: '#fafafa' }}>
+                    <div style={{ marginBottom: 16 }}>
+                      <ProgressCell 
+                        percent={getPaymentPlan(selectedCustomer.id)?.progressPercent || 0} 
+                        band={getPaymentPlan(selectedCustomer.id)?.progressBand || 'red'} 
+                      />
+                    </div>
+                    <Descriptions column={2} size="small">
+                      <Descriptions.Item label="Total Amount">
+                        <MoneyText minor={getPaymentPlan(selectedCustomer.id)?.totalAmountMinor || 0} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Down Payment">
+                        <MoneyText minor={getPaymentPlan(selectedCustomer.id)?.downPaymentMinor || 0} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Balance">
+                        <MoneyText minor={getPaymentPlan(selectedCustomer.id)?.balanceMinor || 0} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Monthly Amount">
+                        <MoneyText minor={getPaymentPlan(selectedCustomer.id)?.monthlyAmountMinor || 0} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Duration">
+                        {getPaymentPlan(selectedCustomer.id)?.numMonths || 0} months
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Start Date">
+                        {dayjs(getPaymentPlan(selectedCustomer.id)?.startDate).format('MMMM DD, YYYY')}
+                      </Descriptions.Item>
+                    </Descriptions>
+                  </Card>
+                </Col>
+              </Row>
+            )}
+
+            {/* Timeline */}
+            <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+              <Col span={24}>
+                <Card size="small" title="Activity Timeline" bordered={false} style={{ background: '#fafafa' }}>
+                  <Timeline>
+                    <Timeline.Item color="blue">
+                      <Text>Customer created</Text>
+                      <br />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {dayjs(selectedCustomer.createdAt).format('MMMM DD, YYYY HH:mm')}
+                      </Text>
+                    </Timeline.Item>
+                    {getPaymentPlan(selectedCustomer.id) && (
+                      <Timeline.Item color="green">
+                        <Text>Payment plan {getPaymentPlan(selectedCustomer.id)?.status}</Text>
+                        <br />
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          {getPaymentPlan(selectedCustomer.id)?.progressPercent || 0}% complete
+                        </Text>
+                      </Timeline.Item>
+                    )}
+                    <Timeline.Item color="gray">
+                      <Text>Last updated {dayjs(selectedCustomer.updatedAt).fromNow()}</Text>
+                    </Timeline.Item>
+                  </Timeline>
+                </Card>
+              </Col>
+            </Row>
+
+            {/* Footer */}
+            <div style={{ 
+              marginTop: 24, 
+              paddingTop: 16, 
+              borderTop: '1px solid #f0f0f0',
+              display: 'flex',
+              justifyContent: 'space-between'
+            }}>
+              <Space>
+                <Button icon={<PrinterOutlined />}>Print</Button>
+                <Button icon={<ShareAltOutlined />}>Share</Button>
+              </Space>
+              <Button 
+                type="primary" 
+                onClick={() => navigate(`/customers/${selectedCustomer.id}`)}
+              >
+                View Full Details
+              </Button>
+            </div>
+          </div>
+        )}
       </Drawer>
     </div>
   );

@@ -89,6 +89,7 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { roleLabels } from '@/constants/enums';
 import type { User, Role } from '@/types';
+import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, getUserFullName, getUserPhone } from '@/api/users';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -197,8 +198,6 @@ export const UsersPage: React.FC = () => {
   const { user: currentUser } = useAuth();
   
   // States
-  const [loading, setLoading] = useState(false);
-  const [users, setUsers] = useState<User[]>(mockUsers);
   const [searchText, setSearchText] = useState('');
   const [roleFilter, setRoleFilter] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -213,6 +212,15 @@ export const UsersPage: React.FC = () => {
   const [exportModal, setExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
   const [exportLoading, setExportLoading] = useState(false);
+
+  // ── API hooks ────────────────────────────────────────────────────────────
+  const { data: usersResponse, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
+  const createUser = useCreateUserMutation();
+  const updateUser = useUpdateUserMutation();
+  const deleteUser = useDeleteUserMutation();
+
+  // Extract users array safely
+  const users: User[] = usersResponse?.items ?? [];
 
   // Role configuration
   const roleConfig: Record<Role, { color: string; icon: any; label: string }> = {
@@ -262,71 +270,87 @@ export const UsersPage: React.FC = () => {
   };
 
   // Add User
-  const handleAddUser = (values: any) => {
-    setLoading(true);
-    setTimeout(() => {
-      const newUser: User = {
-        id: `${Date.now()}`,
+  const handleAddUser = async (values: any) => {
+    try {
+      await createUser.mutateAsync({
         firstName: values.firstName,
         lastName: values.lastName,
         email: values.email,
         phoneNumber: values.phoneNumber,
         role: values.role,
+        password: values.password,
         isActive: true,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      setUsers([newUser, ...users]);
-      setLoading(false);
+      });
       setAddModal(false);
       addForm.resetFields();
-      message.success(`User ${newUser.firstName} ${newUser.lastName} added successfully!`);
-    }, 800);
+      message.success(`Staff member ${values.firstName} ${values.lastName} added successfully!`);
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.error?.message ||
+                     err?.response?.data?.message ||
+                     err?.message ||
+                     'Failed to add staff member';
+      message.error(errMsg);
+    }
   };
 
   // Edit User
-  const handleEditUser = (values: any) => {
+  const handleEditUser = async (values: any) => {
     if (!selectedUser) return;
-    setLoading(true);
-    setTimeout(() => {
-      setUsers(users.map(u => 
-        u.id === selectedUser.id 
-          ? { 
-              ...u, 
-              ...values, 
-              updatedAt: new Date().toISOString(),
-              isActive: values.isActive !== undefined ? values.isActive : u.isActive
-            }
-          : u
-      ));
-      setLoading(false);
+    try {
+      await updateUser.mutateAsync({
+        id: selectedUser.id,
+        payload: {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          email: values.email,
+          phoneNumber: values.phoneNumber,
+          role: values.role,
+          isActive: values.isActive !== undefined ? values.isActive : selectedUser.isActive,
+        },
+      });
       setEditModal(false);
       setSelectedUser(null);
       form.resetFields();
-      message.success('User updated successfully!');
-    }, 800);
+      message.success('Staff member updated successfully!');
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.error?.message ||
+                     err?.response?.data?.message ||
+                     err?.message ||
+                     'Failed to update staff member';
+      message.error(errMsg);
+    }
   };
 
   // Toggle User Status
-  const handleToggleStatus = (id: string) => {
-    setUsers(users.map(u => 
-      u.id === id 
-        ? { ...u, isActive: !u.isActive, updatedAt: new Date().toISOString() }
-        : u
-    ));
-    const user = users.find(u => u.id === id);
-    message.success(`${user?.firstName} ${user?.lastName} ${user?.isActive ? 'deactivated' : 'activated'} successfully!`);
+  const handleToggleStatus = async (id: string) => {
+    const targetUser = users.find(u => u.id === id);
+    if (!targetUser) return;
+    try {
+      await updateUser.mutateAsync({
+        id,
+        payload: { isActive: !targetUser.isActive },
+      });
+      message.success(`${targetUser.firstName} ${targetUser.lastName} ${
+        targetUser.isActive ? 'deactivated' : 'activated'
+      } successfully!`);
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to update status');
+    }
   };
 
   // Delete User
-  const handleDeleteUser = (id: string) => {
-    const user = users.find(u => u.id === id);
-    if (user?.email === 'admin@omark.com') {
-      message.error('Cannot delete the primary admin user!');
-      return;
+  const handleDeleteUser = async (id: string) => {
+    const targetUser = users.find(u => u.id === id);
+    try {
+      await deleteUser.mutateAsync(id);
+      message.success(`${targetUser?.firstName ?? 'User'} deleted successfully!`);
+    } catch (err: any) {
+      const errMsg = err?.response?.data?.error?.message ||
+                     err?.response?.data?.message ||
+                     err?.message ||
+                     'Failed to delete user';
+      message.error(errMsg);
     }
-    setUsers(users.filter(u => u.id !== id));
-    message.success('User deleted successfully!');
   };
 
   // Export function
@@ -763,11 +787,8 @@ export const UsersPage: React.FC = () => {
           {
             label: 'Refresh',
             onClick: () => {
-              setLoading(true);
-              setTimeout(() => {
-                setLoading(false);
-                message.success('Refreshed!');
-              }, 500);
+              refetchUsers();
+              message.success('Refreshed!');
             },
             icon: <ReloadOutlined />,
           },
@@ -897,7 +918,7 @@ export const UsersPage: React.FC = () => {
           columns={columns}
           dataSource={filteredUsers}
           rowKey="id"
-          loading={loading}
+          loading={usersLoading || createUser.isPending || updateUser.isPending || deleteUser.isPending}
           size="middle"
           scroll={{ x: 1200 }}
           pagination={{
@@ -1008,7 +1029,7 @@ export const UsersPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button type="primary" htmlType="submit" loading={createUser.isPending}>
                 <UserAddOutlined /> Add Staff
               </Button>
               <Button onClick={() => {
