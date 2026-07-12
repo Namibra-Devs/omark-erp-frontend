@@ -1,12 +1,13 @@
 // src/api/dashboard.ts
 import { useQuery } from '@tanstack/react-query';
-import apiClient from '@/api/client';
+import apiClient, { unwrapData } from '@/api/client';
+import type { ApiResponse } from '@/types';
 
 // --- Types ---
-// NOTE: adjust these to match your actual backend response shapes / @/types/api definitions.
+// The API docs don't publish response schemas for the dashboard endpoints
+// (NestJS controllers without @ApiResponse DTOs) — these shapes are inferred
+// from how the consuming pages use the data and adjusted defensively.
 
-// Flattened to match SystemStats field usage in
-// src/pages/dashboard/admin/hooks/useAdminDashboard.ts
 export interface AdminDashboardOverview {
   totalUsers: number;
   activeUsers: number;
@@ -22,8 +23,6 @@ export interface AdminDashboardOverview {
   conversionRate: number;
 }
 
-// Shaped to match actual field usage in
-// src/pages/dashboard/SecretaryDashboardPage.tsx (amounts are in minor units, e.g. pesewas).
 export interface SecretaryDashboardData {
   totalCustomers: number;
   activePlans: number;
@@ -49,10 +48,6 @@ export interface SecretaryDashboardData {
   }>;
 }
 
-// Shaped to match per-marketer field usage in
-// src/pages/marketing/DirectorOverviewPage.tsx. Pipeline/summary totals are
-// intentionally NOT part of this payload — the page derives them client-side
-// via reduce() over `marketers`, so the API only needs to supply the raw list.
 export interface MarketerPerformance {
   id: string;
   name: string;
@@ -93,6 +88,20 @@ export interface StaffDashboardData {
   [key: string]: unknown;
 }
 
+export interface AnalyticsMonthPoint {
+  month: string;
+  revenue: number;
+  newProspects: number;
+  newCustomers: number;
+}
+
+export interface AnalyticsData {
+  timeSeries: AnalyticsMonthPoint[];
+  conversionRate: number;
+  paymentMethods: Array<{ method: string; count: number; totalMinor: number }>;
+  topMarketers: Array<{ userId: string; name: string; dealsClosed: number; revenueGenerated: number }>;
+}
+
 // --- Query Keys ---
 
 export const dashboardKeys = {
@@ -101,6 +110,7 @@ export const dashboardKeys = {
   secretary: () => [...dashboardKeys.all, 'secretary'] as const,
   marketing: () => [...dashboardKeys.all, 'marketing'] as const,
   staff: () => [...dashboardKeys.all, 'staff'] as const,
+  analytics: () => [...dashboardKeys.all, 'analytics'] as const,
 };
 
 // --- Hooks ---
@@ -109,8 +119,8 @@ export function useAdminDashboardOverviewQuery() {
   return useQuery({
     queryKey: dashboardKeys.adminOverview(),
     queryFn: async () => {
-      const res = await apiClient.get<AdminDashboardOverview>('/dashboard/overview');
-      return res as unknown as AdminDashboardOverview;
+      const res = await apiClient.get<ApiResponse<AdminDashboardOverview>>('/dashboard/overview');
+      return unwrapData(res);
     },
   });
 }
@@ -119,8 +129,8 @@ export function useSecretaryDashboardQuery() {
   return useQuery({
     queryKey: dashboardKeys.secretary(),
     queryFn: async () => {
-      const res = await apiClient.get<SecretaryDashboardData>('/dashboard/secretary');
-      return res as unknown as SecretaryDashboardData;
+      const res = await apiClient.get<ApiResponse<SecretaryDashboardData>>('/dashboard/secretary');
+      return unwrapData(res);
     },
   });
 }
@@ -129,8 +139,8 @@ export function useMarketingDashboardQuery() {
   return useQuery({
     queryKey: dashboardKeys.marketing(),
     queryFn: async () => {
-      const res = await apiClient.get<MarketingDashboardData>('/dashboard/marketing');
-      return res as unknown as MarketingDashboardData;
+      const res = await apiClient.get<ApiResponse<MarketingDashboardData>>('/dashboard/marketing');
+      return unwrapData(res);
     },
   });
 }
@@ -139,8 +149,24 @@ export function useStaffDashboardQuery() {
   return useQuery({
     queryKey: dashboardKeys.staff(),
     queryFn: async () => {
-      const res = await apiClient.get<StaffDashboardData>('/dashboard/staff');
-      return res as unknown as StaffDashboardData;
+      const res = await apiClient.get<ApiResponse<StaffDashboardData>>('/dashboard/staff');
+      return unwrapData(res);
     },
+  });
+}
+
+/**
+ * GET /dashboard/analytics — 12-month revenue/prospect/customer time series,
+ * conversion rate, payment method breakdown, and top marketers.
+ * Restricted to admin / accounts / marketing_director on the backend.
+ */
+export function useAnalyticsDashboardQuery(enabled = true) {
+  return useQuery({
+    queryKey: dashboardKeys.analytics(),
+    queryFn: async () => {
+      const res = await apiClient.get<ApiResponse<AnalyticsData>>('/dashboard/analytics');
+      return unwrapData(res);
+    },
+    enabled,
   });
 }

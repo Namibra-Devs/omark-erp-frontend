@@ -1,15 +1,18 @@
 // src/api/users.ts
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import apiClient from '@/api/client';
+import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
 import type { Role } from '@/types';
 
 // --- Types ---
+// Matches the `User` schema from GET/POST/PATCH /api/v1/users in the API docs.
 
 export interface UserEntity {
   id: string;
-  firstName?: string;
-  lastName?: string;
+  firstName: string;
+  lastName: string;
+  // Kept for backward compatibility with UI code that expects a combined name —
+  // the backend never returns this field, use getUserFullName() instead.
   name?: string;
   email: string;
   phone?: string | { number?: string; value?: string };
@@ -23,18 +26,16 @@ export interface UserEntity {
 
 export interface UsersListParams {
   page?: number;
-  limit?: number;
+  pageSize?: number;
   role?: Role;
-  search?: string;
   q?: string;
-  isActive?: boolean;
 }
 
 export interface UsersListResponse {
   items: UserEntity[];
   total: number;
   page: number;
-  limit: number;
+  pageSize: number;
 }
 
 export interface UpdateUserPayload {
@@ -44,18 +45,16 @@ export interface UpdateUserPayload {
   phoneNumber?: string;
   role?: Role;
   isActive?: boolean;
-  department?: string;
+  password?: string;
 }
 
 export interface CreateUserPayload {
   firstName: string;
   lastName: string;
   email: string;
-  phoneNumber: string;
+  phoneNumber?: string;
   password: string;
   role: Role;
-  department?: string;
-  isActive?: boolean;
 }
 
 export interface RegisterResponse {
@@ -86,26 +85,9 @@ export function useUsersQuery(params?: UsersListParams) {
     queryKey: usersKeys.list(params),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<UsersListResponse>('/users', { params });
-        
-        // Handle both wrapped and unwrapped responses
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as UsersListResponse;
-        }
-        
-        if (data && 'items' in data && 'total' in data) {
-          return data as UsersListResponse;
-        }
-        
-        console.warn('Unexpected users response format:', data);
-        return {
-          items: [],
-          total: 0,
-          page: params?.page || 1,
-          limit: params?.limit || 10,
-        } as UsersListResponse;
+        const res = await apiClient.get<import('@/types').ApiResponse<UserEntity[]>>('/users', { params });
+        const { items, total, page, pageSize } = unwrapList(res);
+        return { items, total, page, pageSize } as UsersListResponse;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error fetching users:', {
@@ -124,15 +106,8 @@ export function useUserQuery(id: string | undefined) {
     queryKey: usersKeys.detail(id ?? ''),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<UserEntity>(`/users/${id}`);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as UserEntity;
-        }
-        
-        return data as UserEntity;
+        const res = await apiClient.get<import('@/types').ApiResponse<UserEntity>>(`/users/${id}`);
+        return unwrapData(res);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching user ${id}:`, {
@@ -155,15 +130,8 @@ export function useCreateUserMutation() {
   return useMutation({
     mutationFn: async (payload: CreateUserPayload) => {
       try {
-        const res = await apiClient.post<RegisterResponse>('/users', payload);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as RegisterResponse;
-        }
-        
-        return data as RegisterResponse;
+        const res = await apiClient.post<import('@/types').ApiResponse<UserEntity>>('/users', payload);
+        return unwrapData(res);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error creating user:', {
@@ -187,15 +155,8 @@ export function useUpdateUserMutation() {
   return useMutation({
     mutationFn: async ({ id, payload }: { id: string; payload: UpdateUserPayload }) => {
       try {
-        const res = await apiClient.patch<UserEntity>(`/users/${id}`, payload);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as UserEntity;
-        }
-        
-        return data as UserEntity;
+        const res = await apiClient.patch<import('@/types').ApiResponse<UserEntity>>(`/users/${id}`, payload);
+        return unwrapData(res);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error updating user:', {

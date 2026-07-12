@@ -219,8 +219,13 @@ export const UsersPage: React.FC = () => {
   const updateUser = useUpdateUserMutation();
   const deleteUser = useDeleteUserMutation();
 
-  // Extract users array safely
-  const users: User[] = usersResponse?.items ?? [];
+  // Extract users array safely. UserEntity.phoneNumber is optional (backend may
+  // return phone in a different shape), but the local User type requires a
+  // string, so normalize via getUserPhone().
+  const users: User[] = (usersResponse?.items ?? []).map((u) => ({
+    ...u,
+    phoneNumber: getUserPhone(u),
+  }));
 
   // Role configuration
   const roleConfig: Record<Role, { color: string; icon: any; label: string }> = {
@@ -279,7 +284,6 @@ export const UsersPage: React.FC = () => {
         phoneNumber: values.phoneNumber,
         role: values.role,
         password: values.password,
-        isActive: true,
       });
       setAddModal(false);
       addForm.resetFields();
@@ -1135,7 +1139,7 @@ export const UsersPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button type="primary" htmlType="submit" loading={loading}>
+              <Button type="primary" htmlType="submit" loading={updateUser.isPending}>
                 Update Staff
               </Button>
               <Button onClick={() => {

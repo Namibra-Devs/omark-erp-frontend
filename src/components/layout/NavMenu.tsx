@@ -1,5 +1,5 @@
 // src/components/layout/NavMenu.tsx (Enhanced with live notifications using optimized API)
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import { Menu, Badge } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
@@ -18,45 +18,21 @@ import {
   NotificationOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
-import { useUnreadCountQuery } from '@/api/notifications';
+import { usePendingNotificationsCountQuery } from '@/api/notifications';
 
 export const NavMenu: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, hasRole } = useAuth();
 
-  // ── Unread Count Query (optimized - only fetches count) ──────────────────
-  const { 
-    data: unreadCount = 0, 
+  // ── Pending Notifications Count Query ─────────────────────────────────────
+  // Refetches every 30s on its own (see usePendingNotificationsCountQuery),
+  // and TanStack Query refetches on window focus by default, so navigating
+  // back to the tab / route keeps this reasonably fresh without extra effects.
+  const {
+    data: pendingCount = 0,
     isLoading: countLoading,
-    refetch: refetchCount
-  } = useUnreadCountQuery();
-
-  // ── Auto-refresh count every 30 seconds ──────────────────────────────────
-  useEffect(() => {
-    const interval = setInterval(() => {
-      refetchCount();
-    }, 30000); // 30 seconds
-
-    return () => clearInterval(interval);
-  }, [refetchCount]);
-
-  // ── Manual refresh on visibility change ──────────────────────────────────
-  useEffect(() => {
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        refetchCount();
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [refetchCount]);
-
-  // ── Refresh on route change ──────────────────────────────────────────────
-  useEffect(() => {
-    refetchCount();
-  }, [location.pathname, refetchCount]);
+  } = usePendingNotificationsCountQuery();
 
   // Get the current selected key based on path
   const getSelectedKey = () => {
@@ -170,15 +146,16 @@ export const NavMenu: React.FC = () => {
         label: (
           <span>
             Notifications
-            {!countLoading && unreadCount > 0 && (
-              <Badge 
-                count={unreadCount} 
-                size="small" 
-                style={{ 
-                  marginLeft: 8, 
+            {!countLoading && pendingCount > 0 && (
+              <Badge
+                count={pendingCount}
+                size="small"
+                title={`${pendingCount} pending notification${pendingCount === 1 ? '' : 's'}`}
+                style={{
+                  marginLeft: 8,
                   backgroundColor: '#ff4d4f',
                   boxShadow: '0 0 0 2px #001529',
-                }} 
+                }}
               />
             )}
           </span>
@@ -186,10 +163,8 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-  
-
     return items;
-  }, [hasRole, unreadCount, countLoading]);
+  }, [hasRole, pendingCount, countLoading]);
 
   // If no user, don't render menu
   if (!user) return null;

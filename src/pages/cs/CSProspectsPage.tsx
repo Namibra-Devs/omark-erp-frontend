@@ -48,21 +48,24 @@ import {
   GlobalOutlined,
   EnvironmentOutlined,
   IdcardOutlined,
-  CustomerServiceOutlined
+  CustomerServiceOutlined,
+  DollarOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
-import { prospectStatusLabels, prospectSourceLabels } from '@/constants/enums';
+import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
+import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
+import { prospectStatusLabels, prospectSourceLabels, interactionChannelLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import type { Prospect, ProspectStatus, ProspectSource } from '@/types';
-import { 
-  useProspectsQuery, 
-  useCreateProspectMutation, 
+import {
+  useProspectsQuery,
+  useCreateProspectMutation,
   useUpdateProspectMutation,
   useDeleteProspectMutation,
-  useProspectQuery
+  useInteractionsQuery
 } from '@/api/prospects';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -75,15 +78,21 @@ const { Text, Title } = Typography;
 
 export const CSProspectsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [editModal, setEditModal] = useState(false);
+  const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
+  const [convertModal, setConvertModal] = useState(false);
+  const [prospectToConvert, setProspectToConvert] = useState<Prospect | null>(null);
+  const [editForm] = Form.useForm();
   const [searchText, setSearchText] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
   const [activeTab, setActiveTab] = useState('all');
   const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
-  
+  const [logInteractionModal, setLogInteractionModal] = useState(false);
+
   // Export states
   const [exportModal, setExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
@@ -101,19 +110,19 @@ export const CSProspectsPage: React.FC = () => {
     q: searchText || undefined,
   });
 
+  const {
+    data: selectedProspectInteractions,
+    isLoading: interactionsLoading,
+    refetch: refetchInteractions,
+  } = useInteractionsQuery(selectedProspect?.id ?? '');
+
   // ── API Mutations ──────────────────────────────────────────────────────────
   const createProspect = useCreateProspectMutation();
   const updateProspect = useUpdateProspectMutation();
   const deleteProspect = useDeleteProspectMutation();
 
   // ── Data Extraction ──────────────────────────────────────────────────────
-  const prospects: Prospect[] = React.useMemo(() => {
-    if (!prospectsData) return [];
-    const data = (prospectsData as any).data ?? prospectsData;
-    if (Array.isArray(data)) return data;
-    if (data?.items) return data.items;
-    return [];
-  }, [prospectsData]);
+  const prospects: Prospect[] = prospectsData?.items ?? [];
 
   // ── Filter prospects by tab ─────────────────────────────────────────────
   const filteredProspects = prospects.filter(prospect => {
@@ -140,7 +149,6 @@ export const CSProspectsPage: React.FC = () => {
         ...values,
         source: 'customer_service' as ProspectSource,
         assignedUserId: user?.id || '4',
-        status: 'new' as ProspectStatus,
       };
 
       await createProspect.mutateAsync(payload);
@@ -153,6 +161,48 @@ export const CSProspectsPage: React.FC = () => {
       }, 500);
     } catch (error: any) {
       message.error(error?.message || 'Failed to add prospect');
+    }
+  };
+
+  const handleEditClick = (record: Prospect) => {
+    setEditingProspect(record);
+    editForm.setFieldsValue({
+      firstName: record.firstName,
+      lastName: record.lastName,
+      address: record.address,
+      phoneNumber: record.phoneNumber,
+      status: record.status,
+      reasonForContact: record.reasonForContact,
+      notes: record.notes,
+    });
+    setEditModal(true);
+  };
+
+  const handleEditProspect = async (values: any) => {
+    if (!editingProspect) return;
+    try {
+      await updateProspect.mutateAsync({
+        id: editingProspect.id,
+        data: {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          address: values.address,
+          phoneNumber: values.phoneNumber,
+          status: values.status,
+          reasonForContact: values.reasonForContact,
+          notes: values.notes,
+        },
+      });
+      message.success('Prospect updated successfully!');
+      setEditModal(false);
+      setEditingProspect(null);
+      editForm.resetFields();
+
+      setTimeout(() => {
+        refetchProspects();
+      }, 300);
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to update prospect');
     }
   };
 
@@ -388,9 +438,28 @@ export const CSProspectsPage: React.FC = () => {
               }}
             />
           </Tooltip>
-          <Tooltip title="Edit Status">
-            <Dropdown 
-              menu={{ 
+          <Tooltip title="Edit Prospect">
+            <Button
+              icon={<EditOutlined />}
+              onClick={() => handleEditClick(record)}
+            />
+          </Tooltip>
+          {record.status !== 'purchased' && (
+            <Tooltip title="Convert to Customer">
+              <Button
+                type="primary"
+                icon={<DollarOutlined />}
+                onClick={() => {
+                  setProspectToConvert(record);
+                  setConvertModal(true);
+                }}
+                style={{ background: '#52c41a', borderColor: '#52c41a' }}
+              />
+            </Tooltip>
+          )}
+          <Tooltip title="Quick Status Change">
+            <Dropdown
+              menu={{
                 items: [
                   { key: 'new', label: 'New', onClick: () => handleStatusChange(record.id, 'new') },
                   { key: 'meeting_scheduled', label: 'Meeting Scheduled', onClick: () => handleStatusChange(record.id, 'meeting_scheduled') },
@@ -399,23 +468,25 @@ export const CSProspectsPage: React.FC = () => {
                   { key: 'postponed', label: 'Postponed', onClick: () => handleStatusChange(record.id, 'postponed') },
                   { key: 'canceled', label: 'Canceled', onClick: () => handleStatusChange(record.id, 'canceled') },
                 ]
-              }} 
+              }}
               trigger={['click']}
             >
-              <Button icon={<EditOutlined />} />
+              <Button icon={<ClockCircleOutlined />} />
             </Dropdown>
           </Tooltip>
-          <Popconfirm
-            title="Delete Prospect"
-            description={`Are you sure you want to delete ${record.firstName} ${record.lastName}?`}
-            onConfirm={() => handleDeleteProspect(record.id)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Tooltip title="Delete">
-              <Button danger icon={<DeleteOutlined />} />
-            </Tooltip>
-          </Popconfirm>
+          {hasRole(['admin']) && (
+            <Popconfirm
+              title="Delete Prospect"
+              description={`Are you sure you want to delete ${record.firstName} ${record.lastName}? This also removes its interactions and appointments.`}
+              onConfirm={() => handleDeleteProspect(record.id)}
+              okText="Yes"
+              cancelText="No"
+            >
+              <Tooltip title="Delete (admin only)">
+                <Button danger icon={<DeleteOutlined />} />
+              </Tooltip>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -509,8 +580,34 @@ export const CSProspectsPage: React.FC = () => {
         {/* Quick Actions */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
-            <Button type="primary" icon={<EditOutlined />}>
-              Update Status
+            <Button
+              type="primary"
+              icon={<EditOutlined />}
+              onClick={() => {
+                setViewDrawerOpen(false);
+                handleEditClick(selectedProspect);
+              }}
+            >
+              Edit Prospect
+            </Button>
+            {selectedProspect.status !== 'purchased' && (
+              <Button
+                icon={<DollarOutlined />}
+                style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff' }}
+                onClick={() => {
+                  setViewDrawerOpen(false);
+                  setProspectToConvert(selectedProspect);
+                  setConvertModal(true);
+                }}
+              >
+                Convert to Customer
+              </Button>
+            )}
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() => setLogInteractionModal(true)}
+            >
+              Log Interaction
             </Button>
             <Button icon={<MessageOutlined />}>
               Send Message
@@ -586,29 +683,51 @@ export const CSProspectsPage: React.FC = () => {
           </Row>
         )}
 
-        {/* Timeline */}
+        {/* Interactions */}
         <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
           <Col span={24}>
-            <Card size="small" title="Activity Timeline" bordered={false} style={{ background: '#fafafa' }}>
-              <Timeline>
-                <Timeline.Item color="green">
-                  <Text>Prospect created</Text>
-                  <br />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {dayjs(selectedProspect.createdAt).format('MMMM DD, YYYY HH:mm')}
-                  </Text>
-                </Timeline.Item>
-                <Timeline.Item color="blue">
-                  <Text>Status: {prospectStatusLabels[selectedProspect.status as keyof typeof prospectStatusLabels]}</Text>
-                  <br />
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Updated {dayjs(selectedProspect.updatedAt).fromNow()}
-                  </Text>
-                </Timeline.Item>
-                <Timeline.Item color="gray">
-                  <Text>Awaiting further action</Text>
-                </Timeline.Item>
-              </Timeline>
+            <Card
+              size="small"
+              title="Conversation Log"
+              bordered={false}
+              style={{ background: '#fafafa' }}
+              extra={
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => setLogInteractionModal(true)}
+                >
+                  Log Interaction
+                </Button>
+              }
+            >
+              {interactionsLoading ? (
+                <div style={{ textAlign: 'center', padding: '20px' }}>
+                  <Spin size="small" />
+                </div>
+              ) : selectedProspectInteractions && selectedProspectInteractions.length > 0 ? (
+                <Timeline>
+                  {selectedProspectInteractions.map((interaction) => (
+                    <Timeline.Item key={interaction.id} color="blue">
+                      <Text strong>
+                        {interactionChannelLabels[interaction.channel as keyof typeof interactionChannelLabels] || interaction.channel}
+                      </Text>
+                      <br />
+                      <Text>{interaction.response}</Text>
+                      <br />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {dayjs(interaction.occurredAt).format('MMM DD, YYYY HH:mm')} ({dayjs(interaction.occurredAt).fromNow()})
+                      </Text>
+                    </Timeline.Item>
+                  ))}
+                </Timeline>
+              ) : (
+                <Empty
+                  description="No interactions logged yet"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              )}
             </Card>
           </Col>
         </Row>
@@ -892,6 +1011,114 @@ export const CSProspectsPage: React.FC = () => {
         </Form>
       </Modal>
 
+      {/* Edit Prospect Modal */}
+      <Modal
+        title={
+          <Space>
+            <EditOutlined style={{ color: tokens.primary }} />
+            <Text strong>Edit Prospect</Text>
+          </Space>
+        }
+        open={editModal}
+        onCancel={() => {
+          setEditModal(false);
+          setEditingProspect(null);
+          editForm.resetFields();
+        }}
+        footer={null}
+        width={600}
+        style={{ maxWidth: '95%', top: 20 }}
+        bodyStyle={{ padding: '16px' }}
+      >
+        <Form
+          form={editForm}
+          layout="vertical"
+          onFinish={handleEditProspect}
+        >
+          <Row gutter={[8, 0]}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="firstName"
+                label="First Name"
+                rules={[{ required: true, message: 'First name is required' }]}
+              >
+                <Input placeholder="First name" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="lastName"
+                label="Last Name"
+                rules={[{ required: true, message: 'Last name is required' }]}
+              >
+                <Input placeholder="Last name" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="address"
+            label="Address"
+            rules={[{ required: true, message: 'Address is required' }]}
+          >
+            <Input.TextArea rows={2} placeholder="Full address" />
+          </Form.Item>
+
+          <Form.Item
+            name="phoneNumber"
+            label="Phone Number"
+            rules={[{ required: true, message: 'Phone number is required' }]}
+          >
+            <PhoneInput />
+          </Form.Item>
+
+          <Form.Item
+            name="status"
+            label="Status"
+            rules={[{ required: true, message: 'Please select a status' }]}
+          >
+            <Select placeholder="Select status">
+              <Option value="new">New</Option>
+              <Option value="meeting_scheduled">Meeting Scheduled</Option>
+              <Option value="meeting_completed">Meeting Completed</Option>
+              <Option value="suspended">Suspended</Option>
+              <Option value="postponed">Postponed</Option>
+              <Option value="canceled">Canceled</Option>
+              <Option value="purchased">Purchased</Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="reasonForContact"
+            label="Reason for Contact"
+          >
+            <TextArea rows={3} placeholder="Describe the reason for contact" />
+          </Form.Item>
+
+          <Form.Item
+            name="notes"
+            label="Additional Notes"
+          >
+            <TextArea rows={3} placeholder="Any additional notes" />
+          </Form.Item>
+
+          <Form.Item>
+            <Space wrap>
+              <Button type="primary" htmlType="submit" loading={updateProspect.isPending}>
+                Save Changes
+              </Button>
+              <Button onClick={() => {
+                setEditModal(false);
+                setEditingProspect(null);
+                editForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
       {/* Premium Slide-in Drawer */}
       <Drawer
         title={null}
@@ -1021,6 +1248,22 @@ export const CSProspectsPage: React.FC = () => {
           </Text>
         </div>
       </Modal>
+
+      <ConvertProspectModal
+        open={convertModal}
+        prospect={prospectToConvert}
+        onClose={() => {
+          setConvertModal(false);
+          setProspectToConvert(null);
+        }}
+      />
+
+      <LogInteractionModal
+        open={logInteractionModal}
+        prospect={selectedProspect}
+        onClose={() => setLogInteractionModal(false)}
+        onLogged={() => refetchInteractions()}
+      />
     </div>
   );
 };

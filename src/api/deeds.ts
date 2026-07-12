@@ -1,71 +1,29 @@
 // src/api/deeds.ts
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import apiClient from '@/api/client';
+import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
+import type { Deed, ApiResponse } from '@/types';
 
-// --- Types ---
-
-export type DeedStatus = 'draft' | 'generated' | 'signed' | 'registered';
-
-export interface DeedEntity {
-  id: string;
-  customerId: string;
-  customerName?: string;
-  propertyId: string;
-  planId?: string;
-  status: DeedStatus;
-  documentUrl?: string;
-  generatedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Deed {
-  id: string;
-  customerId: string;
-  propertyId: string;
-  deedNumber?: string;
-  witnesses?: Array<{ name: string; contact: string }>;
-  businessContacts?: string;
-  documentUrl?: string;
-  generatedByUserId?: string;
-  generatedBy?: string;
-  generatedAt: string;
-  status: DeedStatus;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type { Deed };
 
 export interface DeedsListParams {
   page?: number;
-  limit?: number;
-  status?: DeedStatus;
+  pageSize?: number;
   customerId?: string;
-  search?: string;
 }
 
-export interface DeedsListResponse {
-  items: DeedEntity[];
+export interface DeedsListResult {
+  items: Deed[];
   total: number;
   page: number;
-  limit: number;
+  pageSize: number;
 }
 
 export interface GenerateDeedPayload {
   customerId: string;
   propertyId: string;
-  planId?: string;
-  witnesses?: Array<{ name: string; contact: string }>;
-  businessContacts?: string;
-  deedType?: string;
-  notes?: string;
-}
-
-export interface DeedDocumentResponse {
-  id: string;
-  documentUrl: string;
-  mimeType: string;
+  witnesses: Array<{ name: string; contact: string }>;
+  businessContacts: string;
 }
 
 // --- Query Keys ---
@@ -74,8 +32,6 @@ export const deedsKeys = {
   all: ['deeds'] as const,
   lists: () => [...deedsKeys.all, 'list'] as const,
   list: (params?: DeedsListParams) => [...deedsKeys.lists(), params ?? {}] as const,
-  details: () => [...deedsKeys.all, 'detail'] as const,
-  detail: (id: string) => [...deedsKeys.details(), id] as const,
   document: (id: string) => [...deedsKeys.all, 'document', id] as const,
 };
 
@@ -86,25 +42,8 @@ export function useDeedsQuery(params?: DeedsListParams) {
     queryKey: deedsKeys.list(params),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<DeedsListResponse>('/deeds', { params });
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as DeedsListResponse;
-        }
-        
-        if (data && 'items' in data && 'total' in data) {
-          return data as DeedsListResponse;
-        }
-        
-        console.warn('Unexpected deeds response format:', data);
-        return {
-          items: [],
-          total: 0,
-          page: params?.page || 1,
-          limit: params?.limit || 10,
-        } as DeedsListResponse;
+        const res = await apiClient.get<ApiResponse<Deed[]>>('/deeds', { params });
+        return unwrapList(res) as DeedsListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error fetching deeds:', {
@@ -118,76 +57,17 @@ export function useDeedsQuery(params?: DeedsListParams) {
   });
 }
 
-export function useDeedQuery(id: string | undefined) {
-  return useQuery({
-    queryKey: deedsKeys.detail(id ?? ''),
-    queryFn: async () => {
-      try {
-        const res = await apiClient.get<Deed>(`/deeds/${id}`);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Deed;
-        }
-        
-        return data as Deed;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error(`Error fetching deed ${id}:`, {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    enabled: Boolean(id),
-  });
-}
-
 export function useGenerateDeedMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (payload: GenerateDeedPayload) => {
       try {
-        const res = await apiClient.post<Deed>('/deeds', payload);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Deed;
-        }
-        
-        return data as Deed;
+        const res = await apiClient.post<ApiResponse<Deed>>('/deeds', payload);
+        return unwrapData(res);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error generating deed:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: deedsKeys.lists() });
-    },
-  });
-}
-
-export function useDeleteDeedMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      try {
-        await apiClient.delete(`/deeds/${id}`);
-        return id;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error deleting deed:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
@@ -206,15 +86,10 @@ export function useDeedDocumentQuery(id: string | undefined) {
     queryKey: deedsKeys.document(id ?? ''),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<DeedDocumentResponse>(`/deeds/${id}/document`);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as DeedDocumentResponse;
-        }
-        
-        return data as DeedDocumentResponse;
+        const res = await apiClient.get<ApiResponse<{ id: string; documentUrl: string; mimeType?: string }>>(
+          `/deeds/${id}/document`
+        );
+        return unwrapData(res);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching deed document ${id}:`, {
@@ -232,95 +107,30 @@ export function useDeedDocumentQuery(id: string | undefined) {
 // --- Utility Functions ---
 
 /**
- * Download a deed PDF document
- * @param deedId - The ID of the deed to download
- * @param filename - Optional filename (defaults to deed-{deedId}.pdf)
- * @returns Promise that resolves when download is complete
+ * Deed documents are hosted at an external documentUrl (e.g. S3) rather than
+ * streamed through this API, so "download" just opens that URL.
  */
-export async function downloadDeedPDF(deedId: string, filename?: string): Promise<Blob> {
-  try {
-    const response = await apiClient.get(`/deeds/${deedId}/document`, {
-      responseType: 'blob',
-    });
-    
-    return response.data as Blob;
-  } catch (error) {
-    if (error instanceof AxiosError) {
-      console.error('Error downloading deed PDF:', {
-        status: error.response?.status,
-        message: error.response?.data?.message || error.message,
-      });
-    }
-    throw error;
+export async function downloadDeedPDF(deedId: string): Promise<string> {
+  const res = await apiClient.get<ApiResponse<{ id: string; documentUrl: string }>>(`/deeds/${deedId}/document`);
+  const data = unwrapData(res);
+  if (!data?.documentUrl) {
+    throw new Error('Deed document is not ready yet');
   }
+  return data.documentUrl;
 }
 
-/**
- * Download a deed PDF and trigger browser download
- * @param deedId - The ID of the deed to download
- * @param filename - Optional filename (defaults to deed-{deedId}.pdf)
- */
-export async function downloadAndSaveDeedPDF(deedId: string, filename?: string): Promise<void> {
-  try {
-    const blob = await downloadDeedPDF(deedId);
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = filename || `deed-${deedId}.pdf`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
-  } catch (error) {
-    console.error('Error downloading and saving deed PDF:', error);
-    throw error;
-  }
+export async function downloadAndSaveDeedPDF(deedId: string): Promise<void> {
+  const documentUrl = await downloadDeedPDF(deedId);
+  window.open(documentUrl, '_blank', 'noopener,noreferrer');
 }
 
-/**
- * Get deed status configuration for UI display
- */
-export const getDeedStatusConfig = (status: DeedStatus) => {
-  const configs: Record<DeedStatus, { color: string; label: string; icon?: string }> = {
-    draft: { color: 'default', label: 'Draft' },
-    generated: { color: 'blue', label: 'Generated' },
-    signed: { color: 'green', label: 'Signed' },
-    registered: { color: 'purple', label: 'Registered' },
-  };
-  return configs[status] || configs.draft;
-};
-
-/**
- * Format deed number for display
- */
-export const formatDeedNumber = (deedNumber?: string): string => {
-  if (!deedNumber) return 'N/A';
-  return deedNumber;
-};
+export const formatDeedNumber = (deed: Deed): string => `#${deed.id.slice(0, 8).toUpperCase()}`;
 
 // --- Backward Compatibility (Deprecated) ---
 
-/**
- * @deprecated Use useDeedsQuery instead
- */
+/** @deprecated Use useDeedsQuery instead */
 export const useDeeds = useDeedsQuery;
-
-/**
- * @deprecated Use useDeedQuery instead
- */
-export const useDeed = useDeedQuery;
-
-/**
- * @deprecated Use useGenerateDeedMutation instead
- */
+/** @deprecated Use useGenerateDeedMutation instead */
 export const useGenerateDeed = useGenerateDeedMutation;
-
-/**
- * @deprecated Use useDeleteDeedMutation instead
- */
-export const useDeleteDeed = useDeleteDeedMutation;
-
-/**
- * @deprecated Use useDeedDocumentQuery instead
- */
+/** @deprecated Use useDeedDocumentQuery instead */
 export const useDeedDocument = useDeedDocumentQuery;

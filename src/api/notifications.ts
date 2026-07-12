@@ -1,60 +1,27 @@
 // src/api/notifications.ts
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import apiClient from '@/api/client';
+// Implements the "Notifications" tag from the API docs: this is an
+// SMS delivery log (GET /notifications) plus a test-send route
+// (POST /notifications/test). There is no read/unread, resend, or delete
+// concept on the backend — those actions don't exist as API routes.
+import { useMutation, useQuery } from '@tanstack/react-query';
+import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
+import type { NotificationLog, NotificationType, NotificationStatus, ApiResponse } from '@/types';
 
-// --- Types ---
-
-export type NotificationStatus = 'sent' | 'failed' | 'pending' | 'unread' | 'read';
-export type NotificationChannel = 'sms' | 'email';
-export type NotificationType = 'contribution_due_soon' | 'contribution_overdue' | 'payment_confirmation' | 'general';
-
-export interface NotificationEntity {
-  id: string;
-  channel: NotificationChannel;
-  recipient: string;
-  message: string;
-  status: NotificationStatus;
-  errorMessage?: string;
-  sentAt?: string;
-  createdAt: string;
-}
-
-export interface Notification {
-  id: string;
-  customerId: string;
-  phoneNumber?: string;
-  type: NotificationType;
-  messageBody: string;
-  status: NotificationStatus;
-  providerMessageId?: string;
-  sentAt?: string;
-  readAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type { NotificationLog, NotificationType, NotificationStatus };
 
 export interface NotificationsListParams {
   page?: number;
-  limit?: number;
-  status?: NotificationStatus | 'unread';
-  channel?: NotificationChannel;
+  pageSize?: number;
   type?: NotificationType;
-  search?: string;
+  status?: NotificationStatus;
 }
 
-export interface NotificationsListResponse {
-  items: NotificationEntity[];
+export interface NotificationsListResult {
+  items: NotificationLog[];
   total: number;
   page: number;
-  limit: number;
-}
-
-export interface SendNotificationPayload {
-  customerId: string;
-  type: NotificationType;
-  messageBody: string;
-  phoneNumber?: string;
+  pageSize: number;
 }
 
 export interface SendTestSMSPayload {
@@ -62,9 +29,9 @@ export interface SendTestSMSPayload {
   message: string;
 }
 
-export interface SendTestSMSResponse {
-  id: string;
-  status: NotificationStatus;
+export interface SendTestSMSResult {
+  sent: boolean;
+  providerMessageId?: string;
 }
 
 // --- Query Keys ---
@@ -72,12 +39,7 @@ export interface SendTestSMSResponse {
 export const notificationsKeys = {
   all: ['notifications'] as const,
   lists: () => [...notificationsKeys.all, 'list'] as const,
-  list: (params?: NotificationsListParams) =>
-    [...notificationsKeys.lists(), params ?? {}] as const,
-  details: () => [...notificationsKeys.all, 'detail'] as const,
-  detail: (id: string) => [...notificationsKeys.details(), id] as const,
-  unread: () => [...notificationsKeys.all, 'unread'] as const,
-  count: () => [...notificationsKeys.all, 'count'] as const,
+  list: (params?: NotificationsListParams) => [...notificationsKeys.lists(), params ?? {}] as const,
 };
 
 // --- Hooks ---
@@ -87,25 +49,8 @@ export function useNotificationsQuery(params?: NotificationsListParams) {
     queryKey: notificationsKeys.list(params),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<NotificationsListResponse>('/notifications', { params });
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as NotificationsListResponse;
-        }
-        
-        if (data && 'items' in data && 'total' in data) {
-          return data as NotificationsListResponse;
-        }
-        
-        console.warn('Unexpected notifications response format:', data);
-        return {
-          items: [],
-          total: 0,
-          page: params?.page || 1,
-          limit: params?.limit || 10,
-        } as NotificationsListResponse;
+        const res = await apiClient.get<ApiResponse<NotificationLog[]>>('/notifications', { params });
+        return unwrapList(res) as NotificationsListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error fetching notifications:', {
@@ -119,65 +64,23 @@ export function useNotificationsQuery(params?: NotificationsListParams) {
   });
 }
 
-export function useUnreadNotificationsQuery() {
+/**
+ * Count of pending (undelivered) SMS notifications, used for the nav badge.
+ * There is no dedicated "unread count" endpoint — this reads the pagination
+ * meta.total off a 1-row pending-status query instead of fetching a full page.
+ */
+export function usePendingNotificationsCountQuery() {
   return useQuery({
-    queryKey: notificationsKeys.unread(),
+    queryKey: [...notificationsKeys.all, 'pending-count'],
     queryFn: async () => {
       try {
-        const res = await apiClient.get<NotificationsListResponse>('/notifications', {
-          params: { status: 'unread' }
+        const res = await apiClient.get<ApiResponse<NotificationLog[]>>('/notifications', {
+          params: { status: 'pending', pageSize: 1 },
         });
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as NotificationsListResponse;
-        }
-        
-        if (data && 'items' in data && 'total' in data) {
-          return data as NotificationsListResponse;
-        }
-        
-        return {
-          items: [],
-          total: 0,
-          page: 1,
-          limit: 10,
-        } as NotificationsListResponse;
+        return unwrapList(res).total;
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error('Error fetching unread notifications:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-  });
-}
-
-export function useUnreadCountQuery() {
-  return useQuery({
-    queryKey: notificationsKeys.count(),
-    queryFn: async () => {
-      try {
-        const res = await apiClient.get<{ count: number }>('/notifications/unread/count');
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data.count as number;
-        }
-        
-        if (data && 'count' in data) {
-          return data.count as number;
-        }
-        
-        return 0;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error fetching unread count:', {
+          console.error('Error fetching pending notifications count:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
@@ -185,147 +88,16 @@ export function useUnreadCountQuery() {
         return 0;
       }
     },
-    refetchInterval: 30000, // Refetch every 30 seconds
-  });
-}
-
-export function useNotificationQuery(id: string | undefined) {
-  return useQuery({
-    queryKey: notificationsKeys.detail(id ?? ''),
-    queryFn: async () => {
-      try {
-        const res = await apiClient.get<Notification>(`/notifications/${id}`);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Notification;
-        }
-        
-        return data as Notification;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error(`Error fetching notification ${id}:`, {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    enabled: Boolean(id),
-  });
-}
-
-// --- Notification Mutations ---
-
-export function useSendNotificationMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (payload: SendNotificationPayload) => {
-      try {
-        const res = await apiClient.post<Notification>('/notifications', payload);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Notification;
-        }
-        
-        return data as Notification;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error sending notification:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.unread() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.count() });
-    },
-  });
-}
-
-export function useResendNotificationMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      try {
-        const res = await apiClient.post<Notification>(`/notifications/${id}/resend`);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Notification;
-        }
-        
-        return data as Notification;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error resending notification:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.unread() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.count() });
-    },
-  });
-}
-
-export function useDeleteNotificationMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      try {
-        await apiClient.delete(`/notifications/${id}`);
-        return id;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error deleting notification:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.unread() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.count() });
-    },
+    refetchInterval: 30000,
   });
 }
 
 export function useSendTestSMSMutation() {
-  const queryClient = useQueryClient();
-
   return useMutation({
     mutationFn: async (payload: SendTestSMSPayload) => {
       try {
-        const res = await apiClient.post<SendTestSMSResponse>('/notifications/test', payload);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as SendTestSMSResponse;
-        }
-        
-        return data as SendTestSMSResponse;
+        const res = await apiClient.post<ApiResponse<SendTestSMSResult>>('/notifications/test', payload);
+        return unwrapData(res);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error sending test SMS:', {
@@ -335,71 +107,6 @@ export function useSendTestSMSMutation() {
         }
         throw error;
       }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.list() });
-    },
-  });
-}
-
-// --- Mark as Read Mutations ---
-
-export function useMarkAsReadMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      try {
-        const res = await apiClient.patch<Notification>(`/notifications/${id}/read`);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Notification;
-        }
-        
-        return data as Notification;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error marking notification as read:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.unread() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.count() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.detail(variables) });
-    },
-  });
-}
-
-export function useMarkAllAsReadMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async () => {
-      try {
-        const res = await apiClient.post('/notifications/read-all');
-        return res.data;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error marking all notifications as read:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.unread() });
-      queryClient.invalidateQueries({ queryKey: notificationsKeys.count() });
     },
   });
 }
@@ -411,68 +118,14 @@ export const getNotificationStatusConfig = (status: NotificationStatus) => {
     sent: { color: 'green', label: 'Sent' },
     failed: { color: 'red', label: 'Failed' },
     pending: { color: 'blue', label: 'Pending' },
-    unread: { color: 'blue', label: 'Unread' },
-    read: { color: 'green', label: 'Read' },
   };
   return configs[status] || configs.pending;
 };
 
 export const getNotificationTypeConfig = (type: NotificationType) => {
-  const configs: Record<NotificationType, { color: string; label: string; icon?: string }> = {
+  const configs: Record<NotificationType, { color: string; label: string }> = {
     contribution_due_soon: { color: 'blue', label: 'Due Soon' },
     contribution_overdue: { color: 'red', label: 'Overdue' },
-    payment_confirmation: { color: 'green', label: 'Payment Confirmed' },
-    general: { color: 'default', label: 'General' },
   };
-  return configs[type] || configs.general;
+  return configs[type] || configs.contribution_due_soon;
 };
-
-export const getNotificationChannelConfig = (channel: NotificationChannel) => {
-  const configs: Record<NotificationChannel, { color: string; label: string }> = {
-    sms: { color: 'blue', label: 'SMS' },
-    email: { color: 'orange', label: 'Email' },
-  };
-  return configs[channel] || configs.sms;
-};
-
-// --- Backward Compatibility (Deprecated) ---
-
-/**
- * @deprecated Use useNotificationsQuery instead
- */
-export const useNotifications = useNotificationsQuery;
-
-/**
- * @deprecated Use useNotificationQuery instead
- */
-export const useNotification = useNotificationQuery;
-
-/**
- * @deprecated Use useSendNotificationMutation instead
- */
-export const useSendNotification = useSendNotificationMutation;
-
-/**
- * @deprecated Use useResendNotificationMutation instead
- */
-export const useResendNotification = useResendNotificationMutation;
-
-/**
- * @deprecated Use useDeleteNotificationMutation instead
- */
-export const useDeleteNotification = useDeleteNotificationMutation;
-
-/**
- * @deprecated Use useSendTestSMSMutation instead
- */
-export const useSendTestSMS = useSendTestSMSMutation;
-
-/**
- * @deprecated Use useMarkAsReadMutation instead
- */
-export const useMarkAsRead = useMarkAsReadMutation;
-
-/**
- * @deprecated Use useMarkAllAsReadMutation instead
- */
-export const useMarkAllAsRead = useMarkAllAsReadMutation;

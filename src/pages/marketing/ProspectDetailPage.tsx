@@ -1,14 +1,15 @@
 // src/pages/marketing/ProspectDetailPage.tsx
 import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Card, Row, Col, Typography, Tag, Button, Space, Timeline, Modal, Form, Input, Select, message, Descriptions, Badge, Spin, Empty, Alert } from 'antd';
-import { 
-  ArrowLeftOutlined, 
-  PhoneOutlined, 
-  MailOutlined, 
+import { Card, Row, Col, Typography, Tag, Button, Space, Timeline, Modal, Form, Input, Select, message, Descriptions, Badge, Spin, Empty, Alert, Popconfirm } from 'antd';
+import {
+  ArrowLeftOutlined,
+  PhoneOutlined,
+  MailOutlined,
   HomeOutlined,
   ClockCircleOutlined,
   EditOutlined,
+  DeleteOutlined,
   WhatsAppOutlined,
   UserOutlined,
   ReloadOutlined
@@ -16,14 +17,19 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PhoneInput } from '@/components/shared/PhoneInput';
+import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
+import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
+import { DollarOutlined, PlusOutlined } from '@ant-design/icons';
 import { prospectStatusLabels, interactionChannelLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { 
-  useProspectQuery, 
-  useInteractionsQuery, 
-  useUpdateProspectMutation
+import {
+  useProspectQuery,
+  useInteractionsQuery,
+  useUpdateProspectMutation,
+  useDeleteProspectMutation
 } from '@/api/prospects';
 
 dayjs.extend(relativeTime);
@@ -34,46 +40,82 @@ const { Option } = Select;
 export const ProspectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { hasRole } = useAuth();
 
   // Modal state
-  const [statusModal, setStatusModal] = useState(false);
-  const [statusForm] = Form.useForm();
+  const [editModal, setEditModal] = useState(false);
+  const [editForm] = Form.useForm();
+  const [convertModal, setConvertModal] = useState(false);
+  const [logInteractionModal, setLogInteractionModal] = useState(false);
 
   // API hooks
   const prospectId = id || '';
-  const { 
-    data: prospectData, 
+  const {
+    data: prospectData,
     isLoading: isProspectLoading,
     error: prospectError,
     refetch: refetchProspect
   } = useProspectQuery(prospectId);
-  
-  const { 
-    data: interactionsData, 
-    isLoading: isInteractionsLoading
+
+  const {
+    data: interactionsData,
+    isLoading: isInteractionsLoading,
+    refetch: refetchInteractions
   } = useInteractionsQuery(prospectId);
 
   const updateProspectMutation = useUpdateProspectMutation();
+  const deleteProspectMutation = useDeleteProspectMutation();
 
   // Extract data
   const prospect = prospectData as any;
-  const interactions = (interactionsData as any)?.data || [];
+  // useInteractionsQuery resolves directly to the interactions array now
+  // (see src/api/prospects.ts) — no nested `.data` to unwrap.
+  const interactions = interactionsData ?? [];
 
-  const handleStatusUpdate = async (values: { status: ProspectStatus }) => {
+  const openEditModal = () => {
+    editForm.setFieldsValue({
+      firstName: prospect.firstName,
+      lastName: prospect.lastName,
+      address: prospect.address,
+      phoneNumber: prospect.phoneNumber,
+      status: prospect.status,
+      reasonForContact: prospect.reasonForContact,
+      notes: prospect.notes,
+    });
+    setEditModal(true);
+  };
+
+  const handleEditProspect = async (values: any) => {
     try {
       await updateProspectMutation.mutateAsync({
         id: prospectId,
-        data: { 
-          status: values.status 
+        data: {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          address: values.address,
+          phoneNumber: values.phoneNumber,
+          status: values.status,
+          reasonForContact: values.reasonForContact,
+          notes: values.notes,
         },
       });
-      setStatusModal(false);
-      statusForm.resetFields();
-      message.success(`Status updated to ${prospectStatusLabels[values.status]}`);
+      setEditModal(false);
+      editForm.resetFields();
+      message.success('Prospect updated successfully!');
       await refetchProspect();
     } catch (err: any) {
-      const errorMsg = err?.response?.data?.message || err?.message || 'Failed to update status.';
+      const errorMsg = err?.response?.data?.message || err?.message || 'Failed to update prospect.';
+      message.error(errorMsg);
+    }
+  };
+
+  const handleDeleteProspect = async () => {
+    try {
+      await deleteProspectMutation.mutateAsync(prospectId);
+      message.success('Prospect deleted successfully!');
+      navigate('/marketing/prospects');
+    } catch (err: any) {
+      const errorMsg = err?.response?.data?.message || err?.message || 'Failed to delete prospect.';
       message.error(errorMsg);
     }
   };
@@ -150,29 +192,53 @@ export const ProspectDetailPage: React.FC = () => {
 
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
-      <PageHeader
-        title={`${prospect.firstName} ${prospect.lastName}`}
-        actions={[
-          {
-            label: 'Back',
-            onClick: () => navigate('/marketing/prospects'),
-            icon: <ArrowLeftOutlined />,
-          },
-          {
-            label: 'Update Status',
-            onClick: () => setStatusModal(true),
-            icon: <EditOutlined />,
-          },
-          {
-            label: 'Refresh',
-            onClick: () => {
-              refetchProspect();
-              message.success('Refreshed!');
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+        <PageHeader
+          title={`${prospect.firstName} ${prospect.lastName}`}
+          actions={[
+            {
+              label: 'Back',
+              onClick: () => navigate('/marketing/prospects'),
+              icon: <ArrowLeftOutlined />,
             },
-            icon: <ReloadOutlined />,
-          },
-        ]}
-      />
+            {
+              label: 'Edit Prospect',
+              onClick: openEditModal,
+              icon: <EditOutlined />,
+            },
+            ...(prospect.status !== 'purchased'
+              ? [
+                  {
+                    label: 'Convert to Customer',
+                    onClick: () => setConvertModal(true),
+                    icon: <DollarOutlined />,
+                  },
+                ]
+              : []),
+            {
+              label: 'Refresh',
+              onClick: () => {
+                refetchProspect();
+                message.success('Refreshed!');
+              },
+              icon: <ReloadOutlined />,
+            },
+          ]}
+        />
+        {hasRole(['admin']) && (
+          <Popconfirm
+            title="Delete Prospect"
+            description={`Are you sure you want to delete ${prospect.firstName} ${prospect.lastName}? This also removes its interactions and appointments.`}
+            onConfirm={handleDeleteProspect}
+            okText="Yes"
+            cancelText="No"
+          >
+            <Button danger icon={<DeleteOutlined />} style={{ marginBottom: 24 }}>
+              Delete (admin only)
+            </Button>
+          </Popconfirm>
+        )}
+      </div>
 
       <Row gutter={[16, 16]}>
         {/* Left Column - Prospect Info */}
@@ -232,8 +298,18 @@ export const ProspectDetailPage: React.FC = () => {
 
         {/* Right Column - Interactions */}
         <Col xs={24} lg={12}>
-          <Card 
-            title="Interactions Timeline" 
+          <Card
+            title="Interactions Timeline"
+            extra={
+              <Button
+                type="primary"
+                size="small"
+                icon={<PlusOutlined />}
+                onClick={() => setLogInteractionModal(true)}
+              >
+                Log Interaction
+              </Button>
+            }
             style={{ marginBottom: 16, height: '100%' }}
             bodyStyle={{ padding: '16px', maxHeight: '500px', overflowY: 'auto' }}
           >
@@ -277,49 +353,113 @@ export const ProspectDetailPage: React.FC = () => {
         </Col>
       </Row>
 
-      {/* Update Status Modal */}
+      {/* Edit Prospect Modal */}
       <Modal
-        title="Update Status"
-        open={statusModal}
+        title="Edit Prospect"
+        open={editModal}
         onCancel={() => {
-          setStatusModal(false);
-          statusForm.resetFields();
+          setEditModal(false);
+          editForm.resetFields();
         }}
         footer={null}
-        width={400}
+        width={600}
         style={{ maxWidth: '95%', top: 20 }}
         bodyStyle={{ padding: '16px' }}
       >
-        <Form form={statusForm} layout="vertical" onFinish={handleStatusUpdate}>
+        <Form form={editForm} layout="vertical" onFinish={handleEditProspect}>
+          <Row gutter={[8, 0]}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="firstName"
+                label="First Name"
+                rules={[{ required: true, message: 'First name is required' }]}
+              >
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="lastName"
+                label="Last Name"
+                rules={[{ required: true, message: 'Last name is required' }]}
+              >
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="address"
+            label="Address"
+            rules={[{ required: true, message: 'Address is required' }]}
+          >
+            <Input.TextArea rows={2} />
+          </Form.Item>
+
+          <Form.Item
+            name="phoneNumber"
+            label="Phone Number"
+            rules={[{ required: true, message: 'Phone number is required' }]}
+          >
+            <PhoneInput />
+          </Form.Item>
+
           <Form.Item
             name="status"
-            label="New Status"
+            label="Status"
             rules={[{ required: true, message: 'Please select a status' }]}
-            initialValue={prospect.status}
           >
-            <Select placeholder="Select new status" style={{ width: '100%' }}>
+            <Select placeholder="Select status" style={{ width: '100%' }}>
               <Option value="new">New</Option>
               <Option value="meeting_scheduled">Meeting Scheduled</Option>
               <Option value="meeting_completed">Meeting Completed</Option>
               <Option value="suspended">Suspended</Option>
               <Option value="postponed">Postponed</Option>
               <Option value="canceled">Canceled</Option>
+              <Option value="purchased">Purchased</Option>
             </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="reasonForContact"
+            label="Reason for Contact"
+          >
+            <Input.TextArea rows={3} />
+          </Form.Item>
+
+          <Form.Item
+            name="notes"
+            label="Additional Notes"
+          >
+            <Input.TextArea rows={3} />
           </Form.Item>
 
           <Form.Item>
             <Space wrap>
               <Button type="primary" htmlType="submit" loading={updateProspectMutation.isPending}>
-                Update Status
+                Save Changes
               </Button>
               <Button onClick={() => {
-                setStatusModal(false);
-                statusForm.resetFields();
+                setEditModal(false);
+                editForm.resetFields();
               }}>Cancel</Button>
             </Space>
           </Form.Item>
         </Form>
       </Modal>
+
+      <ConvertProspectModal
+        open={convertModal}
+        prospect={prospect}
+        onClose={() => setConvertModal(false)}
+      />
+
+      <LogInteractionModal
+        open={logInteractionModal}
+        prospect={prospect}
+        onClose={() => setLogInteractionModal(false)}
+        onLogged={() => refetchInteractions()}
+      />
     </div>
   );
 };

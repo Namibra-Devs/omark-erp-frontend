@@ -17,17 +17,25 @@ export const BookingPage: React.FC = () => {
 
   const handleSubmit = async (values: any) => {
     try {
+      // The API only accepts a single free-text `reason` field — fold the
+      // property-interest and message fields into it since both are useful
+      // context for the customer service team, but neither is a real,
+      // separately-stored field on the backend.
+      const reasonParts = [
+        values.propertyInterest ? `Property interest: ${values.propertyInterest}` : null,
+        values.message || null,
+      ].filter(Boolean);
+
       const payload = {
         fullName: values.fullName,
         phoneNumber: values.phoneNumber,
         email: values.email || undefined,
-        preferredDate: values.preferredDate.toISOString(),
-        propertyInterest: values.propertyInterest || undefined,
-        notes: values.message || undefined,
+        scheduledFor: values.preferredDate.toISOString(),
+        reason: reasonParts.length > 0 ? reasonParts.join('\n\n') : undefined,
       };
 
       const result = await bookAppointment.mutateAsync(payload);
-      
+
       // Store booking data for success screen
       setBookingData({
         ...result,
@@ -36,7 +44,7 @@ export const BookingPage: React.FC = () => {
         email: values.email,
         preferredDate: values.preferredDate,
       });
-      
+
       setBookingComplete(true);
       message.success('Appointment booked successfully!');
     } catch (error: any) {

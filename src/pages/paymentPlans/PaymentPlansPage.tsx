@@ -70,13 +70,10 @@ import { paymentPlanStatusLabels, progressBandLabels } from '@/constants/enums';
 import {
   usePaymentPlansQuery,
   useCreatePaymentPlanMutation,
-  useUpdatePaymentPlanMutation,
-  useDeletePaymentPlanMutation,
   getProgressBand,
   type PaymentPlan,
   type ProgressBand,
   type CreatePaymentPlanPayload,
-  type UpdatePaymentPlanPayload
 } from '@/api/paymentPlans';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery } from '@/api/properties';
@@ -102,9 +99,7 @@ export const PaymentPlansPage: React.FC = () => {
   const [bandFilter, setBandFilter] = useState<string>('all');
   const [selectedPlan, setSelectedPlan] = useState<PaymentPlan | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
-  const [editModal, setEditModal] = useState(false);
   const [addModal, setAddModal] = useState(false);
-  const [form] = Form.useForm();
   const [addForm] = Form.useForm();
 
   // Export states
@@ -119,21 +114,21 @@ export const PaymentPlansPage: React.FC = () => {
     error: paymentPlansError,
     refetch: refetchPaymentPlans
   } = usePaymentPlansQuery({
-    status: statusFilter !== 'all' ? statusFilter : undefined,
+    status: statusFilter !== 'all' ? (statusFilter as any) : undefined,
   });
 
-  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ limit: 100 });
-  const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ limit: 100 });
+  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
+  const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 100 });
 
   // ── API Mutations ──────────────────────────────────────────────────────────
+  // Note: the real API has no update/delete payment-plan endpoints. Only
+  // POST /payment-plans (create) exists, alongside the GET list/detail/installments routes.
   const createPaymentPlan = useCreatePaymentPlanMutation();
-  const updatePaymentPlan = useUpdatePaymentPlanMutation();
-  const deletePaymentPlan = useDeletePaymentPlanMutation();
 
   // ── Data Mapping ──────────────────────────────────────────────────────────
-  // hooks return data directly (already unwrapped by the query functions)
+  // hooks return { items, total, page, pageSize } directly under `.data`
   const paymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
-  const customers: Customer[] = Array.isArray(customersData) ? customersData : [];
+  const customers: Customer[] = customersData?.items ?? [];
   const properties = propertiesData?.items ?? [];
 
   // Create maps for quick lookups
@@ -150,6 +145,13 @@ export const PaymentPlansPage: React.FC = () => {
       return acc;
     }, {} as Record<string, any>);
   }, [properties]);
+
+  // Only customers without an existing plan can have a new one created for them
+  // (the API only supports POST /payment-plans for a customer without one).
+  const customersWithoutPlan = React.useMemo(() => {
+    const withPlan = new Set(paymentPlans.map(p => p.customerId));
+    return customers.filter(c => !withPlan.has(c.id));
+  }, [customers, paymentPlans]);
 
   // ── Helper Functions ──────────────────────────────────────────────────────
   const getCustomerName = (customerId: string) => {
@@ -204,29 +206,20 @@ export const PaymentPlansPage: React.FC = () => {
   };
 
   // ── Handlers ──────────────────────────────────────────────────────────────
+  // Note: the real API only supports creating a payment plan for a customer
+  // who doesn't already have one — there is no update or delete endpoint.
   const handleAddPlan = async (values: any) => {
     try {
       const totalAmountMinor = Math.round((values.totalAmount || 0) * 100);
       const downPaymentMinor = Math.round((values.downPayment || 0) * 100);
-      const balanceMinor = totalAmountMinor - downPaymentMinor;
-      const numMonths = values.numMonths || 0;
-      const monthlyAmountMinor = numMonths > 0 ? Math.ceil(balanceMinor / numMonths) : 0;
-      const progressPercent = totalAmountMinor > 0 ? Math.round((downPaymentMinor / totalAmountMinor) * 100) : 0;
-      const progressBand = getProgressBand(progressPercent);
 
       const payload: CreatePaymentPlanPayload = {
         customerId: values.customerId,
-        propertyId: values.propertyId,
         totalAmountMinor,
         downPaymentMinor,
-        balanceMinor,
-        numMonths,
-        monthlyAmountMinor,
-        currency: 'GHS',
+        planBasis: 'months',
+        numMonths: values.numMonths,
         startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-        status: values.status || 'active',
-        progressPercent,
-        progressBand,
       };
 
       await createPaymentPlan.mutateAsync(payload);
@@ -236,55 +229,6 @@ export const PaymentPlansPage: React.FC = () => {
       refetchPaymentPlans();
     } catch (error: any) {
       message.error(error?.message || 'Failed to create payment plan');
-    }
-  };
-
-  const handleEditPlan = async (values: any) => {
-    if (!selectedPlan) return;
-
-    try {
-      const totalAmountMinor = Math.round((values.totalAmount || 0) * 100);
-      const downPaymentMinor = Math.round((values.downPayment || 0) * 100);
-      const balanceMinor = totalAmountMinor - downPaymentMinor;
-      const numMonths = values.numMonths || 0;
-      const monthlyAmountMinor = numMonths > 0 ? Math.ceil(balanceMinor / numMonths) : 0;
-      const progressPercent = totalAmountMinor > 0 ? Math.round((downPaymentMinor / totalAmountMinor) * 100) : 0;
-      const progressBand = getProgressBand(progressPercent);
-
-      const payload: UpdatePaymentPlanPayload = {
-        totalAmountMinor,
-        downPaymentMinor,
-        balanceMinor,
-        numMonths,
-        monthlyAmountMinor,
-        startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : selectedPlan.startDate,
-        status: values.status || selectedPlan.status,
-        progressPercent,
-        progressBand,
-      };
-
-      await updatePaymentPlan.mutateAsync({
-        id: selectedPlan.id,
-        data: payload,
-      });
-
-      message.success('Payment plan updated successfully!');
-      setEditModal(false);
-      setSelectedPlan(null);
-      form.resetFields();
-      refetchPaymentPlans();
-    } catch (error: any) {
-      message.error(error?.message || 'Failed to update payment plan');
-    }
-  };
-
-  const handleDeletePlan = async (id: string) => {
-    try {
-      await deletePaymentPlan.mutateAsync(id);
-      message.success('Payment plan deleted successfully!');
-      refetchPaymentPlans();
-    } catch (error: any) {
-      message.error(error?.message || 'Failed to delete payment plan');
     }
   };
 
@@ -465,44 +409,16 @@ export const PaymentPlansPage: React.FC = () => {
       render: (_: any, record: PaymentPlan) => (
         <Space>
           <Tooltip title="View Details">
-            <Button 
+            <Button
               type="primary"
               ghost
-              icon={<EyeOutlined />} 
+              icon={<EyeOutlined />}
               onClick={() => {
                 setSelectedPlan(record);
                 setViewDrawerOpen(true);
               }}
             />
           </Tooltip>
-          <Tooltip title="Edit">
-            <Button 
-              icon={<EditOutlined />} 
-              onClick={() => {
-                setSelectedPlan(record);
-                setEditModal(true);
-                form.setFieldsValue({
-                  totalAmount: record.totalAmountMinor / 100,
-                  downPayment: record.downPaymentMinor / 100,
-                  numMonths: record.numMonths,
-                  monthlyAmount: record.monthlyAmountMinor / 100,
-                  startDate: dayjs(record.startDate),
-                  status: record.status,
-                });
-              }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="Delete Payment Plan"
-            description={`Are you sure you want to delete this payment plan?`}
-            onConfirm={() => handleDeletePlan(record.id)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Tooltip title="Delete">
-              <Button danger icon={<DeleteOutlined />} />
-            </Tooltip>
-          </Popconfirm>
         </Space>
       ),
     },
@@ -614,24 +530,6 @@ export const PaymentPlansPage: React.FC = () => {
         {/* Quick Actions */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
-            <Button 
-              type="primary" 
-              icon={<EditOutlined />}
-              onClick={() => {
-                setEditModal(true);
-                form.setFieldsValue({
-                  totalAmount: selectedPlan.totalAmountMinor / 100,
-                  downPayment: selectedPlan.downPaymentMinor / 100,
-                  numMonths: selectedPlan.numMonths,
-                  monthlyAmount: selectedPlan.monthlyAmountMinor / 100,
-                  startDate: dayjs(selectedPlan.startDate),
-                  status: selectedPlan.status,
-                });
-                setViewDrawerOpen(false);
-              }}
-            >
-              Edit Plan
-            </Button>
             <Button icon={<FileOutlined />}>
               Generate PDF
             </Button>
@@ -976,31 +874,24 @@ export const PaymentPlansPage: React.FC = () => {
           form={addForm}
           layout="vertical"
           onFinish={handleAddPlan}
-          initialValues={{ status: 'active' }}
         >
+          <Alert
+            message="Only customers without an existing payment plan are shown"
+            description="The API only supports creating a plan for a customer who doesn't already have one — plans cannot be edited or replaced afterwards."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+
           <Form.Item
             name="customerId"
             label="Customer"
             rules={[{ required: true, message: 'Please select a customer' }]}
           >
-            <Select placeholder="Select customer" showSearch>
-              {customers.map(customer => (
+            <Select placeholder="Select customer" showSearch optionFilterProp="children">
+              {customersWithoutPlan.map(customer => (
                 <Option key={customer.id} value={customer.id}>
                   {customer.firstName} {customer.lastName} - {getCustomerProperty(customer.id)}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="propertyId"
-            label="Property"
-            rules={[{ required: true, message: 'Please select a property' }]}
-          >
-            <Select placeholder="Select property" showSearch>
-              {properties.map((prop: any) => (
-                <Option key={prop.id} value={prop.id}>
-                  {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
                 </Option>
               ))}
             </Select>
@@ -1058,19 +949,6 @@ export const PaymentPlansPage: React.FC = () => {
             rules={[{ required: true, message: 'Start date is required' }]}
           >
             <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-          </Form.Item>
-
-          <Form.Item
-            name="status"
-            label="Status"
-            rules={[{ required: true, message: 'Status is required' }]}
-          >
-            <Select>
-              <Option value="active">Active</Option>
-              <Option value="completed">Completed</Option>
-              <Option value="defaulted">Defaulted</Option>
-              <Option value="cancelled">Cancelled</Option>
-            </Select>
           </Form.Item>
 
           {/* Live Preview */}
@@ -1138,171 +1016,6 @@ export const PaymentPlansPage: React.FC = () => {
               <Button onClick={() => {
                 setAddModal(false);
                 addForm.resetFields();
-              }}>
-                Cancel
-              </Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* Edit Payment Plan Modal */}
-      <Modal
-        title={
-          <Space>
-            <EditOutlined style={{ color: tokens.primary }} />
-            <Text strong>Edit Payment Plan</Text>
-          </Space>
-        }
-        open={editModal}
-        onCancel={() => {
-          setEditModal(false);
-          setSelectedPlan(null);
-          form.resetFields();
-        }}
-        footer={null}
-        width={600}
-        style={{ maxWidth: '95%', top: 20 }}
-        bodyStyle={{ padding: '16px', maxHeight: '70vh', overflowY: 'auto' }}
-      >
-        <Form
-          form={form}
-          layout="vertical"
-          onFinish={handleEditPlan}
-        >
-          <Row gutter={[8, 0]}>
-            <Col xs={24} sm={12}>
-              <Form.Item
-                name="totalAmount"
-                label="Total Amount (GHS)"
-                rules={[{ required: true, message: 'Total amount is required' }]}
-              >
-                <InputNumber
-                  style={{ width: '100%' }}
-                  prefix="GHS"
-                  precision={2}
-                  placeholder="e.g., 150000"
-                  min={0}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12}>
-              <Form.Item
-                name="downPayment"
-                label="Down Payment (GHS)"
-                rules={[{ required: true, message: 'Down payment is required' }]}
-              >
-                <InputNumber
-                  style={{ width: '100%' }}
-                  prefix="GHS"
-                  precision={2}
-                  placeholder="e.g., 30000"
-                  min={0}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item
-            name="numMonths"
-            label="Number of Months"
-            rules={[{ required: true, message: 'Number of months is required' }]}
-          >
-            <InputNumber
-              style={{ width: '100%' }}
-              min={1}
-              max={360}
-              placeholder="e.g., 12"
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="startDate"
-            label="Start Date"
-            rules={[{ required: true, message: 'Start date is required' }]}
-          >
-            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-          </Form.Item>
-
-          <Form.Item
-            name="status"
-            label="Status"
-            rules={[{ required: true, message: 'Status is required' }]}
-          >
-            <Select>
-              <Option value="active">Active</Option>
-              <Option value="completed">Completed</Option>
-              <Option value="defaulted">Defaulted</Option>
-              <Option value="cancelled">Cancelled</Option>
-            </Select>
-          </Form.Item>
-
-          {/* Live Preview */}
-          <Form.Item noStyle shouldUpdate={(prev, curr) => 
-            prev.totalAmount !== curr.totalAmount || 
-            prev.downPayment !== curr.downPayment ||
-            prev.numMonths !== curr.numMonths
-          }>
-            {({ getFieldValue }) => {
-              const totalAmount = getFieldValue('totalAmount') || 0;
-              const downPayment = getFieldValue('downPayment') || 0;
-              const numMonths = getFieldValue('numMonths') || 1;
-              const totalMinor = Math.round(totalAmount * 100);
-              const downMinor = Math.round(downPayment * 100);
-              const balanceMinor = totalMinor - downMinor;
-              const monthlyMinor = numMonths > 0 ? Math.ceil(balanceMinor / numMonths) : 0;
-              const progressPercent = totalMinor > 0 ? Math.round((downMinor / totalMinor) * 100) : 0;
-              const band = getProgressBand(progressPercent);
-
-              return (
-                <div style={{ 
-                  background: '#f5f7fa', 
-                  padding: 16, 
-                  borderRadius: 8,
-                  marginTop: 8,
-                  border: '1px solid #e8e8e8'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                    <Text strong>Payment Plan Preview</Text>
-                    <Tag color="blue">Auto-calculated</Tag>
-                  </div>
-                  <Row gutter={[8, 8]}>
-                    <Col span={12}>
-                      <Text type="secondary">Balance</Text>
-                      <div><MoneyText minor={balanceMinor} /></div>
-                    </Col>
-                    <Col span={12}>
-                      <Text type="secondary">Monthly Amount</Text>
-                      <div><MoneyText minor={monthlyMinor} /></div>
-                    </Col>
-                    <Col span={12}>
-                      <Text type="secondary">Progress</Text>
-                      <div>
-                        <Progress 
-                          percent={progressPercent} 
-                          strokeColor={tokens.band[band]}
-                          size="small"
-                        />
-                        <Text type="secondary" style={{ fontSize: 12 }}>
-                          {progressPercent}% - {band.toUpperCase()}
-                        </Text>
-                      </div>
-                    </Col>
-                  </Row>
-                </div>
-              );
-            }}
-          </Form.Item>
-
-          <Form.Item>
-            <Space wrap>
-              <Button type="primary" htmlType="submit" loading={updatePaymentPlan.isPending}>
-                Update Payment Plan
-              </Button>
-              <Button onClick={() => {
-                setEditModal(false);
-                setSelectedPlan(null);
-                form.resetFields();
               }}>
                 Cancel
               </Button>

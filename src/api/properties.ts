@@ -1,60 +1,37 @@
 // src/api/properties.ts
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiClient from '@/api/client';
+import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
+import type { Property, ApiResponse } from '@/types';
 
-// --- Types ---
-
-export interface Property {
-  id: string;
-  houseNumber: string;
-  offerNumber: string;
-  priceMinor: number;
-  currency: string;
-  description?: string;
-  location?: string;
-  bedrooms?: number;
-  bathrooms?: number;
-  area?: number;
-  status?: 'available' | 'sold' | 'reserved' | 'construction';
-  images?: string[];
-  createdAt: string;
-  updatedAt: string;
-}
+export type { Property };
 
 export interface PropertiesListParams {
   page?: number;
-  limit?: number;
-  search?: string;
-  status?: string;
-  minPrice?: number;
-  maxPrice?: number;
+  pageSize?: number;
+  q?: string;
 }
 
-export interface PropertiesListResponse {
+export interface PropertiesListResult {
   items: Property[];
   total: number;
   page: number;
-  limit: number;
+  pageSize: number;
 }
 
 export interface CreatePropertyPayload {
   houseNumber: string;
   offerNumber: string;
   priceMinor: number;
-  currency: string;
+  currency?: string;
   description?: string;
-  location?: string;
-  bedrooms?: number;
-  bathrooms?: number;
-  area?: number;
-  status?: string;
-  images?: string[];
 }
 
-export interface UpdatePropertyPayload extends Partial<CreatePropertyPayload> {
-  status?: string;
-  images?: string[];
+export interface UpdatePropertyPayload {
+  houseNumber?: string;
+  offerNumber?: string;
+  priceMinor?: number;
+  description?: string;
 }
 
 // --- Query Keys ---
@@ -62,45 +39,20 @@ export interface UpdatePropertyPayload extends Partial<CreatePropertyPayload> {
 export const propertyKeys = {
   all: ['properties'] as const,
   lists: () => [...propertyKeys.all, 'list'] as const,
-  list: (params?: PropertiesListParams) => 
-    [...propertyKeys.lists(), params ?? {}] as const,
+  list: (params?: PropertiesListParams) => [...propertyKeys.lists(), params ?? {}] as const,
   details: () => [...propertyKeys.all, 'detail'] as const,
   detail: (id: string) => [...propertyKeys.details(), id] as const,
 };
 
 // --- Hooks ---
 
-/**
- * Get properties list with pagination and filters
- */
 export const usePropertiesQuery = (params?: PropertiesListParams) => {
   return useQuery({
     queryKey: propertyKeys.list(params),
     queryFn: async () => {
       try {
-        const response = await apiClient.get<PropertiesListResponse>('/properties', { 
-          params 
-        });
-        
-        // Handle both wrapped and unwrapped responses
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as PropertiesListResponse;
-        }
-        
-        if (data && 'items' in data && 'total' in data) {
-          return data as PropertiesListResponse;
-        }
-        
-        // Fallback: return empty response
-        console.warn('Unexpected properties response format:', data);
-        return {
-          items: [],
-          total: 0,
-          page: params?.page || 1,
-          limit: params?.limit || 10,
-        } as PropertiesListResponse;
+        const response = await apiClient.get<ApiResponse<Property[]>>('/properties', { params });
+        return unwrapList(response) as PropertiesListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error fetching properties:', {
@@ -114,24 +66,13 @@ export const usePropertiesQuery = (params?: PropertiesListParams) => {
   });
 };
 
-/**
- * Get single property by ID
- */
 export const usePropertyQuery = (id: string) => {
   return useQuery({
     queryKey: propertyKeys.detail(id),
     queryFn: async () => {
       try {
-        const response = await apiClient.get<Property>(`/properties/${id}`);
-        
-        // Handle both wrapped and unwrapped responses
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Property;
-        }
-        
-        return data as Property;
+        const response = await apiClient.get<ApiResponse<Property & { customers?: unknown[] }>>(`/properties/${id}`);
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching property ${id}:`, {
@@ -146,24 +87,14 @@ export const usePropertyQuery = (id: string) => {
   });
 };
 
-/**
- * Create a new property
- */
 export const useCreatePropertyMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (payload: CreatePropertyPayload) => {
       try {
-        const response = await apiClient.post<Property>('/properties', payload);
-        
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Property;
-        }
-        
-        return data as Property;
+        const response = await apiClient.post<ApiResponse<Property>>('/properties', payload);
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error creating property:', {
@@ -175,36 +106,19 @@ export const useCreatePropertyMutation = () => {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: propertyKeys.lists() });
       queryClient.invalidateQueries({ queryKey: propertyKeys.all });
     },
   });
 };
 
-/**
- * Update a property
- */
 export const useUpdatePropertyMutation = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ 
-      id, 
-      payload 
-    }: { 
-      id: string; 
-      payload: UpdatePropertyPayload 
-    }) => {
+    mutationFn: async ({ id, payload }: { id: string; payload: UpdatePropertyPayload }) => {
       try {
-        const response = await apiClient.patch<Property>(`/properties/${id}`, payload);
-        
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Property;
-        }
-        
-        return data as Property;
+        const response = await apiClient.patch<ApiResponse<Property>>(`/properties/${id}`, payload);
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error updating property:', {
@@ -215,17 +129,13 @@ export const useUpdatePropertyMutation = () => {
         throw error;
       }
     },
-    onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: propertyKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: propertyKeys.detail(variables.id) });
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: propertyKeys.all });
+      queryClient.invalidateQueries({ queryKey: propertyKeys.detail(variables.id) });
     },
   });
 };
 
-/**
- * Delete a property
- */
 export const useDeletePropertyMutation = () => {
   const queryClient = useQueryClient();
 
@@ -245,7 +155,6 @@ export const useDeletePropertyMutation = () => {
       }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: propertyKeys.lists() });
       queryClient.invalidateQueries({ queryKey: propertyKeys.all });
     },
   });
@@ -253,9 +162,6 @@ export const useDeletePropertyMutation = () => {
 
 // --- Utility Functions ---
 
-/**
- * Format property price for display
- */
 export const formatPropertyPrice = (priceMinor: number, currency: string = 'GHS') => {
   return `${currency} ${(priceMinor / 100).toLocaleString('en-US', {
     minimumFractionDigits: 2,
@@ -263,42 +169,17 @@ export const formatPropertyPrice = (priceMinor: number, currency: string = 'GHS'
   })}`;
 };
 
-/**
- * Get property status config for UI display
- */
-export const getPropertyStatusConfig = (status?: string) => {
-  const configs: Record<string, { color: string; label: string }> = {
-    available: { color: 'green', label: 'Available' },
-    sold: { color: 'red', label: 'Sold' },
-    reserved: { color: 'orange', label: 'Reserved' },
-    construction: { color: 'blue', label: 'Under Construction' },
-  };
-  return configs[status || ''] || { color: 'default', label: status || 'Unknown' };
-};
-
-/**
- * Search properties by text
- */
 export const searchProperties = (properties: Property[], searchText: string) => {
   if (!searchText) return properties;
-  
   const search = searchText.toLowerCase();
-  return properties.filter(prop => 
+  return properties.filter(prop =>
     prop.houseNumber.toLowerCase().includes(search) ||
     prop.offerNumber.toLowerCase().includes(search) ||
-    prop.description?.toLowerCase().includes(search) ||
-    prop.location?.toLowerCase().includes(search)
+    prop.description?.toLowerCase().includes(search)
   );
 };
 
-/**
- * Filter properties by price range
- */
-export const filterPropertiesByPrice = (
-  properties: Property[], 
-  minPrice?: number, 
-  maxPrice?: number
-) => {
+export const filterPropertiesByPrice = (properties: Property[], minPrice?: number, maxPrice?: number) => {
   return properties.filter(prop => {
     const price = prop.priceMinor;
     if (minPrice && price < minPrice) return false;
@@ -307,43 +188,23 @@ export const filterPropertiesByPrice = (
   });
 };
 
-/**
- * Get property display name
- */
 export const getPropertyDisplayName = (property: Property): string => {
   return `${property.houseNumber} - ${property.offerNumber} (${formatPropertyPrice(property.priceMinor, property.currency)})`;
 };
 
-/**
- * Get property short display name
- */
 export const getPropertyShortName = (property: Property): string => {
-  return `${property.houseNumber} (${property.location || 'N/A'})`;
+  return property.houseNumber;
 };
 
 // --- Backward Compatibility (Deprecated) ---
 
-/**
- * @deprecated Use usePropertiesQuery instead
- */
+/** @deprecated Use usePropertiesQuery instead */
 export const useProperties = usePropertiesQuery;
-
-/**
- * @deprecated Use usePropertyQuery instead
- */
+/** @deprecated Use usePropertyQuery instead */
 export const useProperty = usePropertyQuery;
-
-/**
- * @deprecated Use useCreatePropertyMutation instead
- */
+/** @deprecated Use useCreatePropertyMutation instead */
 export const useCreateProperty = useCreatePropertyMutation;
-
-/**
- * @deprecated Use useUpdatePropertyMutation instead
- */
+/** @deprecated Use useUpdatePropertyMutation instead */
 export const useUpdateProperty = useUpdatePropertyMutation;
-
-/**
- * @deprecated Use useDeletePropertyMutation instead
- */
+/** @deprecated Use useDeletePropertyMutation instead */
 export const useDeleteProperty = useDeletePropertyMutation;

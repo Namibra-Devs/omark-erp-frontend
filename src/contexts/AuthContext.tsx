@@ -1,8 +1,8 @@
 // src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { message } from 'antd';
-import apiClient, { setTokens, clearTokens, getAccessToken } from '@/api/client';
+import { App } from 'antd'; // Changed from 'message' to 'App'
+import apiClient, { setTokens, clearTokens, getAccessToken, getRefreshToken } from '@/api/client';
 import type { User } from '@/types';
 
 interface AuthContextType {
@@ -28,6 +28,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
+  
+  // Use Ant Design's context-safe messaging API
+  const { message } = App.useApp();
 
   // ── Login ──────────────────────────────────────────────────────────────────
   const login = useCallback(async (email: string, password: string) => {
@@ -35,49 +38,45 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setIsLoading(true);
       const response = await apiClient.post('/auth/login', { email, password });
       
-      console.log('🔍 Login response:', response.data);
+      console.log('🔍 Login response raw data:', response.data);
 
-      // Extract data from the response
       const responseData = response.data;
       
-      // Check if we have a nested data object
-      let userData = responseData.data || responseData;
+      // 1. Unpack the response container safely without mutating
+      const dataContainer = responseData?.data || responseData;
       
-      // If user is nested inside data.user
-      if (userData.user) {
-        userData = userData.user;
-      }
-      
-      // Extract tokens - check both locations
-      const accessToken = userData.accessToken || responseData.accessToken;
-      const refreshToken = userData.refreshToken || responseData.refreshToken;
-      const expiresIn = userData.expiresIn || responseData.expiresIn;
+      // 2. Extract tokens from all possible standard payload locations
+      const accessToken = responseData?.accessToken || dataContainer?.accessToken || dataContainer?.token;
+      const refreshToken = responseData?.refreshToken || dataContainer?.refreshToken;
 
-      console.log('📤 Extracted user data:', { 
-        id: userData.id,
-        firstName: userData.firstName,
-        lastName: userData.lastName,
-        email: userData.email,
-        role: userData.role,
+      // 3. Safely target the user profile object
+      const userData = dataContainer?.user || dataContainer;
+
+      console.log('📤 Extracted validation profile:', { 
+        id: userData?.id,
+        firstName: userData?.firstName,
+        lastName: userData?.lastName,
+        email: userData?.email,
+        role: userData?.role,
         hasAccessToken: !!accessToken,
         hasRefreshToken: !!refreshToken,
       });
 
       // Validate required fields
       if (!accessToken) {
-        console.error('❌ No access token found in response:', responseData);
+        console.error('❌ No access token found in response wrappers:', responseData);
         throw new Error('No access token received from server');
       }
 
-      if (!userData.id || !userData.email) {
-        console.error('❌ User data missing required fields:', userData);
+      if (!userData?.id || !userData?.email) {
+        console.error('❌ User profile validation missing keys:', userData);
         throw new Error('Invalid user data received from server');
       }
 
       // Store tokens using the client's setTokens function
       setTokens(accessToken, refreshToken || '');
 
-      // Build user object
+      // Build user object safely
       const userObj: User = {
         id: userData.id,
         firstName: userData.firstName || 'User',
@@ -85,12 +84,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         email: userData.email,
         role: userData.role || 'admin',
         isActive: userData.isActive !== undefined ? userData.isActive : true,
-        phone: userData.phoneNumber || userData.phone || '',
+        phoneNumber: userData.phoneNumber || userData.phone || '',
         createdAt: userData.createdAt || new Date().toISOString(),
         updatedAt: userData.updatedAt || new Date().toISOString(),
       };
 
-      console.log('✅ User logged in:', userObj);
+      console.log('✅ User context authenticated successfully:', userObj);
       setUser(userObj);
       
       // Navigate based on role
@@ -109,22 +108,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       
       message.success(`Welcome ${userObj.firstName}!`);
     } catch (error: any) {
-      console.error('❌ Login error:', error);
-      const errorMessage = error?.error?.message || error?.message || 'Login failed. Please try again.';
+      console.error('❌ Login pipeline error:', error);
+      const errorMessage = error?.response?.data?.message || error?.message || 'Login failed. Please try again.';
       message.error(errorMessage);
       throw error;
     } finally {
       setIsLoading(false);
     }
-  }, [navigate]);
+  }, [navigate, message]);
 
   // ── Logout ─────────────────────────────────────────────────────────────────
   const logout = useCallback(() => {
+    const refreshToken = getRefreshToken();
+    // Best-effort server-side revocation — clear local state regardless of
+    // whether this succeeds (e.g. token already expired).
+    if (refreshToken) {
+      apiClient.post('/auth/logout', { refreshToken }).catch(() => {});
+    }
     clearTokens();
     setUser(null);
     navigate('/login');
     message.info('Logged out successfully');
-  }, [navigate]);
+  }, [navigate, message]);
 
   // ── Refresh User ──────────────────────────────────────────────────────────
   const refreshUser = useCallback(async () => {
@@ -138,12 +143,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const response = await apiClient.get('/auth/me');
       const responseData = response.data;
       
-      // Handle nested response
-      let userData = responseData.data || responseData;
-      
-      if (userData.user) {
-        userData = userData.user;
-      }
+      const dataContainer = responseData.data || responseData;
+      const userData = dataContainer.user || dataContainer;
 
       if (userData && userData.id) {
         const userObj: User = {
@@ -153,7 +154,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: userData.email,
           role: userData.role || 'admin',
           isActive: userData.isActive !== undefined ? userData.isActive : true,
-          phone: userData.phoneNumber || userData.phone || '',
+          phoneNumber: userData.phoneNumber || userData.phone || '',
           createdAt: userData.createdAt || new Date().toISOString(),
           updatedAt: userData.updatedAt || new Date().toISOString(),
         };
@@ -161,7 +162,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (error) {
       console.error('Failed to refresh user:', error);
-      // If token is invalid, log out
       if (error instanceof Error && (error as any).response?.status === 401) {
         logout();
       }

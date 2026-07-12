@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
-  DatePicker, Statistic, Divider, Empty, Dropdown, Popconfirm,
+  DatePicker, Statistic, Divider, Empty, Dropdown,
   Alert, Drawer, Descriptions, Timeline, Tabs, Progress,
   Radio, Switch, InputNumber, Upload, List, Collapse, Image, Spin
 } from 'antd';
@@ -19,7 +19,6 @@ import {
   UserOutlined,
   CalendarOutlined,
   ClockCircleOutlined,
-  CheckCircleOutlined,
   CloseCircleOutlined,
   WarningOutlined,
   InfoCircleOutlined,
@@ -72,9 +71,8 @@ import { tokens } from '@/constants/tokens';
 import {
   useDeedsQuery,
   useGenerateDeedMutation,
-  useDeleteDeedMutation,
-  useDeedDocumentQuery,
-  downloadDeedPDF,
+  downloadAndSaveDeedPDF,
+  formatDeedNumber,
   type Deed,
   type GenerateDeedPayload
 } from '@/api/deeds';
@@ -120,39 +118,16 @@ export const DeedsPage: React.FC = () => {
     refetch: refetchDeeds
   } = useDeedsQuery();
 
-  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ limit: 100 });
-  const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ limit: 100 });
+  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
+  const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 100 });
 
   // ── API Mutations ──────────────────────────────────────────────────────────
   const generateDeed = useGenerateDeedMutation();
-  const deleteDeed = useDeleteDeedMutation();
 
   // ── Data Mapping ──────────────────────────────────────────────────────────
-  // Extract data from responses with proper fallbacks
-  const deeds: Deed[] = React.useMemo(() => {
-    if (!deedsData) return [];
-    // Handle both wrapped and unwrapped responses
-    const data = (deedsData as any).data ?? deedsData;
-    if (Array.isArray(data)) return data;
-    if (data?.items) return data.items;
-    return [];
-  }, [deedsData]);
-
-  const customers: Customer[] = React.useMemo(() => {
-    if (!customersData) return [];
-    const data = (customersData as any).data ?? customersData;
-    if (Array.isArray(data)) return data;
-    if (data?.items) return data.items;
-    return [];
-  }, [customersData]);
-
-  const properties = React.useMemo(() => {
-    if (!propertiesData) return [];
-    const data = (propertiesData as any).data ?? propertiesData;
-    if (Array.isArray(data)) return data;
-    if (data?.items) return data.items;
-    return [];
-  }, [propertiesData]);
+  const deeds: Deed[] = deedsData?.items ?? [];
+  const customers: Customer[] = customersData?.items ?? [];
+  const properties = propertiesData?.items ?? [];
 
   // Create maps for quick lookups
   const customerMap = React.useMemo(() => {
@@ -196,7 +171,7 @@ export const DeedsPage: React.FC = () => {
     const matchesSearch = customerName.includes(searchText.toLowerCase()) ||
                           propertySearch.includes(searchText.toLowerCase()) ||
                           deed.id.toLowerCase().includes(searchText.toLowerCase()) ||
-                          deed.deedNumber?.toLowerCase().includes(searchText.toLowerCase());
+                          formatDeedNumber(deed).toLowerCase().includes(searchText.toLowerCase());
     return matchesSearch;
   });
 
@@ -217,8 +192,6 @@ export const DeedsPage: React.FC = () => {
         propertyId: values.propertyId,
         witnesses: witnesses.filter(w => w.name && w.contact),
         businessContacts: values.businessContacts,
-        deedType: values.deedType || 'purchase',
-        notes: values.notes || '',
       };
 
       console.log('📤 Generating deed with payload:', payload);
@@ -242,31 +215,10 @@ export const DeedsPage: React.FC = () => {
   const handleDownloadDeed = async (deed: Deed) => {
     try {
       message.loading('Preparing download...', 0.5);
-      const blob = await downloadDeedPDF(deed.id);
-      const filename = `deed-${deed.deedNumber || deed.id}-${dayjs().format('YYYY-MM-DD')}.pdf`;
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      message.success('Deed downloaded successfully!');
+      await downloadAndSaveDeedPDF(deed.id);
+      message.success('Deed opened in a new tab!');
     } catch (error: any) {
       message.error(error?.message || 'Failed to download deed');
-    }
-  };
-
-  const handleDeleteDeed = async (id: string) => {
-    try {
-      await deleteDeed.mutateAsync(id);
-      message.success('Deed deleted successfully!');
-      setTimeout(() => {
-        refetchDeeds();
-      }, 300);
-    } catch (error: any) {
-      message.error(error?.message || 'Failed to delete deed');
     }
   };
 
@@ -298,13 +250,12 @@ export const DeedsPage: React.FC = () => {
       const property = getPropertyDetails(deed.propertyId);
       return {
         'Deed ID': deed.id,
-        'Deed Number': deed.deedNumber || 'N/A',
+        'Deed Number': formatDeedNumber(deed),
         'Customer': customer ? `${customer.firstName} ${customer.lastName}` : 'Unknown',
         'Property': property ? `${property.houseNumber} - ${property.offerNumber}` : 'N/A',
         'Property Price': property ? `GHS ${(property.priceMinor / 100).toLocaleString()}` : 'N/A',
         'Witnesses': deed.witnesses?.map((w: any) => `${w.name} (${w.contact})`).join('; ') || 'N/A',
         'Business Contacts': deed.businessContacts || 'N/A',
-        'Status': deed.status || 'generated',
         'Generated At': dayjs(deed.generatedAt).format('YYYY-MM-DD HH:mm'),
         'Created': dayjs(deed.createdAt).format('YYYY-MM-DD'),
       };
@@ -385,7 +336,7 @@ export const DeedsPage: React.FC = () => {
       width: 200,
       render: (_: any, record: Deed) => (
         <Space direction="vertical" size={0}>
-          <Text strong>#{record.deedNumber || record.id.slice(0, 8)}</Text>
+          <Text strong>{formatDeedNumber(record)}</Text>
           <Text type="secondary" style={{ fontSize: 12 }}>
             <UserOutlined /> {getCustomerName(record.customerId)}
           </Text>
@@ -458,22 +409,6 @@ export const DeedsPage: React.FC = () => {
       },
     },
     {
-      title: 'Status',
-      dataIndex: 'status',
-      key: 'status',
-      width: 120,
-      render: (status: string) => {
-        const configs: Record<string, { color: string; label: string }> = {
-          draft: { color: 'default', label: 'Draft' },
-          generated: { color: 'blue', label: 'Generated' },
-          signed: { color: 'green', label: 'Signed' },
-          registered: { color: 'purple', label: 'Registered' },
-        };
-        const config = configs[status] || configs.generated;
-        return <Tag color={config.color}>{config.label}</Tag>;
-      },
-    },
-    {
       title: 'Generated On',
       dataIndex: 'generatedAt',
       key: 'generatedAt',
@@ -516,27 +451,16 @@ export const DeedsPage: React.FC = () => {
       render: (_: any, record: Deed) => (
         <Space>
           <Tooltip title="View Details">
-            <Button 
+            <Button
               type="primary"
               ghost
-              icon={<EyeOutlined />} 
+              icon={<EyeOutlined />}
               onClick={() => {
                 setSelectedDeed(record);
                 setViewDrawerOpen(true);
               }}
             />
           </Tooltip>
-          <Popconfirm
-            title="Delete Deed"
-            description={`Are you sure you want to delete this deed?`}
-            onConfirm={() => handleDeleteDeed(record.id)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Tooltip title="Delete">
-              <Button danger icon={<DeleteOutlined />} />
-            </Tooltip>
-          </Popconfirm>
         </Space>
       ),
     },
@@ -601,7 +525,7 @@ export const DeedsPage: React.FC = () => {
                 Deed of Purchase
               </Title>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                <IdcardOutlined /> #{selectedDeed.deedNumber || selectedDeed.id.slice(0, 8)}
+                <IdcardOutlined /> {formatDeedNumber(selectedDeed)}
               </Text>
             </div>
           </Space>
@@ -632,9 +556,9 @@ export const DeedsPage: React.FC = () => {
                 </Text>
               </div>
             </Space>
-            <Badge 
-              status="processing" 
-              text={<span style={{ color: 'white' }}>{selectedDeed.status || 'Generated'}</span>}
+            <Badge
+              status="processing"
+              text={<span style={{ color: 'white' }}>Generated</span>}
             />
           </div>
         </div>
@@ -736,17 +660,9 @@ export const DeedsPage: React.FC = () => {
           <Col span={24}>
             <Card size="small" title="Generation Info" bordered={false} style={{ background: '#fafafa' }}>
               <Descriptions column={1} size="small">
-                <Descriptions.Item label={<Space><UserOutlined /> Generated By</Space>}>
-                  {selectedDeed.generatedBy || 'Unknown'}
-                </Descriptions.Item>
                 <Descriptions.Item label={<Space><CalendarOutlined /> Generated At</Space>}>
                   {dayjs(selectedDeed.generatedAt).format('MMMM DD, YYYY HH:mm')}
                 </Descriptions.Item>
-                {selectedDeed.notes && (
-                  <Descriptions.Item label={<Space><InfoCircleOutlined /> Notes</Space>}>
-                    {selectedDeed.notes}
-                  </Descriptions.Item>
-                )}
               </Descriptions>
             </Card>
           </Col>
@@ -825,16 +741,6 @@ export const DeedsPage: React.FC = () => {
               value={`GHS ${(stats.totalValue / 100).toLocaleString()}`}
               prefix={<DollarOutlined />}
               valueStyle={{ color: '#52c41a' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={8}>
-          <Card size="small">
-            <Statistic
-              title="Active Deeds"
-              value={stats.total}
-              prefix={<CheckCircleOutlined />}
-              valueStyle={{ color: '#1890ff' }}
             />
           </Card>
         </Col>
@@ -939,19 +845,6 @@ export const DeedsPage: React.FC = () => {
             </Select>
           </Form.Item>
 
-          <Form.Item
-            name="deedType"
-            label="Deed Type"
-            rules={[{ required: true, message: 'Please select deed type' }]}
-          >
-            <Select>
-              <Option value="purchase">Purchase Agreement</Option>
-              <Option value="transfer">Property Transfer</Option>
-              <Option value="mortgage">Mortgage</Option>
-              <Option value="lease">Lease Agreement</Option>
-            </Select>
-          </Form.Item>
-
           <Divider>Witnesses (Minimum 2)</Divider>
 
           {witnesses.map((witness, index) => (
@@ -1017,13 +910,6 @@ export const DeedsPage: React.FC = () => {
               rows={3} 
               placeholder="Enter business contact information (e.g., Omark Real Estate Ltd. - Accra Office, Phone: +233 20 123 4567)"
             />
-          </Form.Item>
-
-          <Form.Item
-            name="notes"
-            label="Notes (Optional)"
-          >
-            <TextArea rows={2} placeholder="Add any notes or special instructions" />
           </Form.Item>
 
           <Form.Item>

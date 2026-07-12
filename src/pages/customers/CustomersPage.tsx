@@ -8,7 +8,7 @@ import {
   useCreateCustomerMutation,
   useUpdateCustomerMutation,
 } from '@/api/customers';
-import { usePaymentPlansQuery, useCreatePaymentPlanMutation, useUpdatePaymentPlanMutation, useDeletePaymentPlanMutation } from '@/api/paymentPlans';
+import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
 import { usePropertiesQuery } from '@/api/properties';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
@@ -94,7 +94,7 @@ const getProgressBand = (percent: number): ProgressBand => {
 
 export const CustomersPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
   const queryClient = useQueryClient();
 
   // ── Filter state ──────────────────────────────────────────────────────────
@@ -114,15 +114,15 @@ export const CustomersPage: React.FC = () => {
     type: (typeFilter !== 'all' ? typeFilter : undefined) as any,
     q: searchText || undefined,
     page,
-    limit: PAGE_SIZE,
+    pageSize: PAGE_SIZE,
   });
 
   const { data: paymentPlansResponse, isLoading: paymentPlansLoading, refetch: refetchPaymentPlans } = usePaymentPlansQuery({
-    limit: 100,
+    pageSize: 100,
   });
 
   const { data: propertiesResponse, isLoading: propertiesLoading } = usePropertiesQuery({
-    limit: 100,
+    pageSize: 100,
   });
 
   // API Mutations
@@ -130,42 +130,17 @@ export const CustomersPage: React.FC = () => {
   const updateCustomer = useUpdateCustomerMutation();
   const deleteCustomer = useDeleteCustomerMutation();
   const createPaymentPlan = useCreatePaymentPlanMutation();
-  const updatePaymentPlan = useUpdatePaymentPlanMutation();
-  const deletePaymentPlan = useDeletePaymentPlanMutation();
 
-  // Extract data from responses with proper fallbacks
-  const customers: Customer[] = React.useMemo(() => {
-    if (!customersResponse) return [];
-    // Handle both wrapped and unwrapped responses
-    const data = (customersResponse as any).data ?? customersResponse;
-    if (Array.isArray(data)) return data;
-    if (data?.items) return data.items;
-    return [];
-  }, [customersResponse]);
+  // Extract data from responses (query hooks return { items, total, page, pageSize } directly)
+  const customers: Customer[] = customersResponse?.items ?? [];
 
-  const customersMeta = React.useMemo(() => {
-    if (!customersResponse) return { total: 0 };
-    const data = (customersResponse as any).data ?? customersResponse;
-    return {
-      total: data?.total ?? data?.length ?? 0,
-    };
-  }, [customersResponse]);
+  const customersMeta = React.useMemo(() => ({
+    total: customersResponse?.total ?? 0,
+  }), [customersResponse]);
 
-  const paymentPlans: PaymentPlan[] = React.useMemo(() => {
-    if (!paymentPlansResponse) return [];
-    const data = (paymentPlansResponse as any).data ?? paymentPlansResponse;
-    if (Array.isArray(data)) return data;
-    if (data?.items) return data.items;
-    return [];
-  }, [paymentPlansResponse]);
+  const paymentPlans: PaymentPlan[] = paymentPlansResponse?.items ?? [];
 
-  const properties = React.useMemo(() => {
-    if (!propertiesResponse) return [];
-    const data = (propertiesResponse as any).data ?? propertiesResponse;
-    if (Array.isArray(data)) return data;
-    if (data?.items) return data.items;
-    return [];
-  }, [propertiesResponse]);
+  const properties = propertiesResponse?.items ?? [];
 
   // Log data for debugging
   useEffect(() => {
@@ -196,7 +171,6 @@ export const CustomersPage: React.FC = () => {
   const [editModal, setEditModal] = useState(false);
   const [addModal, setAddModal] = useState(false);
   const [editPaymentPlan, setEditPaymentPlan] = useState<PaymentPlan | null>(null);
-  const [editPaymentBasis, setEditPaymentBasis] = useState<'months' | 'monthly'>('months');
   const [form] = Form.useForm();
   const [addForm] = Form.useForm();
 
@@ -262,7 +236,9 @@ const handleAddCustomer = async (values: any) => {
   try {
     setLoading(true);
     
-    // Base customer data
+    // Base customer data — POST /customers only accepts these fields plus
+    // an optional createPlan; email/notes/prospectId are not part of the
+    // schema and would be rejected (or silently ignored) by the backend.
     const customerData: any = {
       firstName: values.firstName,
       lastName: values.lastName,
@@ -271,17 +247,6 @@ const handleAddCustomer = async (values: any) => {
       type: values.type,
       propertyId: values.propertyId,
     };
-
-    // Add optional fields
-    if (values.email) {
-      customerData.email = values.email;
-    }
-    if (values.prospectId) {
-      customerData.prospectId = values.prospectId;
-    }
-    if (values.notes) {
-      customerData.notes = values.notes;
-    }
 
     // If payment plan, add createPlan object
     if (values.type === 'payment_plan' && values.totalAmount > 0) {
@@ -331,86 +296,35 @@ const handleAddCustomer = async (values: any) => {
 };
 
   // ── Update Customer ──────────────────────────────────────────────────────
+  // Note: the real API's PATCH /customers/{id} only accepts firstName, lastName,
+  // phoneNumber, and address. Customer type, property, and payment plan are all
+  // fixed at creation time and cannot be changed afterwards (there is no
+  // update/delete payment-plan endpoint either).
   const handleUpdateCustomer = async (values: any) => {
     if (!selectedCustomer) return;
 
     try {
       setLoading(true);
 
-      // Update customer
-      const customerData = {
-        firstName: values.firstName,
-        lastName: values.lastName,
-        phoneNumber: values.phoneNumber,
-        email: values.email,
-        address: values.address,
-        type: values.type,
-        propertyId: values.propertyId,
-      };
-
       await updateCustomer.mutateAsync({
         id: selectedCustomer.id,
-        data: customerData,
+        data: {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+          address: values.address,
+        },
       });
 
-      // Handle payment plan
-      if (values.type === 'fully_paid') {
-        // Remove payment plan if exists
-        const existingPlan = getPaymentPlan(selectedCustomer.id);
-        if (existingPlan) {
-          await deletePaymentPlan.mutateAsync(existingPlan.id);
-        }
-        message.success('Customer marked as Fully Paid!');
-      } else if (values.type === 'payment_plan') {
-        const existingPlan = getPaymentPlan(selectedCustomer.id);
-        const planData = calculatePaymentPlan(values);
-        const planStatus = planData.balanceMinor === 0 ? 'completed' : (values.planStatus || 'active');
-
-        if (existingPlan) {
-          // Update existing plan
-          await updatePaymentPlan.mutateAsync({
-            id: existingPlan.id,
-            data: {
-              totalAmountMinor: planData.totalAmountMinor,
-              downPaymentMinor: planData.downPaymentMinor,
-              balanceMinor: planData.balanceMinor,
-              numMonths: planData.numMonths,
-              monthlyAmountMinor: planData.monthlyAmountMinor,
-              startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : existingPlan.startDate,
-              status: planStatus,
-              progressPercent: planData.progressPercent,
-              progressBand: planData.progressBand,
-            },
-          });
-          message.success('Payment plan updated successfully!');
-        } else {
-          // Create new plan
-          await createPaymentPlan.mutateAsync({
-            customerId: selectedCustomer.id,
-            propertyId: values.propertyId,
-            totalAmountMinor: planData.totalAmountMinor,
-            downPaymentMinor: planData.downPaymentMinor,
-            balanceMinor: planData.balanceMinor,
-            numMonths: planData.numMonths,
-            monthlyAmountMinor: planData.monthlyAmountMinor,
-            currency: 'GHS',
-            startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-            status: planStatus,
-            progressPercent: planData.progressPercent,
-            progressBand: planData.progressBand,
-          });
-          message.success('Payment plan created successfully!');
-        }
-      }
+      message.success('Customer updated successfully!');
 
       setEditModal(false);
       setSelectedCustomer(null);
       setEditPaymentPlan(null);
       form.resetFields();
-      
+
       setTimeout(() => {
         refetchCustomers();
-        refetchPaymentPlans();
       }, 500);
     } catch (error: any) {
       console.error('Error updating customer:', error);
@@ -430,15 +344,9 @@ const handleAddCustomer = async (values: any) => {
       cancelText: 'Cancel',
       onOk: async () => {
         try {
-          // Delete payment plan first if exists
-          const plan = getPaymentPlan(id);
-          if (plan) {
-            await deletePaymentPlan.mutateAsync(plan.id);
-          }
-          
           await deleteCustomer.mutateAsync(id);
           message.success('Customer deleted successfully!');
-          
+
           setTimeout(() => {
             refetchCustomers();
             refetchPaymentPlans();
@@ -697,53 +605,41 @@ const handleAddCustomer = async (values: any) => {
               }}
             />
           </Tooltip>
-          <Tooltip title="Edit">
-            <Button 
-              icon={<EditOutlined />} 
-              onClick={() => {
-                setSelectedCustomer(record);
-                const plan = getPaymentPlan(record.id);
-                setEditPaymentPlan(plan || null);
-                
-                // Set form values
-                form.setFieldsValue({
-                  firstName: record.firstName,
-                  lastName: record.lastName,
-                  phoneNumber: record.phoneNumber,
-                  address: record.address,
-                  type: record.type,
-                  propertyId: record.propertyId,
-                });
-                
-                // If payment plan exists, set payment plan values
-                if (plan) {
+          {hasRole(['admin', 'secretary']) && (
+            <Tooltip title="Edit">
+              <Button
+                icon={<EditOutlined />}
+                onClick={() => {
+                  setSelectedCustomer(record);
+                  const plan = getPaymentPlan(record.id);
+                  setEditPaymentPlan(plan || null);
+
+                  // Only the fields the real PATCH /customers/{id} endpoint accepts
                   form.setFieldsValue({
-                    totalAmount: plan.totalAmountMinor / 100,
-                    downPayment: plan.downPaymentMinor / 100,
-                    paymentBasis: 'months',
-                    numMonths: plan.numMonths,
-                    monthlyAmount: plan.monthlyAmountMinor / 100,
-                    startDate: dayjs(plan.startDate),
-                    planStatus: plan.status,
+                    firstName: record.firstName,
+                    lastName: record.lastName,
+                    phoneNumber: record.phoneNumber,
+                    address: record.address,
                   });
-                  setEditPaymentBasis('months');
-                }
-                
-                setEditModal(true);
-              }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="Delete Customer"
-            description={`Are you sure you want to delete ${record.firstName} ${record.lastName}?`}
-            onConfirm={() => handleDeleteCustomer(record.id)}
-            okText="Yes"
-            cancelText="No"
-          >
-            <Tooltip title="Delete">
-              <Button danger icon={<DeleteOutlined />} />
+
+                  setEditModal(true);
+                }}
+              />
             </Tooltip>
-          </Popconfirm>
+          )}
+          {hasRole(['admin']) && (
+            <Popconfirm
+              title="Delete Customer"
+              description={`Are you sure you want to delete ${record.firstName} ${record.lastName}?`}
+              onConfirm={() => handleDeleteCustomer(record.id)}
+              okText="Yes"
+              cancelText="No"
+            >
+              <Tooltip title="Delete (admin only)">
+                <Button danger icon={<DeleteOutlined />} />
+              </Tooltip>
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -985,14 +881,6 @@ const handleAddCustomer = async (values: any) => {
             rules={[{ required: true, message: 'Phone number is required' }]}
           >
             <PhoneInput />
-          </Form.Item>
-
-          <Form.Item
-            name="email"
-            label="Email (Optional)"
-            rules={[{ type: 'email', message: 'Please enter a valid email' }]}
-          >
-            <Input placeholder="Email address" />
           </Form.Item>
 
           <Form.Item
@@ -1270,7 +1158,7 @@ const handleAddCustomer = async (values: any) => {
         title={
           <Space>
             <EditOutlined style={{ color: tokens.primary }} />
-            <Text strong>Edit Customer & Payment Plan</Text>
+            <Text strong>Edit Customer</Text>
           </Space>
         }
         open={editModal}
@@ -1334,320 +1222,90 @@ const handleAddCustomer = async (values: any) => {
                       <TextArea rows={2} placeholder="Full address" />
                     </Form.Item>
 
-                    <Form.Item
-                      name="propertyId"
-                      label="Property"
-                      rules={[{ required: true, message: 'Property is required' }]}
-                    >
-                      <Select placeholder="Select property">
-                        {properties.map((prop: any) => (
-                          <Option key={prop.id} value={prop.id}>
-                            {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
-                          </Option>
-                        ))}
-                      </Select>
-                    </Form.Item>
+                    <Alert
+                      message="Property and customer type are set when the customer is created and cannot be changed afterwards."
+                      type="info"
+                      showIcon
+                      style={{ marginBottom: 16 }}
+                    />
 
-                    <Form.Item
-                      name="type"
-                      label="Customer Type"
-                      rules={[{ required: true, message: 'Customer type is required' }]}
-                    >
-                      <Select 
-                        placeholder="Select customer type"
-                        onChange={(value) => {
-                          if (value === 'fully_paid') {
-                            Modal.confirm({
-                              title: 'Mark as Fully Paid',
-                              content: 'This will remove the payment plan and mark the customer as fully paid. Continue?',
-                              okText: 'Yes, Mark as Fully Paid',
-                              okType: 'primary',
-                              cancelText: 'Cancel',
-                              onOk: () => {
-                                form.setFieldsValue({
-                                  totalAmount: undefined,
-                                  downPayment: undefined,
-                                  paymentBasis: 'months',
-                                  numMonths: undefined,
-                                  monthlyAmount: undefined,
-                                  startDate: undefined,
-                                  planStatus: undefined,
-                                });
-                                setEditPaymentPlan(null);
-                                message.info('Customer will be marked as fully paid');
-                              },
-                            });
-                          }
-                        }}
-                      >
-                        <Option value="payment_plan">Payment Plan</Option>
-                        <Option value="fully_paid">Fully Paid</Option>
-                      </Select>
-                    </Form.Item>
+                    <Row gutter={[8, 0]}>
+                      <Col xs={24} sm={12}>
+                        <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Property</Text>
+                        <Text strong>
+                          {selectedCustomer ? (getPropertyDetails(selectedCustomer.propertyId)?.houseNumber || 'N/A') : 'N/A'}
+                        </Text>
+                      </Col>
+                      <Col xs={24} sm={12}>
+                        <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Customer Type</Text>
+                        <Tag color={selectedCustomer ? getCustomerTypeColor(selectedCustomer.type) : 'default'}>
+                          {selectedCustomer ? getCustomerTypeDisplay(selectedCustomer.type) : 'N/A'}
+                        </Tag>
+                      </Col>
+                    </Row>
                   </>
                 ),
               },
               {
                 key: 'payment',
                 label: 'Payment Plan',
-                children: (
-                  <Form.Item noStyle shouldUpdate={(prev, curr) => prev.type !== curr.type}>
-                    {({ getFieldValue }) => {
-                      const type = getFieldValue('type');
-                      if (type !== 'payment_plan') {
-                        return (
-                          <div style={{ textAlign: 'center', padding: '40px 0' }}>
-                            <CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a' }} />
-                            <Title level={4} style={{ marginTop: 16 }}>Fully Paid Customer</Title>
-                            <Text type="secondary">No payment plan required for fully paid customers</Text>
-                            <div style={{ marginTop: 16 }}>
-                              <Tag color="green" style={{ fontSize: 16, padding: '4px 16px' }}>
-                                <CheckCircleOutlined /> Status: Fully Paid
-                              </Tag>
-                            </div>
-                          </div>
-                        );
-                      }
+                children: (() => {
+                  if (!selectedCustomer || selectedCustomer.type !== 'payment_plan') {
+                    return (
+                      <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                        <CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a' }} />
+                        <Title level={4} style={{ marginTop: 16 }}>Fully Paid Customer</Title>
+                        <Text type="secondary">No payment plan for fully paid customers</Text>
+                      </div>
+                    );
+                  }
 
-                      return (
-                        <>
-                          <div style={{ 
-                            background: '#e6f7ff', 
-                            padding: '12px 16px', 
-                            borderRadius: 8,
-                            marginBottom: 16,
-                            border: '1px solid #91d5ff'
-                          }}>
-                            <Space>
-                              <InfoCircleOutlined style={{ color: '#1890ff' }} />
-                              <Text>Update the payment plan details below. All calculations are automatic.</Text>
-                            </Space>
-                          </div>
+                  if (!editPaymentPlan) {
+                    return <Empty description="No payment plan found for this customer" />;
+                  }
 
-                          <Row gutter={[8, 0]}>
-                            <Col xs={24} sm={12}>
-                              <Form.Item
-                                name="totalAmount"
-                                label="Total Property Price (GHS)"
-                                rules={[{ required: true, message: 'Total amount is required' }]}
-                              >
-                                <InputNumber
-                                  style={{ width: '100%' }}
-                                  prefix="GHS"
-                                  precision={2}
-                                  placeholder="e.g., 150000"
-                                  min={0}
-                                />
-                              </Form.Item>
-                            </Col>
-                            <Col xs={24} sm={12}>
-                              <Form.Item
-                                name="downPayment"
-                                label="Down Payment (GHS)"
-                                rules={[{ required: true, message: 'Down payment is required' }]}
-                              >
-                                <InputNumber
-                                  style={{ width: '100%' }}
-                                  prefix="GHS"
-                                  precision={2}
-                                  placeholder="e.g., 30000"
-                                  min={0}
-                                />
-                              </Form.Item>
-                            </Col>
-                          </Row>
+                  const plan = editPaymentPlan;
 
-                          <Form.Item
-                            name="paymentBasis"
-                            label="Payment Basis"
-                            rules={[{ required: true, message: 'Please select payment basis' }]}
-                          >
-                            <Select 
-                              onChange={(value) => {
-                                setEditPaymentBasis(value);
-                                if (value === 'months') {
-                                  form.setFieldsValue({ monthlyAmount: undefined });
-                                } else {
-                                  form.setFieldsValue({ numMonths: undefined });
-                                }
-                              }}
-                            >
-                              <Option value="months">Fixed Number of Months</Option>
-                              <Option value="monthly">Fixed Monthly Amount</Option>
-                            </Select>
-                          </Form.Item>
+                  return (
+                    <>
+                      <Alert
+                        message="Payment plans are read-only"
+                        description="The API does not support editing or deleting a payment plan once it has been created."
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 16 }}
+                      />
 
-                          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.paymentBasis !== curr.paymentBasis}>
-                            {({ getFieldValue }) => {
-                              const basis = getFieldValue('paymentBasis');
-                              if (basis === 'months') {
-                                return (
-                                  <Form.Item
-                                    name="numMonths"
-                                    label="Number of Months"
-                                    rules={[{ required: true, message: 'Number of months is required' }]}
-                                  >
-                                    <InputNumber
-                                      style={{ width: '100%' }}
-                                      min={1}
-                                      max={360}
-                                      placeholder="e.g., 12"
-                                    />
-                                  </Form.Item>
-                                );
-                              }
-                              return (
-                                <Form.Item
-                                  name="monthlyAmount"
-                                  label="Monthly Amount (GHS)"
-                                  rules={[{ required: true, message: 'Monthly amount is required' }]}
-                                >
-                                  <InputNumber
-                                    style={{ width: '100%' }}
-                                    prefix="GHS"
-                                    precision={2}
-                                    placeholder="e.g., 10000"
-                                    min={0}
-                                  />
-                                </Form.Item>
-                              );
-                            }}
-                          </Form.Item>
+                      <div style={{ marginBottom: 16 }}>
+                        <ProgressCell percent={plan.progressPercent} band={plan.progressBand} />
+                      </div>
 
-                          <Row gutter={[8, 0]}>
-                            <Col xs={24} sm={12}>
-                              <Form.Item
-                                name="startDate"
-                                label="Start Date"
-                                rules={[{ required: true, message: 'Start date is required' }]}
-                              >
-                                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-                              </Form.Item>
-                            </Col>
-                            <Col xs={24} sm={12}>
-                              <Form.Item
-                                name="planStatus"
-                                label="Plan Status"
-                                rules={[{ required: true, message: 'Plan status is required' }]}
-                              >
-                                <Select placeholder="Select status">
-                                  <Option value="active">Active</Option>
-                                  <Option value="completed">Completed</Option>
-                                  <Option value="defaulted">Defaulted</Option>
-                                  <Option value="cancelled">Cancelled</Option>
-                                </Select>
-                              </Form.Item>
-                            </Col>
-                          </Row>
-
-                          {/* Live Preview */}
-                          <Form.Item noStyle shouldUpdate={(prev, curr) => 
-                            prev.totalAmount !== curr.totalAmount || 
-                            prev.downPayment !== curr.downPayment ||
-                            prev.paymentBasis !== curr.paymentBasis ||
-                            prev.numMonths !== curr.numMonths ||
-                            prev.monthlyAmount !== curr.monthlyAmount
-                          }>
-                            {({ getFieldValue }) => {
-                              const totalAmount = getFieldValue('totalAmount') || 0;
-                              const downPayment = getFieldValue('downPayment') || 0;
-                              const totalMinor = Math.round(totalAmount * 100);
-                              const downMinor = Math.round(downPayment * 100);
-                              const balanceMinor = totalMinor - downMinor;
-                              const basis = getFieldValue('paymentBasis');
-                              let numMonths = 0;
-                              let monthlyMinor = 0;
-
-                              if (basis === 'months') {
-                                numMonths = getFieldValue('numMonths') || 0;
-                                monthlyMinor = numMonths > 0 ? Math.ceil(balanceMinor / numMonths) : 0;
-                              } else {
-                                monthlyMinor = Math.round((getFieldValue('monthlyAmount') || 0) * 100);
-                                numMonths = monthlyMinor > 0 ? Math.ceil(balanceMinor / monthlyMinor) : 0;
-                              }
-
-                              const progressPercent = totalMinor > 0 ? Math.round((downMinor / totalMinor) * 100) : 0;
-                              const band = getProgressBand(progressPercent);
-                              const isFullyPaid = balanceMinor === 0;
-
-                              return (
-                                <div style={{ 
-                                  background: isFullyPaid ? '#f6ffed' : '#f5f7fa', 
-                                  padding: 16, 
-                                  borderRadius: 8,
-                                  marginTop: 8,
-                                  border: `1px solid ${isFullyPaid ? '#b7eb8f' : '#e8e8e8'}`
-                                }}>
-                                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                    <Text strong>Payment Plan Preview</Text>
-                                    {isFullyPaid ? (
-                                      <Tag color="green">Fully Paid ✓</Tag>
-                                    ) : (
-                                      <Tag color="blue">Auto-calculated</Tag>
-                                    )}
-                                  </div>
-                                  <Row gutter={[8, 8]}>
-                                    <Col span={12}>
-                                      <Text type="secondary">Total Amount</Text>
-                                      <div><MoneyText minor={totalMinor} /></div>
-                                    </Col>
-                                    <Col span={12}>
-                                      <Text type="secondary">Down Payment</Text>
-                                      <div><MoneyText minor={downMinor} /></div>
-                                    </Col>
-                                    <Col span={12}>
-                                      <Text type="secondary">Balance</Text>
-                                      <div>
-                                        {isFullyPaid ? (
-                                          <Tag color="green">GHS 0.00</Tag>
-                                        ) : (
-                                          <MoneyText minor={balanceMinor} />
-                                        )}
-                                      </div>
-                                    </Col>
-                                    <Col span={12}>
-                                      <Text type="secondary">Monthly Amount</Text>
-                                      <div>
-                                        {isFullyPaid ? (
-                                          <Tag color="green">N/A</Tag>
-                                        ) : (
-                                          <MoneyText minor={monthlyMinor} />
-                                        )}
-                                      </div>
-                                    </Col>
-                                    <Col span={12}>
-                                      <Text type="secondary">Number of Months</Text>
-                                      <div>
-                                        {isFullyPaid ? (
-                                          <Tag color="green">0</Tag>
-                                        ) : (
-                                          <Text strong>{numMonths}</Text>
-                                        )}
-                                      </div>
-                                    </Col>
-                                    <Col span={12}>
-                                      <Text type="secondary">Progress</Text>
-                                      <div>
-                                        <Progress 
-                                          percent={isFullyPaid ? 100 : progressPercent} 
-                                          strokeColor={isFullyPaid ? '#52c41a' : tokens.band[band]}
-                                          size="small"
-                                        />
-                                        <Text type="secondary" style={{ fontSize: 12 }}>
-                                          {isFullyPaid ? '100% - COMPLETE' : `${progressPercent}% - ${band.toUpperCase()}`}
-                                        </Text>
-                                      </div>
-                                    </Col>
-                                  </Row>
-                                </div>
-                              );
-                            }}
-                          </Form.Item>
-                        </>
-                      );
-                    }}
-                  </Form.Item>
-                ),
+                      <Descriptions column={2} size="small" bordered>
+                        <Descriptions.Item label="Total Amount">
+                          <MoneyText minor={plan.totalAmountMinor} />
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Down Payment">
+                          <MoneyText minor={plan.downPaymentMinor} />
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Balance">
+                          <MoneyText minor={plan.balanceMinor} />
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Monthly Amount">
+                          <MoneyText minor={plan.monthlyAmountMinor} />
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Duration">
+                          {plan.numMonths} months
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Start Date">
+                          {dayjs(plan.startDate).format('MMMM DD, YYYY')}
+                        </Descriptions.Item>
+                        <Descriptions.Item label="Status" span={2}>
+                          <StatusTag status={plan.status} type="paymentPlan" />
+                        </Descriptions.Item>
+                      </Descriptions>
+                    </>
+                  );
+                })(),
               },
             ]}
           />
@@ -1667,41 +1325,6 @@ const handleAddCustomer = async (values: any) => {
               }}>
                 Cancel
               </Button>
-              {selectedCustomer && getPaymentPlan(selectedCustomer.id) && (
-                <Button 
-                  danger 
-                  onClick={() => {
-                    Modal.confirm({
-                      title: 'Remove Payment Plan',
-                      content: 'Are you sure you want to remove this payment plan? This action cannot be undone.',
-                      okText: 'Yes, Remove',
-                      okType: 'danger',
-                      cancelText: 'No, Keep',
-                      onOk: async () => {
-                        if (selectedCustomer) {
-                          try {
-                            const plan = getPaymentPlan(selectedCustomer.id);
-                            if (plan) {
-                              await deletePaymentPlan.mutateAsync(plan.id);
-                              await updateCustomer.mutateAsync({
-                                id: selectedCustomer.id,
-                                data: { type: 'fully_paid' },
-                              });
-                              message.success('Payment plan removed successfully!');
-                              refetchCustomers();
-                              refetchPaymentPlans();
-                            }
-                          } catch (error: any) {
-                            message.error(error?.message || 'Failed to remove payment plan');
-                          }
-                        }
-                      },
-                    });
-                  }}
-                >
-                  Remove Payment Plan
-                </Button>
-              )}
             </Space>
           </Form.Item>
         </Form>
@@ -1899,37 +1522,26 @@ const handleAddCustomer = async (values: any) => {
             {/* Quick Actions */}
             <div style={{ marginBottom: 24 }}>
               <Space wrap>
-                <Button 
-                  type="primary" 
-                  icon={<EditOutlined />}
-                  onClick={() => {
-                    setEditModal(true);
-                    const plan = getPaymentPlan(selectedCustomer.id);
-                    setEditPaymentPlan(plan || null);
-                    form.setFieldsValue({
-                      firstName: selectedCustomer.firstName,
-                      lastName: selectedCustomer.lastName,
-                      phoneNumber: selectedCustomer.phoneNumber,
-                      address: selectedCustomer.address,
-                      type: selectedCustomer.type,
-                      propertyId: selectedCustomer.propertyId,
-                    });
-                    if (plan) {
+                {hasRole(['admin', 'secretary']) && (
+                  <Button
+                    type="primary"
+                    icon={<EditOutlined />}
+                    onClick={() => {
+                      setEditModal(true);
+                      const plan = getPaymentPlan(selectedCustomer.id);
+                      setEditPaymentPlan(plan || null);
                       form.setFieldsValue({
-                        totalAmount: plan.totalAmountMinor / 100,
-                        downPayment: plan.downPaymentMinor / 100,
-                        paymentBasis: 'months',
-                        numMonths: plan.numMonths,
-                        monthlyAmount: plan.monthlyAmountMinor / 100,
-                        startDate: dayjs(plan.startDate),
-                        planStatus: plan.status,
+                        firstName: selectedCustomer.firstName,
+                        lastName: selectedCustomer.lastName,
+                        phoneNumber: selectedCustomer.phoneNumber,
+                        address: selectedCustomer.address,
                       });
-                    }
-                    setViewDrawerOpen(false);
-                  }}
-                >
-                  Edit Customer
-                </Button>
+                      setViewDrawerOpen(false);
+                    }}
+                  >
+                    Edit Customer
+                  </Button>
+                )}
                 <Button icon={<PhoneOutlined />}>
                   Call
                 </Button>

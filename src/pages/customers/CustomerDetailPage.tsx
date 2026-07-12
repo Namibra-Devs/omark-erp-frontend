@@ -1,6 +1,6 @@
 // src/pages/customers/CustomerDetailPage.tsx
-import React, { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import React, { useState, useEffect, useRef } from 'react';
+import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import {
   Card, Row, Col, Typography, Tag, Button, Space, Tabs, Table,
   Descriptions, Avatar, Badge, Progress, Timeline, Modal, Form,
@@ -27,7 +27,9 @@ import {
   PrinterOutlined,
   ShareAltOutlined,
   EnvironmentOutlined,
-  IdcardOutlined
+  IdcardOutlined,
+  ReloadOutlined,
+  CreditCardOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -35,12 +37,16 @@ import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { ProgressCell } from '@/components/shared/ProgressCell';
 import { tokens } from '@/constants/tokens';
-import { paymentPlanStatusLabels } from '@/constants/enums';
 import { useCustomerQuery } from '@/api/customers';
 import { usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
 import { usePropertyQuery } from '@/api/properties';
-import { usePaymentsQuery, useRecordPaymentMutation } from '@/api/payments';
-import { useGenerateDeedMutation, useDeedDocumentQuery } from '@/api/deeds';
+import {
+  useRecordPaymentMutation,
+  usePaystackInitializeMutation,
+  usePaystackVerifyMutation,
+  getPaymentMethodConfig,
+} from '@/api/payments';
+import { useGenerateDeedMutation } from '@/api/deeds';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -55,98 +61,202 @@ const { TextArea } = Input;
 export const CustomerDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  
+
   const [activeTab, setActiveTab] = useState('overview');
   const [recordPaymentModal, setRecordPaymentModal] = useState(false);
+  const [paystackModal, setPaystackModal] = useState(false);
   const [generateDeedModal, setGenerateDeedModal] = useState(false);
   const [form] = Form.useForm();
+  const [paystackForm] = Form.useForm();
   const [deedForm] = Form.useForm();
+  const [witnesses, setWitnesses] = useState<{ name: string; contact: string }[]>([
+    { name: '', contact: '' },
+    { name: '', contact: '' },
+  ]);
+
+  const paystackVerifyAttempted = useRef(false);
 
   // ── API Queries ────────────────────────────────────────────────────────────
-  const { 
-    data: customerData, 
+  const {
+    data: customerData,
     isLoading: customerLoading,
     error: customerError,
     refetch: refetchCustomer
   } = useCustomerQuery(id || '');
 
-  const { 
-    data: paymentPlanData, 
+  const customer = customerData as any;
+
+  // The real backend embeds the customer's active payment plan on the customer
+  // detail response (`customer.plan`). Payment-plan-scoped endpoints (record
+  // payment / Paystack initialize & verify / installments) need the plan's own
+  // `id` — not the customer id — so we read it from there.
+  const planId: string | undefined = customer?.plan?.id;
+
+  const {
+    data: paymentPlanData,
     isLoading: paymentPlanLoading,
     refetch: refetchPaymentPlan
-  } = usePaymentPlanQuery(id || '');
+  } = usePaymentPlanQuery(planId);
 
-  const { 
-    data: installmentsData, 
+  const {
+    data: installmentsData,
     isLoading: installmentsLoading,
     refetch: refetchInstallments
-  } = useInstallmentsQuery(id || '');
+  } = useInstallmentsQuery(planId);
 
-  const { 
-    data: paymentsData, 
-    isLoading: paymentsLoading,
-    refetch: refetchPayments
-  } = usePaymentsQuery({ customerId: id });
-
-  const { 
-    data: propertyData, 
-    isLoading: propertyLoading 
-  } = usePropertyQuery(customerData?.propertyId || '');
+  const {
+    data: propertyData,
+    isLoading: propertyLoading
+  } = usePropertyQuery(customer?.propertyId || '');
 
   // ── API Mutations ──────────────────────────────────────────────────────────
-  const recordPayment = useRecordPaymentMutation();
+  const recordPayment = useRecordPaymentMutation(planId ?? '');
+  const paystackInitialize = usePaystackInitializeMutation(planId ?? '');
+  const paystackVerify = usePaystackVerifyMutation(planId ?? '');
   const generateDeed = useGenerateDeedMutation();
 
   // ── Extract Data ──────────────────────────────────────────────────────────
-  const customer = customerData as any;
-  const paymentPlan = paymentPlanData as any;
-  const installments = installmentsData?.data || [];
-  const payments = paymentsData?.data || [];
+  // Prefer the dedicated payment-plan detail fetch (it may carry `installments`
+  // / `recentPayments` embedded by the backend); fall back to the plan summary
+  // already embedded on the customer response while that fetch is in flight.
+  const paymentPlan = (paymentPlanData ?? customer?.plan ?? null) as any;
+  const installments = installmentsData ?? paymentPlan?.installments ?? [];
+  // There is no standalone GET /payments (list) endpoint on the real API — the
+  // only "payment history" available is whatever the backend chooses to embed
+  // on the payment plan detail response.
+  const recentPayments = (paymentPlanData as any)?.recentPayments ?? paymentPlan?.payments ?? [];
   const property = propertyData as any;
 
   const isFullyPaid = customer?.type === 'fully_paid' || paymentPlan?.status === 'completed';
 
+  // ── Paystack return-redirect verification ────────────────────────────────
+  // Paystack redirects the customer back to this page with a `?reference=` (or
+  // `?trxref=`) query param after checkout. Detect it, verify the payment
+  // server-side, refresh the plan, and strip the param so it doesn't re-fire.
+  useEffect(() => {
+    const reference = searchParams.get('reference') || searchParams.get('trxref');
+    if (!reference || !planId || paystackVerifyAttempted.current) {
+      return;
+    }
+    paystackVerifyAttempted.current = true;
+
+    paystackVerify.mutateAsync({ reference })
+      .then(() => {
+        message.success('Payment verified successfully!');
+        refetchPaymentPlan();
+        refetchInstallments();
+        refetchCustomer();
+      })
+      .catch((error: any) => {
+        message.error(
+          error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to verify Paystack payment'
+        );
+      })
+      .finally(() => {
+        navigate(location.pathname, { replace: true });
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planId, searchParams]);
+
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleRecordPayment = async (values: any) => {
+    if (!planId) {
+      message.error('This customer has no active payment plan.');
+      return;
+    }
     try {
       await recordPayment.mutateAsync({
-        customerId: id || '',
-        paymentPlanId: paymentPlan?.id,
         amountMinor: Math.round(values.amountGHS * 100),
         paidOn: values.paidOn.toISOString(),
         method: values.method,
-        reference: values.reference || '',
-        notes: values.notes || '',
+        reference: values.reference || undefined,
       });
-      
+
       message.success('Payment recorded successfully!');
       setRecordPaymentModal(false);
       form.resetFields();
-      
+
       // Refresh data
       refetchPaymentPlan();
       refetchInstallments();
-      refetchPayments();
+      refetchCustomer();
     } catch (error: any) {
-      message.error(error?.message || 'Failed to record payment');
+      message.error(
+        error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to record payment'
+      );
     }
   };
 
+  const handlePaystackPay = async (values: any) => {
+    if (!planId) {
+      message.error('This customer has no active payment plan.');
+      return;
+    }
+    try {
+      const result = await paystackInitialize.mutateAsync({
+        amountMinor: Math.round(values.amountGHS * 100),
+        email: values.email,
+      });
+
+      message.success('Redirecting to Paystack checkout...');
+      setPaystackModal(false);
+      paystackForm.resetFields();
+      window.location.href = result.authorizationUrl;
+    } catch (error: any) {
+      message.error(
+        error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to initialize Paystack payment'
+      );
+    }
+  };
+
+  // ── Witness management (Generate Deed modal) ─────────────────────────────
+  const addWitness = () => {
+    setWitnesses([...witnesses, { name: '', contact: '' }]);
+  };
+
+  const removeWitness = (index: number) => {
+    if (witnesses.length <= 1) {
+      message.warning('At least 1 witness is required');
+      return;
+    }
+    setWitnesses(witnesses.filter((_, i) => i !== index));
+  };
+
+  const updateWitness = (index: number, field: 'name' | 'contact', value: string) => {
+    const next = [...witnesses];
+    next[index] = { ...next[index], [field]: value };
+    setWitnesses(next);
+  };
+
+  const resetDeedForm = () => {
+    deedForm.resetFields();
+    setWitnesses([{ name: '', contact: '' }, { name: '', contact: '' }]);
+  };
+
   const handleGenerateDeed = async (values: any) => {
+    const validWitnesses = witnesses.filter(w => w.name.trim() && w.contact.trim());
+    if (validWitnesses.length < 1) {
+      message.error('At least 1 witness (name and contact) is required');
+      return;
+    }
     try {
       await generateDeed.mutateAsync({
         customerId: id || '',
         propertyId: customer?.propertyId || '',
-        deedType: values.deedType,
-        notes: values.notes || '',
+        witnesses: validWitnesses,
+        businessContacts: values.businessContacts,
       });
-      
+
       message.success('Deed generated successfully!');
       setGenerateDeedModal(false);
-      deedForm.resetFields();
+      resetDeedForm();
     } catch (error: any) {
-      message.error(error?.message || 'Failed to generate deed');
+      message.error(
+        error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to generate deed'
+      );
     }
   };
 
@@ -179,9 +289,9 @@ export const CustomerDetailPage: React.FC = () => {
             </Button>
           }
         />
-        <Button 
-          type="primary" 
-          onClick={() => navigate('/customers')} 
+        <Button
+          type="primary"
+          onClick={() => navigate('/customers')}
           style={{ marginTop: 16 }}
         >
           Back to Customers
@@ -192,11 +302,11 @@ export const CustomerDetailPage: React.FC = () => {
 
   // ── Installments columns ──────────────────────────────────────────────────
   const installmentsColumns = [
-    { 
-      title: '#', 
-      dataIndex: 'sequence', 
-      key: 'sequence', 
-      width: 80 
+    {
+      title: '#',
+      dataIndex: 'sequence',
+      key: 'sequence',
+      width: 80
     },
     {
       title: 'Due Date',
@@ -256,34 +366,22 @@ export const CustomerDetailPage: React.FC = () => {
       title: 'Method',
       dataIndex: 'method',
       key: 'method',
-      render: (method: string) => {
-        const configs: Record<string, { color: string; label: string }> = {
-          cash: { color: 'gold', label: 'Cash' },
-          bank_transfer: { color: 'blue', label: 'Bank Transfer' },
-          mobile_money: { color: 'green', label: 'Mobile Money' },
-          cheque: { color: 'purple', label: 'Cheque' },
-          other: { color: 'default', label: 'Other' },
-        };
-        const config = configs[method] || configs.other;
+      render: (method: any) => {
+        const config = getPaymentMethodConfig(method);
         return <Tag color={config.color}>{config.label}</Tag>;
       },
     },
-    { 
-      title: 'Reference', 
-      dataIndex: 'reference', 
+    {
+      title: 'Reference',
+      dataIndex: 'reference',
       key: 'reference',
       render: (ref: string) => ref || '-',
     },
     {
       title: 'Recorded By',
-      dataIndex: 'recordedBy',
-      key: 'recordedBy',
-      render: (recordedBy: any) => {
-        if (recordedBy && typeof recordedBy === 'object') {
-          return `${recordedBy.firstName || ''} ${recordedBy.lastName || ''}`.trim() || recordedBy.email || 'Unknown';
-        }
-        return recordedBy || 'Unknown';
-      },
+      dataIndex: 'recordedByUserId',
+      key: 'recordedByUserId',
+      render: (recordedByUserId: string) => recordedByUserId || 'Unknown',
     },
   ];
 
@@ -301,7 +399,13 @@ export const CustomerDetailPage: React.FC = () => {
             label: 'Record Payment',
             onClick: () => setRecordPaymentModal(true),
             icon: <PlusOutlined />,
-            disabled: isFullyPaid || !paymentPlan,
+            disabled: isFullyPaid || !planId,
+          },
+          {
+            label: 'Pay Online (Paystack)',
+            onClick: () => setPaystackModal(true),
+            icon: <CreditCardOutlined />,
+            disabled: isFullyPaid || !planId,
           },
           {
             label: 'Generate Deed',
@@ -314,7 +418,6 @@ export const CustomerDetailPage: React.FC = () => {
               refetchCustomer();
               refetchPaymentPlan();
               refetchInstallments();
-              refetchPayments();
               message.success('Refreshed!');
             },
             icon: <ReloadOutlined />,
@@ -447,25 +550,32 @@ export const CustomerDetailPage: React.FC = () => {
                           </Descriptions.Item>
                         </Descriptions>
                         <div style={{ marginTop: 16, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                          <Button 
-                            type="primary" 
-                            icon={<DownloadOutlined />} 
+                          <Button
+                            type="primary"
+                            icon={<DownloadOutlined />}
                             onClick={() => message.info('PDF generation coming soon!')}
                           >
                             Generate PDF
                           </Button>
-                          <Button 
-                            icon={<FileOutlined />} 
+                          <Button
+                            icon={<FileOutlined />}
                             onClick={() => setGenerateDeedModal(true)}
                           >
                             Generate Deed
                           </Button>
-                          <Button 
-                            icon={<PlusOutlined />} 
+                          <Button
+                            icon={<PlusOutlined />}
                             onClick={() => setRecordPaymentModal(true)}
-                            disabled={isFullyPaid}
+                            disabled={isFullyPaid || !planId}
                           >
                             Record Payment
+                          </Button>
+                          <Button
+                            icon={<CreditCardOutlined />}
+                            onClick={() => setPaystackModal(true)}
+                            disabled={isFullyPaid || !planId}
+                          >
+                            Pay Online (Paystack)
                           </Button>
                         </div>
                       </div>
@@ -520,10 +630,11 @@ export const CustomerDetailPage: React.FC = () => {
                     </Text>
                   </Space>
                   {installments.filter((i: any) => !i.isPaid).length > 0 && (
-                    <Button 
-                      type="primary" 
+                    <Button
+                      type="primary"
                       icon={<PlusOutlined />}
                       onClick={() => setRecordPaymentModal(true)}
+                      disabled={!planId}
                     >
                       Record Payment
                     </Button>
@@ -543,34 +654,45 @@ export const CustomerDetailPage: React.FC = () => {
           },
           {
             key: 'payments',
-            label: `Payments (${payments.length})`,
+            label: `Payments (${recentPayments.length})`,
             children: (
               <Card>
                 <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
                   <Space>
                     <Text type="secondary">
-                      Total Payments: {payments.length}
+                      Total Payments: {recentPayments.length}
                     </Text>
                     <Text type="secondary">
-                      Total Amount: <MoneyText minor={payments.reduce((sum: number, p: any) => sum + p.amountMinor, 0)} />
+                      Total Amount: <MoneyText minor={recentPayments.reduce((sum: number, p: any) => sum + p.amountMinor, 0)} />
                     </Text>
                   </Space>
-                  <Button 
-                    type="primary" 
-                    icon={<PlusOutlined />}
-                    onClick={() => setRecordPaymentModal(true)}
-                    disabled={isFullyPaid}
-                  >
-                    Record Payment
-                  </Button>
+                  <Space>
+                    <Button
+                      icon={<PlusOutlined />}
+                      onClick={() => setRecordPaymentModal(true)}
+                      disabled={isFullyPaid || !planId}
+                    >
+                      Record Payment
+                    </Button>
+                    <Button
+                      type="primary"
+                      icon={<CreditCardOutlined />}
+                      onClick={() => setPaystackModal(true)}
+                      disabled={isFullyPaid || !planId}
+                    >
+                      Pay Online (Paystack)
+                    </Button>
+                  </Space>
                 </div>
-                <Spin spinning={paymentsLoading}>
+                <Spin spinning={paymentPlanLoading}>
                   <Table
                     columns={paymentsColumns}
-                    dataSource={payments}
+                    dataSource={recentPayments}
                     rowKey="id"
                     pagination={{ pageSize: 10 }}
-                    locale={{ emptyText: 'No payments recorded yet' }}
+                    locale={{
+                      emptyText: 'No payment history to show. The API does not expose a full payment history endpoint — only the most recent payments embedded in the payment plan (if any) appear here.'
+                    }}
                   />
                 </Spin>
               </Card>
@@ -582,8 +704,8 @@ export const CustomerDetailPage: React.FC = () => {
             children: (
               <Card>
                 <div style={{ marginBottom: 16 }}>
-                  <Button 
-                    type="primary" 
+                  <Button
+                    type="primary"
                     icon={<PlusOutlined />}
                     onClick={() => setGenerateDeedModal(true)}
                   >
@@ -627,8 +749,8 @@ export const CustomerDetailPage: React.FC = () => {
                 <>
                   Balance: <MoneyText minor={paymentPlan.balanceMinor} />
                   <br />
-                  Next due: {installments.filter((i: any) => !i.isPaid).length > 0 ? 
-                    dayjs(installments.filter((i: any) => !i.isPaid)[0].dueDate).format('MMMM DD, YYYY') : 
+                  Next due: {installments.filter((i: any) => !i.isPaid).length > 0 ?
+                    dayjs(installments.filter((i: any) => !i.isPaid)[0].dueDate).format('MMMM DD, YYYY') :
                     'All paid'
                   }
                 </>
@@ -685,13 +807,6 @@ export const CustomerDetailPage: React.FC = () => {
             <Input placeholder="Enter reference number" />
           </Form.Item>
 
-          <Form.Item
-            name="notes"
-            label="Notes (Optional)"
-          >
-            <TextArea rows={2} placeholder="Add any notes about this payment" />
-          </Form.Item>
-
           <Form.Item>
             <Space>
               <Button
@@ -712,6 +827,90 @@ export const CustomerDetailPage: React.FC = () => {
         </Form>
       </Modal>
 
+      {/* Pay Online (Paystack) Modal */}
+      <Modal
+        title={
+          <Space>
+            <CreditCardOutlined style={{ color: tokens.primary }} />
+            <Text strong>Pay Online (Paystack)</Text>
+          </Space>
+        }
+        open={paystackModal}
+        onCancel={() => {
+          setPaystackModal(false);
+          paystackForm.resetFields();
+        }}
+        footer={null}
+        width={500}
+        style={{ maxWidth: '95%', top: 20 }}
+        bodyStyle={{ padding: '16px' }}
+      >
+        <Form form={paystackForm} layout="vertical" onFinish={handlePaystackPay}>
+          <Alert
+            message={`Paying online for ${customer.firstName} ${customer.lastName}`}
+            description={
+              paymentPlan ? (
+                <>
+                  Balance: <MoneyText minor={paymentPlan.balanceMinor} />
+                  <br />
+                  You will be redirected to Paystack to complete this payment securely.
+                </>
+              ) : 'No active payment plan'
+            }
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+
+          <Form.Item
+            name="amountGHS"
+            label="Amount (GHS)"
+            rules={[
+              { required: true, message: 'Please enter amount' },
+              { type: 'number', min: 0.01, message: 'Amount must be greater than 0' }
+            ]}
+          >
+            <InputNumber
+              style={{ width: '100%' }}
+              prefix="GHS"
+              precision={2}
+              min={0.01}
+              placeholder="Enter amount in GHS"
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="email"
+            label="Customer Email"
+            rules={[
+              { required: true, message: 'Please enter an email for the Paystack receipt' },
+              { type: 'email', message: 'Please enter a valid email address' },
+            ]}
+          >
+            <Input placeholder="customer@example.com" />
+          </Form.Item>
+
+          <Form.Item>
+            <Space>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={paystackInitialize.isPending}
+                icon={<CreditCardOutlined />}
+              >
+                Continue to Paystack
+              </Button>
+              <Button onClick={() => {
+                setPaystackModal(false);
+                paystackForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
       {/* Generate Deed Modal */}
       <Modal
         title={
@@ -723,12 +922,12 @@ export const CustomerDetailPage: React.FC = () => {
         open={generateDeedModal}
         onCancel={() => {
           setGenerateDeedModal(false);
-          deedForm.resetFields();
+          resetDeedForm();
         }}
         footer={null}
-        width={500}
+        width={600}
         style={{ maxWidth: '95%', top: 20 }}
-        bodyStyle={{ padding: '16px' }}
+        bodyStyle={{ padding: '16px', maxHeight: '70vh', overflowY: 'auto' }}
       >
         <Form form={deedForm} layout="vertical" onFinish={handleGenerateDeed}>
           <Alert
@@ -747,25 +946,71 @@ export const CustomerDetailPage: React.FC = () => {
             style={{ marginBottom: 16 }}
           />
 
-          <Form.Item
-            name="deedType"
-            label="Deed Type"
-            rules={[{ required: true, message: 'Please select deed type' }]}
+          <Divider>Witnesses (minimum 1 required)</Divider>
+
+          {witnesses.map((witness, index) => (
+            <Row key={index} gutter={[8, 8]} style={{ marginBottom: 8 }}>
+              <Col xs={24} sm={10}>
+                <Form.Item
+                  label={index === 0 ? 'Witness Name' : ''}
+                  required={index === 0}
+                  style={{ marginBottom: 0 }}
+                >
+                  <Input
+                    placeholder="Full name"
+                    value={witness.name}
+                    onChange={(e) => updateWitness(index, 'name', e.target.value)}
+                    prefix={<UserOutlined />}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={10}>
+                <Form.Item
+                  label={index === 0 ? 'Contact' : ''}
+                  required={index === 0}
+                  style={{ marginBottom: 0 }}
+                >
+                  <Input
+                    placeholder="Phone number"
+                    value={witness.contact}
+                    onChange={(e) => updateWitness(index, 'contact', e.target.value)}
+                    prefix={<PhoneOutlined />}
+                  />
+                </Form.Item>
+              </Col>
+              <Col xs={24} sm={4}>
+                <Form.Item label={index === 0 ? 'Action' : ''} style={{ marginBottom: 0 }}>
+                  <Button
+                    type="text"
+                    danger
+                    icon={<DeleteOutlined />}
+                    onClick={() => removeWitness(index)}
+                    disabled={witnesses.length <= 1}
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+          ))}
+
+          <Button
+            type="dashed"
+            onClick={addWitness}
+            icon={<PlusOutlined />}
+            block
+            style={{ marginTop: 8, marginBottom: 16 }}
           >
-            <Select>
-              <Option value="sale">Sale Agreement</Option>
-              <Option value="transfer">Property Transfer</Option>
-              <Option value="mortgage">Mortgage</Option>
-              <Option value="lease">Lease Agreement</Option>
-              <Option value="other">Other</Option>
-            </Select>
-          </Form.Item>
+            Add Witness
+          </Button>
 
           <Form.Item
-            name="notes"
-            label="Notes (Optional)"
+            name="businessContacts"
+            label="Business Contacts"
+            rules={[{ required: true, message: 'Business contacts are required' }]}
           >
-            <TextArea rows={3} placeholder="Add any notes or special instructions" />
+            <TextArea
+              rows={3}
+              placeholder="Enter business contact information (e.g., Omark Real Estate Ltd. - Accra Office, Phone: +233 20 123 4567)"
+            />
           </Form.Item>
 
           <Form.Item>
@@ -779,7 +1024,7 @@ export const CustomerDetailPage: React.FC = () => {
               </Button>
               <Button onClick={() => {
                 setGenerateDeedModal(false);
-                deedForm.resetFields();
+                resetDeedForm();
               }}>
                 Cancel
               </Button>

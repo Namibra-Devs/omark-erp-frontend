@@ -71,10 +71,7 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
     
     // Role
     if (values.role) payload.role = values.role;
-    
-    // Department
-    if (values.department) payload.department = values.department;
-    
+
     // Status - convert to isActive boolean
     if (values.status) {
       payload.isActive = values.status === 'active';
@@ -168,13 +165,6 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
               <Option value="secretary">Secretary</Option>
               <Option value="accounts">Accounts</Option>
             </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="department"
-            label="Department"
-          >
-            <Input placeholder="Enter department" />
           </Form.Item>
 
           <Form.Item

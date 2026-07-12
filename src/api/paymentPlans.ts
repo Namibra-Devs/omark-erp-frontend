@@ -1,97 +1,33 @@
 // src/api/paymentPlans.ts
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import apiClient from '@/api/client';
+import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
+import type { PaymentPlan, PaymentPlanStatus, ProgressBand, Installment, Payment, ApiResponse } from '@/types';
 
-// --- Types ---
-
-export type PaymentPlanStatus = 'active' | 'completed' | 'defaulted' | 'cancelled';
-export type ProgressBand = 'red' | 'yellow' | 'light_green' | 'green';
-
-export interface PaymentPlanEntity {
-  id: string;
-  customerId: string;
-  customerName?: string;
-  propertyId?: string;
-  totalAmount: number;
-  amountPaid: number;
-  balance: number;
-  status: PaymentPlanStatus;
-  startDate: string;
-  endDate?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface PaymentPlan {
-  id: string;
-  customerId: string;
-  propertyId: string;
-  totalAmountMinor: number;
-  downPaymentMinor: number;
-  balanceMinor: number;
-  numMonths: number;
-  monthlyAmountMinor: number;
-  currency: string;
-  startDate: string;
-  status: PaymentPlanStatus;
-  progressPercent: number;
-  progressBand: ProgressBand;
-  createdAt: string;
-  updatedAt: string;
-}
+export type { PaymentPlan, PaymentPlanStatus, ProgressBand, Installment };
 
 export interface PaymentPlansListParams {
   page?: number;
-  limit?: number;
+  pageSize?: number;
   status?: PaymentPlanStatus;
-  customerId?: string;
-  search?: string;
+  band?: ProgressBand;
 }
 
-export interface PaymentPlansListResponse {
-  items: PaymentPlanEntity[];
+export interface PaymentPlansListResult {
+  items: PaymentPlan[];
   total: number;
   page: number;
-  limit: number;
-}
-
-export interface InstallmentEntity {
-  id: string;
-  planId: string;
-  dueDate: string;
-  amountDue: number;
-  amountPaid: number;
-  paidAt?: string;
-  status: 'pending' | 'paid' | 'overdue' | 'partial';
+  pageSize: number;
 }
 
 export interface CreatePaymentPlanPayload {
   customerId: string;
-  propertyId: string;
   totalAmountMinor: number;
   downPaymentMinor: number;
-  balanceMinor: number;
-  numMonths: number;
-  monthlyAmountMinor: number;
-  currency: string;
-  startDate: string;
-  status: PaymentPlanStatus;
-  progressPercent: number;
-  progressBand: ProgressBand;
-}
-
-export interface UpdatePaymentPlanPayload {
-  totalAmountMinor?: number;
-  downPaymentMinor?: number;
-  balanceMinor?: number;
+  planBasis: 'months' | 'monthly_amount';
   numMonths?: number;
   monthlyAmountMinor?: number;
-  currency?: string;
-  startDate?: string;
-  status?: PaymentPlanStatus;
-  progressPercent?: number;
-  progressBand?: ProgressBand;
+  startDate: string;
 }
 
 // --- Query Keys ---
@@ -99,12 +35,10 @@ export interface UpdatePaymentPlanPayload {
 export const paymentPlansKeys = {
   all: ['payment-plans'] as const,
   lists: () => [...paymentPlansKeys.all, 'list'] as const,
-  list: (params?: PaymentPlansListParams) =>
-    [...paymentPlansKeys.lists(), params ?? {}] as const,
+  list: (params?: PaymentPlansListParams) => [...paymentPlansKeys.lists(), params ?? {}] as const,
   details: () => [...paymentPlansKeys.all, 'detail'] as const,
   detail: (id: string) => [...paymentPlansKeys.details(), id] as const,
-  installments: (planId: string) =>
-    [...paymentPlansKeys.all, 'installments', planId] as const,
+  installments: (planId: string) => [...paymentPlansKeys.all, 'installments', planId] as const,
 };
 
 // --- Payment Plan Queries ---
@@ -114,25 +48,8 @@ export function usePaymentPlansQuery(params?: PaymentPlansListParams) {
     queryKey: paymentPlansKeys.list(params),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<PaymentPlansListResponse>('/payment-plans', { params });
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as PaymentPlansListResponse;
-        }
-        
-        if (data && 'items' in data && 'total' in data) {
-          return data as PaymentPlansListResponse;
-        }
-        
-        console.warn('Unexpected payment plans response format:', data);
-        return {
-          items: [],
-          total: 0,
-          page: params?.page || 1,
-          limit: params?.limit || 10,
-        } as PaymentPlansListResponse;
+        const res = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', { params });
+        return unwrapList(res) as PaymentPlansListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error fetching payment plans:', {
@@ -151,15 +68,10 @@ export function usePaymentPlanQuery(planId: string | undefined) {
     queryKey: paymentPlansKeys.detail(planId ?? ''),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<PaymentPlanEntity>(`/payment-plans/${planId}`);
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as PaymentPlanEntity;
-        }
-        
-        return data as PaymentPlanEntity;
+        const res = await apiClient.get<ApiResponse<PaymentPlan & { installments?: Installment[]; recentPayments?: Payment[] }>>(
+          `/payment-plans/${planId}`
+        );
+        return unwrapData(res);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching payment plan ${planId}:`, {
@@ -179,22 +91,8 @@ export function useInstallmentsQuery(planId: string | undefined) {
     queryKey: paymentPlansKeys.installments(planId ?? ''),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<InstallmentEntity[]>(
-          `/payment-plans/${planId}/installments`
-        );
-        
-        const data = res.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as InstallmentEntity[];
-        }
-        
-        if (Array.isArray(data)) {
-          return data as InstallmentEntity[];
-        }
-        
-        console.warn('Unexpected installments response format:', data);
-        return [];
+        const res = await apiClient.get<ApiResponse<Installment[]>>(`/payment-plans/${planId}/installments`);
+        return unwrapList(res).items;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching installments for plan ${planId}:`, {
@@ -217,74 +115,11 @@ export function useCreatePaymentPlanMutation() {
   return useMutation({
     mutationFn: async (payload: CreatePaymentPlanPayload) => {
       try {
-        const response = await apiClient.post<PaymentPlan>('/payment-plans', payload);
-        
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as PaymentPlan;
-        }
-        
-        return data as PaymentPlan;
+        const response = await apiClient.post<ApiResponse<PaymentPlan>>('/payment-plans', payload);
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error creating payment plan:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: paymentPlansKeys.lists() });
-    },
-  });
-}
-
-export function useUpdatePaymentPlanMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: UpdatePaymentPlanPayload }) => {
-      try {
-        const response = await apiClient.patch<PaymentPlan>(`/payment-plans/${id}`, data);
-        
-        const result = response.data;
-        
-        if (result && typeof result === 'object' && 'data' in result) {
-          return (result as any).data as PaymentPlan;
-        }
-        
-        return result as PaymentPlan;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error updating payment plan:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
-    },
-    onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: paymentPlansKeys.lists() });
-      queryClient.invalidateQueries({ queryKey: paymentPlansKeys.detail(variables.id) });
-    },
-  });
-}
-
-export function useDeletePaymentPlanMutation() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (id: string) => {
-      try {
-        await apiClient.delete(`/payment-plans/${id}`);
-        return id;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error deleting payment plan:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
@@ -329,32 +164,11 @@ export const getProgressBandConfig = (band: ProgressBand) => {
 
 // --- Backward Compatibility (Deprecated) ---
 
-/**
- * @deprecated Use usePaymentPlansQuery instead
- */
+/** @deprecated Use usePaymentPlansQuery instead */
 export const usePaymentPlans = usePaymentPlansQuery;
-
-/**
- * @deprecated Use usePaymentPlanQuery instead
- */
+/** @deprecated Use usePaymentPlanQuery instead */
 export const usePaymentPlan = usePaymentPlanQuery;
-
-/**
- * @deprecated Use useInstallmentsQuery instead
- */
+/** @deprecated Use useInstallmentsQuery instead */
 export const useInstallments = useInstallmentsQuery;
-
-/**
- * @deprecated Use useCreatePaymentPlanMutation instead
- */
+/** @deprecated Use useCreatePaymentPlanMutation instead */
 export const useCreatePaymentPlan = useCreatePaymentPlanMutation;
-
-/**
- * @deprecated Use useUpdatePaymentPlanMutation instead
- */
-export const useUpdatePaymentPlan = useUpdatePaymentPlanMutation;
-
-/**
- * @deprecated Use useDeletePaymentPlanMutation instead
- */
-export const useDeletePaymentPlan = useDeletePaymentPlanMutation;

@@ -1,5 +1,5 @@
 // src/pages/dashboard/admin/hooks/useAdminDashboard.ts
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { message, Modal } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminDashboardOverviewQuery } from '@/api/dashboard';
@@ -13,10 +13,14 @@ import {
 } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
+import type { Role } from '@/types';
 import type { User, SystemStats, ActivityLog } from '../types';
 
 // Maps backend UserEntity -> local User shape used by admin dashboard UI.
-const mapApiUserToLocalUser = (entity: UserEntity): User => {
+// `createdPassword` is only ever known for users created earlier in this
+// browser session (see `createdPasswords` state below) — the backend never
+// returns passwords, so it can't be recovered any other way.
+const mapApiUserToLocalUser = (entity: UserEntity, createdPassword?: string): User => {
   const name =
     entity.name ??
     [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim() ??
@@ -33,6 +37,8 @@ const mapApiUserToLocalUser = (entity: UserEntity): User => {
   return {
     id: entity.id,
     name,
+    firstName: entity.firstName,
+    lastName: entity.lastName,
     email: entity.email,
     phone,
     role: entity.role,
@@ -40,6 +46,7 @@ const mapApiUserToLocalUser = (entity: UserEntity): User => {
     department: entity.department || undefined,
     joined: entity.createdAt?.split('T')[0] ?? '',
     lastActive: entity.updatedAt?.split('T')[0] ?? '',
+    createdPassword,
   } as User;
 };
 
@@ -59,7 +66,7 @@ export const useAdminDashboard = () => {
   
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({
     page: 1,
-    limit: 1,
+    pageSize: 1,
   });
 
   // ── Mutations ───────────────────────────────────────────────────────────
@@ -71,68 +78,28 @@ export const useAdminDashboard = () => {
   const [localActivityLogs, setLocalActivityLogs] = useState<ActivityLog[]>([]);
   const [searchText, setSearchText] = useState('');
   const [filterRole, setFilterRole] = useState<string>('all');
+  // Passwords for users created earlier in this session, keyed by user id.
+  // In-memory only — never persisted (localStorage, etc.) and never sent
+  // anywhere but the original POST /users call, since the backend only
+  // stores a hash and will never return a password again.
+  const [createdPasswords, setCreatedPasswords] = useState<Record<string, string>>({});
 
   const loading =
-    statsLoading || usersLoading || prospectsLoading || customersLoading || 
+    statsLoading || usersLoading || prospectsLoading || customersLoading ||
     createUserMutation.isPending || updateUserMutation.isPending || deleteUserMutation.isPending;
 
-  // ── Log API data for debugging ──────────────────────────────────────────
-  useEffect(() => {
-    console.log('📊 API Stats Response:', apiStats);
-    console.log('📊 Total Prospects from API:', apiStats?.totalProspects);
-    console.log('📊 Total Customers from API:', apiStats?.totalCustomers);
-    console.log('📊 Total Users from API:', apiStats?.totalUsers);
-  }, [apiStats]);
-
   // ── Map live users list to local User shape ────────────────────────────
-  // Handle different response structures
-  let users: User[] = [];
-  
-  if (apiUsers) {
-    console.log('📊 Raw API Users Response:', apiUsers);
-    
-    // Try different response formats
-    let userEntities: UserEntity[] = [];
-    
-    // Format 1: { data: { items: [] } }
-    if (apiUsers.data && apiUsers.data.items) {
-      userEntities = apiUsers.data.items;
-    }
-    // Format 2: { items: [] }
-    else if (apiUsers.items) {
-      userEntities = apiUsers.items;
-    }
-    // Format 3: { data: [] }
-    else if (Array.isArray(apiUsers.data)) {
-      userEntities = apiUsers.data;
-    }
-    // Format 4: [] (direct array)
-    else if (Array.isArray(apiUsers)) {
-      userEntities = apiUsers;
-    }
-    // Format 5: Single object
-    else if (apiUsers.id) {
-      userEntities = [apiUsers];
-    }
-    
-    console.log('📊 Extracted User Entities:', userEntities);
-    users = userEntities.map(mapApiUserToLocalUser);
-    console.log('📊 Mapped Users:', users);
-  }
+  // useUsersQuery now always resolves to a flat { items, total, page, pageSize }
+  // shape (see src/api/users.ts), so no format-sniffing is needed here.
+  const users: User[] = (apiUsers?.items ?? []).map((entity) =>
+    mapApiUserToLocalUser(entity, createdPasswords[entity.id])
+  );
 
-  // ── Extract prospects and customers counts from API or fallback ────────
-  const totalProspects = apiStats?.totalProspects ?? 
-    (prospectsData as any)?.total ?? 
-    (prospectsData as any)?.data?.total ?? 
-    0;
-
-  const totalCustomers = apiStats?.totalCustomers ?? 
-    (customersData as any)?.total ?? 
-    (customersData as any)?.data?.total ?? 
-    0;
-
-  console.log('📊 Final Total Prospects:', totalProspects);
-  console.log('📊 Final Total Customers:', totalCustomers);
+  // ── Extract prospects and customers counts from API ────────────────────
+  // useProspectsQuery/useCustomersQuery also resolve to flat { items, total, ... }
+  // shapes now, so these no longer need defensive fallback-chasing.
+  const totalProspects = apiStats?.totalProspects ?? prospectsData?.total ?? 0;
+  const totalCustomers = apiStats?.totalCustomers ?? customersData?.total ?? 0;
 
   // ── Map API stats to SystemStats shape ────────────────────────────────
   const stats: SystemStats = {
@@ -235,20 +202,19 @@ export const useAdminDashboard = () => {
       'accounts': 'accounts',
     };
 
-    const role = roleMap[userData.role] || 'marketing_staff';
+    const role = (roleMap[userData.role] || 'marketing_staff') as Role;
 
+    // NOTE: `department` and `isActive` are intentionally NOT sent — POST /users
+    // only accepts { firstName, lastName, email, phoneNumber?, password, role }.
+    // The backend has no department concept, and isActive defaults server-side.
     const payload = {
       firstName: firstName.trim(),
       lastName: lastName.trim(),
       email: userData.email.trim(),
       phoneNumber: phone.trim(),
       password: password,
-      role: role as any,
-      department: userData.department || 'Marketing',
-      isActive: true,
+      role,
     };
-
-    console.log('📤 Sending registration payload:', payload);
 
     createUserMutation.mutate(payload, {
       onSuccess: (response) => {
@@ -257,15 +223,21 @@ export const useAdminDashboard = () => {
           makeLog('User Created', `Created new user: ${fullName || firstName}`, 'success'),
           ...prev,
         ]);
-        
+
+        // Remember the password for this session only, so it can be shown
+        // in the user table for handoff — the backend never returns it again.
+        if (response?.id) {
+          setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
+        }
+
         // Show password in success message (without JSX)
-        const passwordMessage = `User ${fullName || firstName} added successfully!\n\nTemporary password: ${password}\n\nPlease share this password with the user. They can change it after first login.`;
-        
+        const passwordMessage = `User ${fullName || firstName} added successfully!\n\nTemporary password: ${password}\n\nPlease share this password with the user. They can change it after first login. (It's also visible in the Login Password column below for the rest of this session.)`;
+
         message.success({
           content: passwordMessage,
           duration: 10,
         });
-        
+
         // Force refetch users with a delay to ensure backend has processed
         setTimeout(() => {
           refetchUsers();
@@ -303,7 +275,9 @@ export const useAdminDashboard = () => {
     if (userData.phone) payload.phoneNumber = userData.phone;
     if (userData.role) payload.role = userData.role;
     if (userData.status) payload.isActive = userData.status === 'active';
-    if (userData.department) payload.department = userData.department;
+    // NOTE: `department` is intentionally NOT sent — PATCH /users/{id} doesn't
+    // accept it; the backend has no department concept. It's kept on the
+    // local `User` display type only.
 
     updateUserMutation.mutate(
       { id, payload },
@@ -421,7 +395,7 @@ export const useAdminDashboard = () => {
 
     const csvRows: string[][] = [
       ['Name', 'Email', 'Phone', 'Role', 'Status', 'Department'],
-      ...users.map(u => [u.name, u.email, u.phone, u.role, u.status, u.department ?? '']),
+      ...users.map(u => [u.name, u.email, u.phone ?? '', u.role, u.status, u.department ?? '']),
     ];
 
     switch (format) {

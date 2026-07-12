@@ -1,15 +1,15 @@
 // src/pages/dashboard/admin/components/UserManagement.tsx
-import React from 'react';
-import { 
-  Card, Table, Input, Select, Button, Space, Tag, Avatar, 
+import React, { useState } from 'react';
+import {
+  Card, Table, Input, Select, Button, Space, Tag, Avatar,
   Typography, Tooltip, Popconfirm, Badge, Empty, message, Modal
 } from 'antd';
-import { 
-  SearchOutlined, 
-  PlusOutlined, 
-  EditOutlined, 
-  DeleteOutlined, 
-  LockOutlined, 
+import {
+  SearchOutlined,
+  PlusOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  LockOutlined,
   UnlockOutlined,
   UserOutlined,
   UserAddOutlined,
@@ -17,7 +17,10 @@ import {
   FilterOutlined,
   ExclamationCircleOutlined,
   StopOutlined,
-  CheckCircleOutlined
+  CheckCircleOutlined,
+  EyeOutlined,
+  EyeInvisibleOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
@@ -53,6 +56,27 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   onToggleStatus,
   onRefresh,
 }) => {
+  // Row ids whose password is currently revealed (masked by default).
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
+
+  const toggleReveal = (id: string) => {
+    setRevealedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const copyPassword = async (password: string) => {
+    try {
+      await navigator.clipboard.writeText(password);
+      message.success('Password copied to clipboard');
+    } catch {
+      message.error('Could not copy — please copy it manually');
+    }
+  };
+
   // Get status counts
   const activeCount = users.filter(u => u.status === 'active').length;
   const inactiveCount = users.filter(u => u.status === 'inactive').length;
@@ -258,20 +282,49 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       ),
     },
     {
-      title: 'Department',
-      dataIndex: 'department',
-      key: 'department',
-      width: 140,
-      render: (dept: string) => (
-        <Text style={{ fontSize: 13 }}>{dept || 'N/A'}</Text>
-      ),
+      title: 'Login Password',
+      key: 'createdPassword',
+      width: 200,
+      render: (_: any, record: User) => {
+        if (!record.createdPassword) {
+          return (
+            <Tooltip title="Only shown once, right after an account is created in this session — the server never returns passwords again.">
+              <Text type="secondary" style={{ fontSize: 12 }}>Not available</Text>
+            </Tooltip>
+          );
+        }
+        const revealed = revealedIds.has(record.id);
+        return (
+          <Space size={4}>
+            <Text code style={{ fontSize: 12 }}>
+              {revealed ? record.createdPassword : '•'.repeat(10)}
+            </Text>
+            <Tooltip title={revealed ? 'Hide' : 'Reveal'}>
+              <Button
+                type="text"
+                size="small"
+                icon={revealed ? <EyeInvisibleOutlined /> : <EyeOutlined />}
+                onClick={() => toggleReveal(record.id)}
+              />
+            </Tooltip>
+            <Tooltip title="Copy password">
+              <Button
+                type="text"
+                size="small"
+                icon={<CopyOutlined />}
+                onClick={() => copyPassword(record.createdPassword!)}
+              />
+            </Tooltip>
+          </Space>
+        );
+      },
     },
     {
       title: 'Status',
       key: 'status',
       width: 120,
       render: (_: any, record: User) => {
-        const isUserActive = (record as any).isActive ?? record.status === 'active' ?? true;
+        const isUserActive = (record as any).isActive ?? record.status === 'active';
         return (
           <Badge 
             status={isUserActive ? 'success' : 'error'}
@@ -286,7 +339,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     },
     {
       title: 'Joined',
-      dataIndex: 'createdAt',
+      dataIndex: 'joined',
       key: 'joined',
       width: 120,
       render: (date: string) => date ? new Date(date).toLocaleDateString() : 'N/A',
@@ -296,7 +349,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       key: 'actions',
       width: 280,
       render: (_: any, record: User) => {
-        const isUserActive = (record as any).isActive ?? record.status === 'active' ?? true;
+        const isUserActive = (record as any).isActive ?? record.status === 'active';
         const displayName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim();
         return (
           <Space size="small">

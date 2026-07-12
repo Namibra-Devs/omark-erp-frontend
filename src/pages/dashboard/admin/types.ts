@@ -2,6 +2,8 @@
 export interface User {
   id: string;
   name: string;
+  firstName?: string;
+  lastName?: string;
   email: string;
   role: string;
   status: 'active' | 'inactive' | 'suspended';
@@ -10,6 +12,10 @@ export interface User {
   avatar?: string;
   phone?: string;
   department?: string;
+  // Only ever populated for users created earlier in this browser session —
+  // the backend never returns passwords (they're hashed server-side), so
+  // this can't be recovered after a refresh or for users created elsewhere.
+  createdPassword?: string;
 }
 
 export interface SystemStats {

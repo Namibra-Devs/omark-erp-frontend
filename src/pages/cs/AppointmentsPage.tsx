@@ -46,12 +46,18 @@ import { tokens } from '@/constants/tokens';
 import {
   useAppointmentsQuery,
   useCreateAppointmentMutation,
-  useUpdateAppointmentStatusMutation,
-  useDeleteAppointmentMutation,
-  type Appointment,
+  useUpdateAppointmentMutation,
+  type Appointment as ApiAppointment,
   type AppointmentStatus,
-  type CreateAppointmentData
+  type AppointmentSource,
+  type CreateAppointmentPayload
 } from '@/api/appointments';
+import { useSendTestSMSMutation } from '@/api/notifications';
+
+type Appointment = ApiAppointment & {
+  date: string;
+  time: string;
+};
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import dayjs from 'dayjs';
@@ -71,12 +77,12 @@ const { RangePicker } = DatePicker;
 // Helper to get status config
 const getStatusConfig = (status: string) => {
   const configs: Record<string, { color: string; icon: any; label: string }> = {
-    pending: { color: '#1890ff', icon: <ClockCircleOutlined />, label: 'Pending' },
-    confirmed: { color: '#52c41a', icon: <CheckCircleOutlined />, label: 'Confirmed' },
-    cancelled: { color: '#ff4d4f', icon: <CloseCircleOutlined />, label: 'Cancelled' },
+    scheduled: { color: '#1890ff', icon: <ClockCircleOutlined />, label: 'Scheduled' },
     completed: { color: '#722ed1', icon: <CheckCircleOutlined />, label: 'Completed' },
+    canceled: { color: '#ff4d4f', icon: <CloseCircleOutlined />, label: 'Canceled' },
+    no_show: { color: '#faad14', icon: <WarningOutlined />, label: 'No Show' },
   };
-  return configs[status] || configs.pending;
+  return configs[status] || configs.scheduled;
 };
 
 // Helper to get source config
@@ -84,22 +90,21 @@ const getSourceConfig = (source: string) => {
   const configs: Record<string, { color: string; icon: any; label: string }> = {
     staff: { color: '#1890ff', icon: <UserOutlined />, label: 'Staff Created' },
     website: { color: '#faad14', icon: <GlobalOutlined />, label: 'Website Booking' },
-    public: { color: '#52c41a', icon: <GlobalOutlined />, label: 'Public Booking' },
   };
   return configs[source] || configs.staff;
 };
 
 export const AppointmentsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  
+  const { user, hasRole } = useAuth();
+
   // States
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
-  
+
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -107,6 +112,14 @@ export const AppointmentsPage: React.FC = () => {
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [updateStatusModal, setUpdateStatusModal] = useState(false);
   const [statusForm] = Form.useForm();
+
+  // SMS reminder state — the backend has no appointment-SMS log, so "sent"
+  // status is only tracked client-side for the current session (it resets
+  // on refresh). Sending itself is real: POST /notifications/test.
+  const [smsModal, setSmsModal] = useState(false);
+  const [appointmentForSms, setAppointmentForSms] = useState<Appointment | null>(null);
+  const [smsForm] = Form.useForm();
+  const [smsSentIds, setSmsSentIds] = useState<Set<string>>(new Set());
 
   // Export states
   const [exportModal, setExportModal] = useState(false);
@@ -123,32 +136,37 @@ export const AppointmentsPage: React.FC = () => {
     status: statusFilter !== 'all' ? statusFilter as AppointmentStatus : undefined,
   });
 
-  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ limit: 100 });
-  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ limit: 100 });
+  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 100 });
+  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
 
   // API Mutations
   const createAppointment = useCreateAppointmentMutation();
-  const updateStatus = useUpdateAppointmentStatusMutation();
-  const deleteAppointment = useDeleteAppointmentMutation();
+  const updateAppointment = useUpdateAppointmentMutation();
+  const sendTestSms = useSendTestSMSMutation();
 
-  // Combine prospects and customers for select dropdown
-  const allEntities = [
-    ...(prospectsData?.data?.map((p: any) => ({
-      id: p.id,
-      name: `${p.firstName} ${p.lastName}`,
-      phone: p.phone || p.mobile || '',
-      type: 'prospect' as const,
-    })) || []),
-    ...(customersData?.data?.map((c: any) => ({
-      id: c.id,
-      name: `${c.firstName} ${c.lastName}`,
-      phone: c.phone || c.mobile || '',
-      type: 'customer' as const,
-    })) || []),
-  ];
+  // Combine prospects and customers safely for select dropdown
+  const allEntities = React.useMemo(() => {
+    const prospects = prospectsData?.items ?? [];
+    const customers = customersData?.items ?? [];
+
+    return [
+      ...prospects.map((p) => ({
+        id: p.id,
+        name: `${p.firstName} ${p.lastName}`,
+        phone: p.phoneNumber || '',
+        type: 'prospect' as const,
+      })),
+      ...customers.map((c) => ({
+        id: c.id,
+        name: `${c.firstName} ${c.lastName}`,
+        phone: c.phoneNumber || '',
+        type: 'customer' as const,
+      })),
+    ];
+  }, [prospectsData, customersData]);
 
   // Get entity details
-  const getEntityDetails = (appointment: Appointment) => {
+  const getEntityDetails = (appointment: ApiAppointment) => {
     // Try to find in prospects or customers
     const entity = allEntities.find(e => e.id === appointment.prospectId || e.id === appointment.customerId);
     if (entity) {
@@ -157,17 +175,59 @@ export const AppointmentsPage: React.FC = () => {
     return { name: 'Unknown', phone: '' };
   };
 
+  // Handle SMS reminder — POST /notifications/test (admin only). Not tied to
+  // the appointment on the backend, so we track "sent" locally for this
+  // session only and pre-fill a reminder message the admin can edit.
+  const buildDefaultSmsMessage = (appointment: Appointment) => {
+    const entity = getEntityDetails(appointment);
+    const firstName = entity.name.split(' ')[0] || 'there';
+    const when = dayjs(appointment.scheduledFor).format('MMM D [at] h:mm A');
+    return `Hi ${firstName}, reminder: your appointment with Omark Real Estate is on ${when}. Call us if you need to reschedule.`.slice(0, 160);
+  };
+
+  const openSmsModal = (appointment: Appointment) => {
+    const entity = getEntityDetails(appointment);
+    setAppointmentForSms(appointment);
+    smsForm.setFieldsValue({
+      phoneNumber: entity.phone,
+      message: buildDefaultSmsMessage(appointment),
+    });
+    setSmsModal(true);
+  };
+
+  const handleSendSms = async (values: { phoneNumber: string; message: string }) => {
+    // Capture up front so a re-render between now and the request completing
+    // can't swap out which appointment we mark as sent.
+    const targetAppointmentId = appointmentForSms?.id;
+    if (!targetAppointmentId) return;
+
+    try {
+      await sendTestSms.mutateAsync(values);
+    } catch (error: any) {
+      message.error(error?.error?.message || error?.message || 'Failed to send SMS');
+      return;
+    }
+
+    // Only reachable once the request has actually succeeded — anything
+    // that throws here must never be mistaken for a failed send.
+    setSmsSentIds((prev) => {
+      const next = new Set(prev);
+      next.add(targetAppointmentId);
+      return next;
+    });
+    message.success('SMS sent successfully!');
+    setSmsModal(false);
+    setAppointmentForSms(null);
+  };
+
   // Handle create appointment
   const handleAddAppointment = async (values: any) => {
     try {
-      const appointmentData: CreateAppointmentData = {
+      const appointmentData: CreateAppointmentPayload = {
         prospectId: values.entityType === 'prospect' ? values.entityId : undefined,
         customerId: values.entityType === 'customer' ? values.entityId : undefined,
-        date: values.scheduledFor.format('YYYY-MM-DD'),
-        time: values.scheduledFor.format('HH:mm'),
-        status: 'pending' as AppointmentStatus,
-        notes: values.feedback || '',
-        source: 'staff',
+        scheduledFor: values.scheduledFor.toISOString(),
+        reason: values.feedback || undefined,
       };
 
       await createAppointment.mutateAsync(appointmentData);
@@ -183,12 +243,14 @@ export const AppointmentsPage: React.FC = () => {
   // Handle update status
   const handleUpdateStatus = async (values: { status: AppointmentStatus; feedback: string }) => {
     if (!selectedAppointment) return;
-    
+
     try {
-      await updateStatus.mutateAsync({
+      await updateAppointment.mutateAsync({
         id: selectedAppointment.id,
-        status: values.status,
-        notes: values.feedback,
+        payload: {
+          status: values.status,
+          feedback: values.feedback,
+        },
       });
       message.success(`Appointment status updated to ${values.status}!`);
       setUpdateStatusModal(false);
@@ -200,47 +262,78 @@ export const AppointmentsPage: React.FC = () => {
     }
   };
 
-  // Handle delete appointment
-  const handleDeleteAppointment = async (id: string) => {
+  // Handle cancel appointment (closest supported semantic to "delete")
+  const handleCancelAppointment = async (id: string) => {
     try {
-      await deleteAppointment.mutateAsync(id);
-      message.success('Appointment deleted successfully!');
+      await updateAppointment.mutateAsync({
+        id,
+        payload: { status: 'canceled' },
+      });
+      message.success('Appointment canceled successfully!');
       refetchAppointments();
     } catch (error: any) {
-      message.error(error?.message || 'Failed to delete appointment');
+      message.error(error?.message || 'Failed to cancel appointment');
     }
   };
+
+  // Safely extract raw appointments
+  const appointments: ApiAppointment[] = React.useMemo(() => {
+    return appointmentsData?.items ?? [];
+  }, [appointmentsData]);
+
+  // Map raw appointments to contain display-only date/time properties
+  const mappedAppointments = React.useMemo(() => {
+    return appointments.map((app) => {
+      let date = '';
+      let time = '';
+      const d = dayjs(app.scheduledFor);
+      if (d.isValid()) {
+        date = d.format('YYYY-MM-DD');
+        time = d.format('HH:mm');
+      }
+      return {
+        ...app,
+        date,
+        time,
+      } as Appointment;
+    });
+  }, [appointments]);
 
   // Filter appointments
-  const filteredAppointments = appointmentsData?.data?.filter((app: Appointment) => {
-    const entity = getEntityDetails(app);
-    const name = entity.name.toLowerCase();
-    const matchesSearch = name.includes(searchText.toLowerCase()) ||
-                          entity.phone.includes(searchText);
-    const matchesSource = sourceFilter === 'all' || app.source === sourceFilter;
-    let matchesDate = true;
-    if (dateRange) {
-      const appDate = dayjs(`${app.date}T${app.time}`);
-      matchesDate = appDate.isAfter(dateRange[0]) && appDate.isBefore(dateRange[1]);
-    }
-    return matchesSearch && matchesSource && matchesDate;
-  }) || [];
+  const filteredAppointments = React.useMemo(() => {
+    return mappedAppointments.filter((app: Appointment) => {
+      const entity = getEntityDetails(app);
+      const name = entity.name.toLowerCase();
+      const matchesSearch = name.includes(searchText.toLowerCase()) ||
+                            entity.phone.includes(searchText);
+      const matchesSource = sourceFilter === 'all' || app.source === sourceFilter;
+      let matchesDate = true;
+      if (dateRange) {
+        const appDate = dayjs(`${app.date}T${app.time}`);
+        matchesDate = appDate.isAfter(dateRange[0]) && appDate.isBefore(dateRange[1]);
+      }
+      return matchesSearch && matchesSource && matchesDate;
+    });
+  }, [mappedAppointments, searchText, sourceFilter, dateRange, allEntities]);
 
   // Status breakdown
-  const statusBreakdown = {
-    total: appointmentsData?.data?.length || 0,
-    pending: appointmentsData?.data?.filter((a: Appointment) => a.status === 'pending').length || 0,
-    confirmed: appointmentsData?.data?.filter((a: Appointment) => a.status === 'confirmed').length || 0,
-    cancelled: appointmentsData?.data?.filter((a: Appointment) => a.status === 'cancelled').length || 0,
-    completed: appointmentsData?.data?.filter((a: Appointment) => a.status === 'completed').length || 0,
-  };
+  const statusBreakdown = React.useMemo(() => {
+    return {
+      total: mappedAppointments.length,
+      scheduled: mappedAppointments.filter((a: Appointment) => a.status === 'scheduled').length,
+      completed: mappedAppointments.filter((a: Appointment) => a.status === 'completed').length,
+      canceled: mappedAppointments.filter((a: Appointment) => a.status === 'canceled').length,
+      noShow: mappedAppointments.filter((a: Appointment) => a.status === 'no_show').length,
+    };
+  }, [mappedAppointments]);
 
   // Source breakdown
-  const sourceBreakdown = {
-    staff: appointmentsData?.data?.filter((a: Appointment) => a.source === 'staff').length || 0,
-    website: appointmentsData?.data?.filter((a: Appointment) => a.source === 'website').length || 0,
-    public: appointmentsData?.data?.filter((a: Appointment) => a.source === 'public').length || 0,
-  };
+  const sourceBreakdown = React.useMemo(() => {
+    return {
+      staff: mappedAppointments.filter((a: Appointment) => a.source === 'staff').length,
+      website: mappedAppointments.filter((a: Appointment) => a.source === 'website').length,
+    };
+  }, [mappedAppointments]);
 
   // Export function
   const handleExport = () => {
@@ -254,20 +347,218 @@ export const AppointmentsPage: React.FC = () => {
         'Time': app.time,
         'Status': app.status,
         'Source': app.source,
-        'Notes': app.notes || 'N/A',
+        'Feedback': app.feedback || 'N/A',
         'Created': dayjs(app.createdAt).format('YYYY-MM-DD HH:mm'),
       };
     });
 
-    let fileName = `appointments-${dayjs().format('YYYY-MM-DD-HHmmss')}`;
-    let blob: Blob;
+    const fileName = `appointments-${dayjs().format('YYYY-MM-DD-HHmmss')}`;
+    
+    try {
+      const headers = ['Customer/Prospect', 'Phone', 'Date', 'Time', 'Status', 'Source', 'Feedback', 'Created'];
+      const csvRows = [
+        headers.join(','),
+        ...dataToExport.map(row => 
+          headers.map(header => {
+            const val = row[header as keyof typeof row] || '';
+            return `"${val.replace(/"/g, '""')}"`;
+          }).join(',')
+        )
+      ];
+      const blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${fileName}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      
+      message.success(`Exported ${dataToExport.length} appointments!`);
+    } catch (err) {
+      console.error('Export failed:', err);
+      message.error('Export failed');
+    } finally {
+      setExportLoading(false);
+      setExportModal(false);
+    }
+  };
 
-    // ... (export logic remains the same as in your original code)
-    // I'll keep it concise here but you can copy the full export logic from your original
+  // Render Drawer Content
+  const renderDrawerContent = () => {
+    if (!selectedAppointment) return null;
+    const entity = getEntityDetails(selectedAppointment);
+    const statusConfig = getStatusConfig(selectedAppointment.status);
+    const sourceConfig = getSourceConfig(selectedAppointment.source);
 
-    setExportLoading(false);
-    setExportModal(false);
-    message.success(`Exported ${dataToExport.length} appointments!`);
+    return (
+      <div style={{ height: '100%' }}>
+        {/* Header */}
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          marginBottom: 24,
+          paddingBottom: 16,
+          borderBottom: '1px solid #f0f0f0'
+        }}>
+          <Space>
+            <Avatar 
+              size={48} 
+              icon={<CalendarOutlined />} 
+              style={{ backgroundColor: tokens.primary }}
+            />
+            <div>
+              <Title level={4} style={{ margin: 0 }}>
+                {`Appointment with ${entity.name}`}
+              </Title>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <IdcardOutlined /> ID: {selectedAppointment.id}
+              </Text>
+            </div>
+          </Space>
+          <Button 
+            type="text" 
+            icon={<CloseOutlined />} 
+            onClick={() => setViewDrawerOpen(false)}
+            style={{ fontSize: 18 }}
+          />
+        </div>
+
+        {/* Status Banner */}
+        <div style={{
+          background: `${statusConfig.color}15`,
+          border: `1px solid ${statusConfig.color}50`,
+          borderRadius: 8,
+          padding: '12px 16px',
+          marginBottom: 24,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}>
+          <Space>
+            {statusConfig.icon}
+            <Text strong>Status: {statusConfig.label}</Text>
+          </Space>
+          <Tag color={statusConfig.color}>{statusConfig.label}</Tag>
+        </div>
+
+        {/* Quick Actions */}
+        <div style={{ marginBottom: 24 }}>
+          <Space wrap>
+            <Button 
+              type="primary" 
+              icon={<EditOutlined />}
+              onClick={() => {
+                setUpdateStatusModal(true);
+                statusForm.setFieldsValue({
+                  status: selectedAppointment.status,
+                  feedback: selectedAppointment.feedback || '',
+                });
+                setViewDrawerOpen(false);
+              }}
+            >
+              Update Status
+            </Button>
+            <Popconfirm
+              title="Cancel Appointment"
+              description="Are you sure you want to cancel this appointment?"
+              onConfirm={() => {
+                handleCancelAppointment(selectedAppointment.id);
+                setViewDrawerOpen(false);
+              }}
+              okText="Yes"
+              cancelText="No"
+              disabled={selectedAppointment.status === 'canceled' || selectedAppointment.status === 'completed'}
+            >
+              <Button
+                danger
+                icon={<CloseCircleOutlined />}
+                disabled={selectedAppointment.status === 'canceled' || selectedAppointment.status === 'completed'}
+              >
+                Cancel Appointment
+              </Button>
+            </Popconfirm>
+            {hasRole(['admin']) && (
+              <Button
+                icon={<MessageOutlined />}
+                onClick={() => {
+                  setViewDrawerOpen(false);
+                  openSmsModal(selectedAppointment);
+                }}
+              >
+                {smsSentIds.has(selectedAppointment.id) ? 'Send SMS Again' : 'Send SMS Reminder'}
+              </Button>
+            )}
+          </Space>
+        </div>
+
+        {/* Appointment Details */}
+        <Row gutter={[16, 16]}>
+          <Col span={24}>
+            <Card size="small" title="Schedule Information" bordered={false} style={{ background: '#fafafa' }}>
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label={<Space><CalendarOutlined /> Date</Space>}>
+                  <Text strong>{dayjs(selectedAppointment.date).format('MMMM DD, YYYY')}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label={<Space><ClockCircleOutlined /> Time</Space>}>
+                  <Text strong>{selectedAppointment.time}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label={<Space><GlobalOutlined /> Booking Source</Space>}>
+                  <Tag color={sourceConfig.color} icon={sourceConfig.icon}>
+                    {sourceConfig.label}
+                  </Tag>
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card size="small" title="Client Information" bordered={false} style={{ background: '#fafafa' }}>
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label={<Space><UserOutlined /> Name</Space>}>
+                  <Text strong>{entity.name}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label={<Space><PhoneOutlined /> Phone</Space>}>
+                  {entity.phone ? <a href={`tel:${entity.phone}`}>{entity.phone}</a> : 'N/A'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Relation">
+                  <Tag color={selectedAppointment.prospectId ? 'blue' : 'green'}>
+                    {selectedAppointment.prospectId ? 'Prospect' : 'Customer'}
+                  </Tag>
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card size="small" title="Notes & Feedback" bordered={false} style={{ background: '#fafafa' }}>
+              <Text>{selectedAppointment.feedback || 'No notes or feedback registered for this appointment.'}</Text>
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card size="small" title="System Info" bordered={false} style={{ background: '#fafafa' }}>
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label="Created At">
+                  {dayjs(selectedAppointment.createdAt).format('MMMM DD, YYYY HH:mm')}
+                </Descriptions.Item>
+                <Descriptions.Item label="Last Updated">
+                  {dayjs(selectedAppointment.updatedAt).format('MMMM DD, YYYY HH:mm')}
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+          </Col>
+        </Row>
+      </div>
+    );
   };
 
   // Table columns
@@ -336,16 +627,47 @@ export const AppointmentsPage: React.FC = () => {
       },
     },
     {
-      title: 'Notes',
-      dataIndex: 'notes',
-      key: 'notes',
+      title: 'Feedback',
+      dataIndex: 'feedback',
+      key: 'feedback',
       width: 180,
       ellipsis: true,
       render: (text: string) => (
         <Tooltip title={text}>
-          <Text>{text || 'No notes'}</Text>
+          <Text>{text || 'No feedback'}</Text>
         </Tooltip>
       ),
+    },
+    {
+      title: 'SMS Reminder',
+      key: 'sms',
+      width: 150,
+      render: (_: any, record: Appointment) => {
+        const sent = smsSentIds.has(record.id);
+        return (
+          <Space direction="vertical" size={2}>
+            <Badge
+              status={sent ? 'success' : 'default'}
+              text={
+                <Text style={{ fontSize: 12 }}>
+                  {sent ? 'Sent this session' : 'Not sent'}
+                </Text>
+              }
+            />
+            {hasRole(['admin']) && (
+              <Button
+                type="link"
+                size="small"
+                icon={<MessageOutlined />}
+                style={{ padding: 0, height: 'auto' }}
+                onClick={() => openSmsModal(record)}
+              >
+                {sent ? 'Send again' : 'Send SMS'}
+              </Button>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: 'Created',
@@ -377,27 +699,32 @@ export const AppointmentsPage: React.FC = () => {
             />
           </Tooltip>
           <Tooltip title="Update Status">
-            <Button 
-              icon={<EditOutlined />} 
+            <Button
+              icon={<EditOutlined />}
               onClick={() => {
                 setSelectedAppointment(record);
                 setUpdateStatusModal(true);
                 statusForm.setFieldsValue({
                   status: record.status,
-                  feedback: record.notes || '',
+                  feedback: record.feedback || '',
                 });
               }}
             />
           </Tooltip>
           <Popconfirm
-            title="Delete Appointment"
-            description={`Are you sure you want to delete this appointment?`}
-            onConfirm={() => handleDeleteAppointment(record.id)}
+            title="Cancel Appointment"
+            description={`Are you sure you want to cancel this appointment?`}
+            onConfirm={() => handleCancelAppointment(record.id)}
             okText="Yes"
             cancelText="No"
+            disabled={record.status === 'canceled' || record.status === 'completed'}
           >
-            <Tooltip title="Delete">
-              <Button danger icon={<DeleteOutlined />} />
+            <Tooltip title="Cancel">
+              <Button
+                danger
+                icon={<CloseCircleOutlined />}
+                disabled={record.status === 'canceled' || record.status === 'completed'}
+              />
             </Tooltip>
           </Popconfirm>
         </Space>
@@ -504,7 +831,11 @@ export const AppointmentsPage: React.FC = () => {
       <div style={{ padding: 24 }}>
         <Alert
           message="Error Loading Appointments"
-          description="There was an error loading the appointments. Please try again."
+          description={
+            (appointmentsError as any)?.error?.message ||
+            (appointmentsError as any)?.message ||
+            'There was an error loading the appointments. Please try again.'
+          }
           type="error"
           showIcon
           action={
@@ -555,20 +886,10 @@ export const AppointmentsPage: React.FC = () => {
         <Col xs={24} sm={12} md={4}>
           <Card size="small">
             <Statistic
-              title="Pending"
-              value={statusBreakdown.pending}
+              title="Scheduled"
+              value={statusBreakdown.scheduled}
               prefix={<ClockCircleOutlined />}
               valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Confirmed"
-              value={statusBreakdown.confirmed}
-              prefix={<CheckCircleOutlined />}
-              valueStyle={{ color: '#52c41a' }}
             />
           </Card>
         </Col>
@@ -585,8 +906,8 @@ export const AppointmentsPage: React.FC = () => {
         <Col xs={24} sm={12} md={4}>
           <Card size="small">
             <Statistic
-              title="Cancelled"
-              value={statusBreakdown.cancelled}
+              title="Canceled"
+              value={statusBreakdown.canceled}
               prefix={<CloseCircleOutlined />}
               valueStyle={{ color: '#ff4d4f' }}
             />
@@ -595,8 +916,18 @@ export const AppointmentsPage: React.FC = () => {
         <Col xs={24} sm={12} md={4}>
           <Card size="small">
             <Statistic
+              title="No Show"
+              value={statusBreakdown.noShow}
+              prefix={<WarningOutlined />}
+              valueStyle={{ color: '#faad14' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} md={4}>
+          <Card size="small">
+            <Statistic
               title="Website Bookings"
-              value={sourceBreakdown.website + sourceBreakdown.public}
+              value={sourceBreakdown.website}
               prefix={<GlobalOutlined />}
               valueStyle={{ color: '#faad14' }}
             />
@@ -627,10 +958,10 @@ export const AppointmentsPage: React.FC = () => {
               size="middle"
             >
               <Option value="all">All Statuses</Option>
-              <Option value="pending">Pending</Option>
-              <Option value="confirmed">Confirmed</Option>
+              <Option value="scheduled">Scheduled</Option>
               <Option value="completed">Completed</Option>
-              <Option value="cancelled">Cancelled</Option>
+              <Option value="canceled">Canceled</Option>
+              <Option value="no_show">No Show</Option>
             </Select>
           </Col>
           <Col xs={12} md={4}>
@@ -645,7 +976,6 @@ export const AppointmentsPage: React.FC = () => {
               <Option value="all">All Sources</Option>
               <Option value="staff">Staff Created</Option>
               <Option value="website">Website Booking</Option>
-              <Option value="public">Public Booking</Option>
             </Select>
           </Col>
           <Col xs={24} md={6}>
@@ -810,10 +1140,10 @@ export const AppointmentsPage: React.FC = () => {
             rules={[{ required: true, message: 'Please select a status' }]}
           >
             <Select placeholder="Select new status">
-              <Option value="pending">Pending</Option>
-              <Option value="confirmed">Confirmed</Option>
+              <Option value="scheduled">Scheduled</Option>
               <Option value="completed">Completed</Option>
-              <Option value="cancelled">Cancelled</Option>
+              <Option value="canceled">Canceled</Option>
+              <Option value="no_show">No Show</Option>
             </Select>
           </Form.Item>
 
@@ -826,10 +1156,10 @@ export const AppointmentsPage: React.FC = () => {
 
           <Form.Item>
             <Space wrap>
-              <Button 
-                type="primary" 
-                htmlType="submit" 
-                loading={updateStatus.isPending}
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={updateAppointment.isPending}
               >
                 Update Status
               </Button>
@@ -974,6 +1304,65 @@ export const AppointmentsPage: React.FC = () => {
       >
         {selectedAppointment && renderDrawerContent()}
       </Drawer>
+
+      {/* Send SMS Reminder Modal */}
+      <Modal
+        title={
+          <Space>
+            <MessageOutlined style={{ color: tokens.primary }} />
+            <Text strong>Send SMS Reminder</Text>
+          </Space>
+        }
+        open={smsModal}
+        onCancel={() => {
+          setSmsModal(false);
+          setAppointmentForSms(null);
+          smsForm.resetFields();
+        }}
+        footer={null}
+        width={480}
+        style={{ maxWidth: '95%', top: 20 }}
+        bodyStyle={{ padding: '16px' }}
+        destroyOnClose
+      >
+        <Alert
+          type="info"
+          showIcon
+          message="Sends immediately via SMS"
+          description="This isn't tied to the appointment on the backend — it's a direct text to the number below. Whether it was sent is only remembered for this browser session."
+          style={{ marginBottom: 16 }}
+        />
+        <Form form={smsForm} layout="vertical" onFinish={handleSendSms}>
+          <Form.Item
+            name="phoneNumber"
+            label="Phone Number"
+            rules={[{ required: true, message: 'Phone number is required' }]}
+          >
+            <Input placeholder="+233 XX XXX XXXX" />
+          </Form.Item>
+          <Form.Item
+            name="message"
+            label="Message"
+            rules={[{ required: true, message: 'Message is required' }]}
+          >
+            <Input.TextArea rows={4} maxLength={160} showCount />
+          </Form.Item>
+          <Form.Item>
+            <Space wrap>
+              <Button type="primary" htmlType="submit" loading={sendTestSms.isPending}>
+                Send SMS
+              </Button>
+              <Button onClick={() => {
+                setSmsModal(false);
+                setAppointmentForSms(null);
+                smsForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

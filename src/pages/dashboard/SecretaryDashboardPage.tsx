@@ -1,6 +1,6 @@
 // src/pages/dashboard/SecretaryDashboardPage.tsx
 import React, { useState } from 'react';
-import { Card, Row, Col, Typography, Statistic, Table, Tag, Progress, Empty, Spin, Alert, Button, Space, Modal, Form, Input, DatePicker, message, Select } from 'antd';
+import { Card, Row, Col, Typography, Statistic, Table, Tag, Progress, Empty, Spin, Alert, Button, Space, Modal, Form, Input, InputNumber, DatePicker, message, Select, Badge } from 'antd';
 import {
   DollarOutlined,
   FileTextOutlined,
@@ -29,7 +29,6 @@ import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
-const { TextArea } = Input;
 
 export const SecretaryDashboardPage: React.FC = () => {
   const { user } = useAuth();
@@ -44,22 +43,22 @@ export const SecretaryDashboardPage: React.FC = () => {
     refetch: refetchDashboard
   } = useSecretaryDashboardQuery();
 
-  const { 
-    data: customersData, 
+  const {
+    data: customersData,
     isLoading: customersLoading,
     refetch: refetchCustomers
-  } = useCustomersQuery({ limit: 100 });
+  } = useCustomersQuery({ pageSize: 100 });
 
-  const { 
+  const {
     data: paymentPlansData,
     isLoading: paymentPlansLoading,
     refetch: refetchPaymentPlans
-  } = usePaymentPlansQuery({ limit: 100 });
+  } = usePaymentPlansQuery({ pageSize: 100 });
 
-  const { 
+  const {
     data: propertiesData,
     isLoading: propertiesLoading
-  } = usePropertiesQuery({ limit: 100 });
+  } = usePropertiesQuery({ pageSize: 100 });
 
   // ── API Mutations ──────────────────────────────────────────────────────────
   const createCustomer = useCreateCustomerMutation();
@@ -75,9 +74,9 @@ export const SecretaryDashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   // ── Data Extraction ──────────────────────────────────────────────────────
-  const customers = customersData || [];
-  const paymentPlans = paymentPlansData?.items || [];
-  const properties = propertiesData || [];
+  const customers = customersData?.items ?? [];
+  const paymentPlans = paymentPlansData?.items ?? [];
+  const properties = propertiesData?.items ?? [];
 
   // ── Dashboard Data ──────────────────────────────────────────────────────
   const dashboard = {
@@ -224,11 +223,9 @@ export const SecretaryDashboardPage: React.FC = () => {
         firstName: values.firstName,
         lastName: values.lastName,
         phoneNumber: values.phoneNumber,
-        email: values.email,
         address: values.address,
         type: 'payment_plan',
         propertyId: values.propertyId,
-        notes: values.notes,
       });
       message.success('Customer added successfully!');
       setAddCustomerModal(false);
@@ -255,17 +252,12 @@ export const SecretaryDashboardPage: React.FC = () => {
 
       await createPaymentPlan.mutateAsync({
         customerId: selectedCustomer.customerId,
-        propertyId: plan.propertyId || '',
         totalAmountMinor: plan.totalAmountMinor || 0,
         downPaymentMinor: plan.downPaymentMinor || 0,
-        balanceMinor: plan.balanceMinor || 0,
+        planBasis: 'months',
         numMonths: plan.numMonths || 12,
         monthlyAmountMinor: plan.monthlyAmountMinor || 0,
-        currency: 'GHS',
         startDate: plan.startDate || dayjs().format('YYYY-MM-DD'),
-        status: 'active',
-        progressPercent: plan.progressPercent || 0,
-        progressBand: plan.progressBand || 'red',
       });
       
       message.success('Payment recorded successfully!');
@@ -535,14 +527,6 @@ export const SecretaryDashboardPage: React.FC = () => {
           </Form.Item>
 
           <Form.Item
-            name="email"
-            label="Email"
-            rules={[{ type: 'email', message: 'Please enter a valid email' }]}
-          >
-            <Input placeholder="Email address" />
-          </Form.Item>
-
-          <Form.Item
             name="address"
             label="Address"
             rules={[{ required: true, message: 'Address is required' }]}
@@ -562,13 +546,6 @@ export const SecretaryDashboardPage: React.FC = () => {
                 </Option>
               ))}
             </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="notes"
-            label="Notes"
-          >
-            <TextArea rows={2} placeholder="Additional notes" />
           </Form.Item>
 
           <Form.Item>

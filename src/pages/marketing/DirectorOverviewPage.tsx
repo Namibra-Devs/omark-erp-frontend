@@ -71,9 +71,52 @@ export const DirectorOverviewPage: React.FC = () => {
   const [timeRange, setTimeRange] = useState('monthly');
 
   // ── Extract Data from API ──────────────────────────────────────────────────
-  const marketers: MarketerPerformance[] = data?.marketers ?? [];
-  const performanceTrends = data?.performanceTrends ?? [];
-  const recentActivities = data?.recentActivities ?? [];
+  // The /dashboard/marketing endpoint only returns { marketers }; trend and
+  // activity feeds aren't part of this response, so those sections always
+  // fall back to locally generated placeholder data below.
+  //
+  // The API docs never published a schema for this endpoint's marketer
+  // objects, so the fields below are best-effort guesses — the live
+  // response only reliably includes the raw pipeline counts (id, name,
+  // totalProspects, new, meetingScheduled, meetingCompleted, postponed,
+  // suspended, converted). Every other field is normalized here with a
+  // safe default (or derived from the raw counts) so the rest of the page
+  // never dereferences `undefined`.
+  const marketers: MarketerPerformance[] = useMemo(
+    () =>
+      (data?.marketers ?? []).map((m: Partial<MarketerPerformance> & { id: string; name: string }) => {
+        const totalProspects = m.totalProspects ?? 0;
+        const converted = m.converted ?? 0;
+        return {
+          id: m.id,
+          name: m.name,
+          avatar: m.avatar,
+          email: m.email ?? '',
+          phone: m.phone ?? '',
+          department: m.department ?? 'Marketing',
+          totalProspects,
+          new: m.new ?? 0,
+          meetingScheduled: m.meetingScheduled ?? 0,
+          meetingCompleted: m.meetingCompleted ?? 0,
+          postponed: m.postponed ?? 0,
+          suspended: m.suspended ?? 0,
+          converted,
+          lastActivity: m.lastActivity ?? '',
+          conversionRate: m.conversionRate ?? (totalProspects > 0 ? (converted / totalProspects) * 100 : 0),
+          trend: m.trend ?? 'flat',
+          revenueGenerated: m.revenueGenerated ?? 0,
+          dealsClosed: m.dealsClosed ?? converted,
+          avgResponseTime: m.avgResponseTime ?? 0,
+          customerSatisfaction: m.customerSatisfaction ?? 0,
+          weeklyGrowth: m.weeklyGrowth ?? 0,
+          monthlyTarget: m.monthlyTarget ?? 0,
+          targetAchieved: m.targetAchieved ?? 0,
+        };
+      }),
+    [data]
+  );
+  const performanceTrends: Array<{ period: string; prospects: number; conversions: number; revenue: number; meetings: number }> = [];
+  const recentActivities: Array<{ id: string; user: string; action: string; details: string; timestamp: string; type: string }> = [];
 
   // Guard against divide-by-zero when the team list is empty
   const marketerCountForAvg = Math.max(marketers.length, 1);
@@ -458,8 +501,8 @@ export const DirectorOverviewPage: React.FC = () => {
                             <XAxis dataKey="period" />
                             <YAxis yAxisId="left" />
                             <YAxis yAxisId="right" orientation="right" />
-                            <RechartsTooltip 
-                              formatter={(value: any, name: string) => {
+                            <RechartsTooltip
+                              formatter={(value: any, name: any) => {
                                 if (name === 'Revenue') return `GHS ${(value / 100).toLocaleString()}`;
                                 return value;
                               }}

@@ -1,56 +1,54 @@
 // src/api/prospects.ts
-import { useQuery, useMutation, useQueryClient, UseQueryOptions } from '@tanstack/react-query';
-import apiClient from './client';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import apiClient, { unwrapData, unwrapList } from './client';
 import { AxiosError } from 'axios';
-import type { Prospect, Interaction, ApiResponse } from '@/types';
+import type { Prospect, Interaction, ApiResponse, ProspectSource, ProspectStatus, InteractionChannel, CustomerType } from '@/types';
 
-// --- Types ---
-
-export type ProspectStatus = 
-  | 'new' 
-  | 'meeting_scheduled' 
-  | 'meeting_completed' 
-  | 'suspended' 
-  | 'postponed' 
-  | 'canceled' 
-  | 'purchased';
-
-export type ProspectSource = 
-  | 'website' 
-  | 'referral' 
-  | 'social_media' 
-  | 'call' 
-  | 'email' 
-  | 'walk_in' 
-  | 'other';
-
-export type InteractionChannel = 
-  | 'call' 
-  | 'email' 
-  | 'whatsapp' 
-  | 'sms' 
-  | 'in_person' 
-  | 'social_media' 
-  | 'other';
+export type { ProspectSource, ProspectStatus, InteractionChannel };
 
 export interface ProspectsFilter {
-  source?: 'marketing' | 'customer_service';
+  source?: ProspectSource;
   assignedUserId?: string;
-  status?: ProspectStatus | string;
+  status?: ProspectStatus;
   q?: string;
+  includeConverted?: boolean;
   page?: number;
   pageSize?: number;
+  sortBy?: 'firstName' | 'lastName' | 'createdAt' | 'status';
+  sortOrder?: 'asc' | 'desc';
+}
+
+export interface ProspectsListResult {
+  items: Prospect[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
+export interface CreateProspectPayload {
+  firstName: string;
+  lastName: string;
+  address: string;
+  phoneNumber: string;
+  source: ProspectSource;
+  assignedUserId?: string;
+  reasonForContact?: string;
+  notes?: string;
+}
+
+export interface CreatePlanPayload {
+  totalAmountMinor: number;
+  downPaymentMinor: number;
+  planBasis: 'months' | 'monthly_amount';
+  numMonths?: number;
+  monthlyAmountMinor?: number;
+  startDate: string;
 }
 
 export interface ConvertProspectPayload {
-  type: 'fully_paid' | 'payment_plan';
+  customerType: CustomerType;
   propertyId: string;
-  plan?: {
-    totalAmountMinor: number;
-    downPaymentMinor: number;
-    numMonths: number;
-    startDate: string;
-  };
+  createPlan?: CreatePlanPayload;
 }
 
 export interface ConvertProspectResponse {
@@ -58,9 +56,8 @@ export interface ConvertProspectResponse {
   firstName: string;
   lastName: string;
   phoneNumber: string;
-  email?: string;
   address: string;
-  type: 'fully_paid' | 'payment_plan';
+  type: CustomerType;
   propertyId: string;
   createdAt: string;
   updatedAt: string;
@@ -71,12 +68,15 @@ export interface UpdateProspectPayload {
   lastName?: string;
   address?: string;
   phoneNumber?: string;
-  email?: string;
   status?: ProspectStatus;
   reasonForContact?: string;
   notes?: string;
-  source?: ProspectSource;
-  assignedUserId?: string;
+}
+
+export interface LogInteractionPayload {
+  channel: InteractionChannel;
+  occurredAt: string;
+  response: string;
 }
 
 // --- Query Keys ---
@@ -97,29 +97,8 @@ export const useProspectsQuery = (filter?: ProspectsFilter) => {
     queryKey: prospectKeys.list(filter),
     queryFn: async () => {
       try {
-        const params = new URLSearchParams();
-        if (filter?.source) params.append('source', filter.source);
-        if (filter?.assignedUserId) params.append('assignedUserId', filter.assignedUserId);
-        if (filter?.status) params.append('status', filter.status);
-        if (filter?.q) params.append('q', filter.q);
-        if (filter?.page) params.append('page', String(filter.page));
-        if (filter?.pageSize) params.append('pageSize', String(filter.pageSize));
-        
-        const response = await apiClient.get<ApiResponse<Prospect[]>>(`/prospects?${params}`);
-        
-        // Handle both wrapped and unwrapped responses
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Prospect[];
-        }
-        
-        if (Array.isArray(data)) {
-          return data as Prospect[];
-        }
-        
-        console.warn('Unexpected prospects response format:', data);
-        return [];
+        const response = await apiClient.get<ApiResponse<Prospect[]>>('/prospects', { params: filter });
+        return unwrapList(response) as ProspectsListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error fetching prospects:', {
@@ -138,15 +117,8 @@ export const useProspectQuery = (id: string) => {
     queryKey: prospectKeys.detail(id),
     queryFn: async () => {
       try {
-        const response = await apiClient.get<ApiResponse<Prospect>>(`/prospects/${id}`);
-        
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Prospect;
-        }
-        
-        return data as Prospect;
+        const response = await apiClient.get<ApiResponse<Prospect & { interactions?: Interaction[] }>>(`/prospects/${id}`);
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching prospect ${id}:`, {
@@ -169,19 +141,7 @@ export const useInteractionsQuery = (prospectId: string) => {
     queryFn: async () => {
       try {
         const response = await apiClient.get<ApiResponse<Interaction[]>>(`/prospects/${prospectId}/interactions`);
-        
-        const data = response.data;
-        
-        if (data && typeof data === 'object' && 'data' in data) {
-          return (data as any).data as Interaction[];
-        }
-        
-        if (Array.isArray(data)) {
-          return data as Interaction[];
-        }
-        
-        console.warn('Unexpected interactions response format:', data);
-        return [];
+        return unwrapList(response).items;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching interactions for prospect ${prospectId}:`, {
@@ -200,19 +160,12 @@ export const useInteractionsQuery = (prospectId: string) => {
 
 export const useCreateProspectMutation = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: async (data: Partial<Prospect>) => {
+    mutationFn: async (data: CreateProspectPayload) => {
       try {
         const response = await apiClient.post<ApiResponse<Prospect>>('/prospects', data);
-        
-        const result = response.data;
-        
-        if (result && typeof result === 'object' && 'data' in result) {
-          return (result as any).data as Prospect;
-        }
-        
-        return result as Prospect;
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error creating prospect:', {
@@ -231,28 +184,15 @@ export const useCreateProspectMutation = () => {
 
 export const useUpdateProspectMutation = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: async ({ id, data }: { id: string; data: UpdateProspectPayload }) => {
       try {
-        // Validate ID
         if (!id || id.trim() === '') {
           throw new Error('Prospect ID is required');
         }
-
-        console.log('📤 Updating prospect with ID:', id);
-        console.log('📤 Update data:', data);
-
-        // The ID should only be in the URL path, not in the body
         const response = await apiClient.patch<ApiResponse<Prospect>>(`/prospects/${id}`, data);
-        
-        const result = response.data;
-        
-        if (result && typeof result === 'object' && 'data' in result) {
-          return (result as any).data as Prospect;
-        }
-        
-        return result as Prospect;
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error updating prospect:', {
@@ -273,7 +213,7 @@ export const useUpdateProspectMutation = () => {
 
 export const useDeleteProspectMutation = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
     mutationFn: async (id: string) => {
       try {
@@ -299,25 +239,18 @@ export const useDeleteProspectMutation = () => {
 
 export const useConvertProspectMutation = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: async ({ 
-      prospectId, 
-      ...data 
+    mutationFn: async ({
+      prospectId,
+      ...data
     }: { prospectId: string } & ConvertProspectPayload) => {
       try {
         const response = await apiClient.post<ApiResponse<ConvertProspectResponse>>(
           `/prospects/${prospectId}/convert`,
           data
         );
-        
-        const result = response.data;
-        
-        if (result && typeof result === 'object' && 'data' in result) {
-          return (result as any).data as ConvertProspectResponse;
-        }
-        
-        return result as ConvertProspectResponse;
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error converting prospect:', {
@@ -332,7 +265,6 @@ export const useConvertProspectMutation = () => {
       queryClient.invalidateQueries({ queryKey: prospectKeys.lists() });
       queryClient.invalidateQueries({ queryKey: prospectKeys.detail(variables.prospectId) });
       queryClient.invalidateQueries({ queryKey: ['customers'] });
-      queryClient.invalidateQueries({ queryKey: ['customers', 'list'] });
     },
   });
 };
@@ -341,25 +273,18 @@ export const useConvertProspectMutation = () => {
 
 export const useLogInteractionMutation = () => {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: async ({ 
-      prospectId, 
-      ...data 
-    }: { prospectId: string; channel: InteractionChannel; occurredAt: string; response: string; loggedByUserId: string }) => {
+    mutationFn: async ({
+      prospectId,
+      ...data
+    }: { prospectId: string } & LogInteractionPayload) => {
       try {
         const response = await apiClient.post<ApiResponse<Interaction>>(
           `/prospects/${prospectId}/interactions`,
           data
         );
-        
-        const result = response.data;
-        
-        if (result && typeof result === 'object' && 'data' in result) {
-          return (result as any).data as Interaction;
-        }
-        
-        return result as Interaction;
+        return unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error logging interaction:', {
@@ -371,12 +296,8 @@ export const useLogInteractionMutation = () => {
       }
     },
     onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ 
-        queryKey: prospectKeys.interactions(variables.prospectId) 
-      });
-      queryClient.invalidateQueries({ 
-        queryKey: prospectKeys.detail(variables.prospectId) 
-      });
+      queryClient.invalidateQueries({ queryKey: prospectKeys.interactions(variables.prospectId) });
+      queryClient.invalidateQueries({ queryKey: prospectKeys.detail(variables.prospectId) });
     },
   });
 };
@@ -398,24 +319,19 @@ export const getProspectStatusConfig = (status: ProspectStatus) => {
 
 export const getProspectSourceConfig = (source: ProspectSource) => {
   const configs: Record<ProspectSource, { color: string; label: string }> = {
-    website: { color: 'blue', label: 'Website' },
-    referral: { color: 'green', label: 'Referral' },
-    social_media: { color: 'purple', label: 'Social Media' },
-    call: { color: 'cyan', label: 'Call' },
-    email: { color: 'orange', label: 'Email' },
-    walk_in: { color: 'gold', label: 'Walk-in' },
-    other: { color: 'default', label: 'Other' },
+    marketing: { color: 'blue', label: 'Marketing' },
+    customer_service: { color: 'cyan', label: 'Customer Service' },
   };
-  return configs[source] || configs.other;
+  return configs[source] || configs.marketing;
 };
 
 export const getInteractionChannelConfig = (channel: InteractionChannel) => {
   const configs: Record<InteractionChannel, { color: string; label: string }> = {
     call: { color: 'blue', label: 'Call' },
-    email: { color: 'orange', label: 'Email' },
-    whatsapp: { color: 'green', label: 'WhatsApp' },
     sms: { color: 'purple', label: 'SMS' },
+    whatsapp: { color: 'green', label: 'WhatsApp' },
     in_person: { color: 'gold', label: 'In Person' },
+    email: { color: 'orange', label: 'Email' },
     social_media: { color: 'cyan', label: 'Social Media' },
     other: { color: 'default', label: 'Other' },
   };
@@ -424,71 +340,13 @@ export const getInteractionChannelConfig = (channel: InteractionChannel) => {
 
 // --- Backward Compatibility (Deprecated) ---
 
-/**
- * @deprecated Use useProspectsQuery instead
- */
+/** @deprecated Use useProspectsQuery instead */
 export const useProspects = useProspectsQuery;
-
-/**
- * @deprecated Use useProspectQuery instead
- */
+/** @deprecated Use useProspectQuery instead */
 export const useProspect = useProspectQuery;
-
-/**
- * @deprecated Use useCreateProspectMutation instead
- */
+/** @deprecated Use useCreateProspectMutation instead */
 export const useCreateProspect = useCreateProspectMutation;
-
-/**
- * @deprecated Use useUpdateProspectMutation instead
- */
+/** @deprecated Use useUpdateProspectMutation instead */
 export const useUpdateProspect = useUpdateProspectMutation;
-
-/**
- * @deprecated Use useConvertProspectMutation instead
- */
-export const useConvertProspect = (prospectId: string) => {
-  const mutation = useConvertProspectMutation();
-  
-  return {
-    mutateAsync: async (data: ConvertProspectPayload) => {
-      return mutation.mutateAsync({ prospectId, ...data });
-    },
-    mutate: (data: ConvertProspectPayload, options?: any) => {
-      return mutation.mutate({ prospectId, ...data }, options);
-    },
-    isPending: mutation.isPending,
-    isError: mutation.isError,
-    isSuccess: mutation.isSuccess,
-    error: mutation.error,
-    data: mutation.data,
-    reset: mutation.reset,
-  };
-};
-
-/**
- * @deprecated Use useInteractionsQuery instead
- */
+/** @deprecated Use useInteractionsQuery instead */
 export const useInteractions = useInteractionsQuery;
-
-/**
- * @deprecated Use useLogInteractionMutation instead
- */
-export const useLogInteraction = (prospectId: string) => {
-  const mutation = useLogInteractionMutation();
-  
-  return {
-    mutateAsync: async (data: Omit<Parameters<typeof mutation.mutateAsync>[0], 'prospectId'>) => {
-      return mutation.mutateAsync({ prospectId, ...data });
-    },
-    mutate: (data: Omit<Parameters<typeof mutation.mutate>[0], 'prospectId'>, options?: any) => {
-      return mutation.mutate({ prospectId, ...data }, options);
-    },
-    isPending: mutation.isPending,
-    isError: mutation.isError,
-    isSuccess: mutation.isSuccess,
-    error: mutation.error,
-    data: mutation.data,
-    reset: mutation.reset,
-  };
-};

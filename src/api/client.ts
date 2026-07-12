@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 // src/api/client.ts
-import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios';
-import type { ApiError } from '@/types';
+import axios, { AxiosError, AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
+import type { ApiError, ApiResponse } from '@/types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://api.erp.omarkrealestate.com';
 
@@ -131,5 +131,32 @@ export const clearTokens = () => {
 
 export const getAccessToken = () => accessToken;
 export const getRefreshToken = () => refreshToken;
+
+// The backend always wraps single-resource responses as { data: T } and
+// paginated list responses as { data: T[], meta: PaginationMeta }.
+export interface ListResult<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+}
+
+export function unwrapData<T>(response: AxiosResponse<ApiResponse<T>>): T {
+  return response.data?.data as T;
+}
+
+export function unwrapList<T>(response: AxiosResponse<ApiResponse<T[]>>): ListResult<T> {
+  const body = response.data;
+  const items = Array.isArray(body?.data) ? body.data : [];
+  const meta = body?.meta;
+  return {
+    items,
+    total: meta?.total ?? items.length,
+    page: meta?.page ?? 1,
+    pageSize: meta?.pageSize ?? items.length,
+    totalPages: meta?.totalPages ?? 1,
+  };
+}
 
 export default apiClient;

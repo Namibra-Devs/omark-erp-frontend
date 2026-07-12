@@ -1,13 +1,13 @@
 // src/components/layout/TopHeader.tsx
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Layout, Space, Typography, Tag, Dropdown, Avatar, Badge, Modal, Form, Input, Button, message, List, Spin, Empty, Drawer, Divider } from 'antd';
-import { 
-  UserOutlined, 
-  LogoutOutlined, 
+import {
+  UserOutlined,
+  LogoutOutlined,
   DownOutlined,
   BellOutlined,
   SettingOutlined,
-  QuestionCircleOutlined,
   EditOutlined,
   MailOutlined,
   PhoneOutlined,
@@ -19,7 +19,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { roleLabels } from '@/constants/enums';
 import { useUserQuery, useUpdateUserMutation } from '@/api/users';
-import { useNotificationsQuery, type Notification } from '@/api/notifications';
+import { useNotificationsQuery, usePendingNotificationsCountQuery, type NotificationLog } from '@/api/notifications';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -29,50 +29,54 @@ const { Header } = Layout;
 const { Text } = Typography;
 
 export const TopHeader: React.FC = () => {
+  const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [profileModal, setProfileModal] = useState(false);
   const [notificationDrawer, setNotificationDrawer] = useState(false);
   const [form] = Form.useForm();
 
   // ── API Queries ────────────────────────────────────────────────────────────
-  const { 
-    data: userData, 
+  const {
+    data: userData,
     isLoading: userLoading,
     refetch: refetchUser
   } = useUserQuery(user?.id || '');
 
-  const { 
-    data: notificationsData, 
+  // The drawer lists recent notifications regardless of status (sent,
+  // pending, failed) — not just pending ones — so it's an actual activity
+  // list rather than a narrow to-do queue.
+  const {
+    data: notificationsData,
     isLoading: notificationsLoading,
     refetch: refetchNotifications
-  } = useNotificationsQuery({ 
-    limit: 10,
-    status: 'pending' 
-  });
+  } = useNotificationsQuery({ pageSize: 10 });
+
+  // Sourced from the paginated total (not the 10 items on this page), so it
+  // doesn't undercount once there are more than 10 pending notifications.
+  const { data: pendingCount = 0 } = usePendingNotificationsCountQuery();
 
   // ── API Mutations ──────────────────────────────────────────────────────────
   const updateUser = useUpdateUserMutation();
 
   // ── Data Extraction ──────────────────────────────────────────────────────
   const currentUser = userData || user;
-  const notifications = (notificationsData as any)?.items || [];
-  const pendingCount = notifications.filter((n: Notification) => n.status === 'pending').length;
+  const notifications = notificationsData?.items ?? [];
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleUpdateProfile = async (values: any) => {
     if (!user?.id) return;
-    
+
     try {
       await updateUser.mutateAsync({
         id: user.id,
-        data: {
+        payload: {
           firstName: values.firstName,
           lastName: values.lastName,
           email: values.email,
-          phone: values.phone,
+          phoneNumber: values.phoneNumber,
         },
       });
-      
+
       message.success('Profile updated successfully!');
       setProfileModal(false);
       refetchUser();
@@ -101,7 +105,7 @@ export const TopHeader: React.FC = () => {
           firstName: currentUser?.firstName,
           lastName: currentUser?.lastName,
           email: currentUser?.email,
-          phone: currentUser?.phone,
+          phoneNumber: currentUser?.phoneNumber,
         });
       },
     },
@@ -134,8 +138,6 @@ export const TopHeader: React.FC = () => {
         return <ClockCircleOutlined style={{ color: '#1890ff' }} />;
       case 'contribution_overdue':
         return <CloseCircleOutlined style={{ color: '#ff4d4f' }} />;
-      case 'payment_confirmation':
-        return <CheckCircleOutlined style={{ color: '#52c41a' }} />;
       default:
         return <BellOutlined style={{ color: '#faad14' }} />;
     }
@@ -172,7 +174,7 @@ export const TopHeader: React.FC = () => {
       ) : notifications.length > 0 ? (
         <List
           dataSource={notifications}
-          renderItem={(item: Notification) => (
+          renderItem={(item: NotificationLog) => (
             <List.Item
               style={{
                 padding: '12px 16px',
@@ -225,12 +227,12 @@ export const TopHeader: React.FC = () => {
         </div>
       )}
       <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0' }}>
-        <Button 
-          type="link" 
+        <Button
+          type="link"
           block
           onClick={() => {
             setNotificationDrawer(false);
-            window.location.href = '/notifications';
+            navigate('/notifications');
           }}
         >
           View All Notifications
@@ -300,12 +302,6 @@ export const TopHeader: React.FC = () => {
                 }}
               />
             </Badge>
-            
-            {/* Help Icon */}
-            <QuestionCircleOutlined 
-              style={{ fontSize: 20, cursor: 'pointer' }}
-              onClick={() => message.info('Help documentation coming soon!')}
-            />
             
             {/* Role Tag */}
             <Tag color="blue" style={{ margin: 0, padding: '2px 12px' }}>
@@ -382,7 +378,7 @@ export const TopHeader: React.FC = () => {
           </Form.Item>
           
           <Form.Item
-            name="phone"
+            name="phoneNumber"
             label="Phone Number"
             rules={[{ required: true, message: 'Please enter your phone number' }]}
           >

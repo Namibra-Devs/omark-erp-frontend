@@ -9,6 +9,7 @@ import {
   PlusOutlined,
   BellOutlined,
   SafetyOutlined,
+  BarChartOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdminDashboard } from './admin/hooks/useAdminDashboard';
@@ -19,6 +20,7 @@ import { UserManagement } from './admin/components/UserManagement';
 import { AddUserModal } from './admin/components/AddUserModal';
 import { EditUserDrawer } from './admin/components/EditUserDrawer';
 import { ExportModal } from './admin/components/ExportModal';
+import { AnalyticsSection } from './admin/components/AnalyticsSection';
 
 const { Title, Text } = Typography;
 
@@ -93,7 +95,8 @@ const LiveDot: React.FC = () => (
 
 // ─────────────────────────────────────────────────────────────────────────────
 export const AdminDashboardPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
+  const canViewAnalytics = hasRole(['admin', 'accounts', 'marketing_director']);
   const {
     users,
     activityLogs,
@@ -198,6 +201,20 @@ export const AdminDashboardPage: React.FC = () => {
         />
       ),
     },
+    ...(canViewAnalytics
+      ? [
+          {
+            key: '3',
+            label: (
+              <span className="adp-tab-label">
+                <BarChartOutlined />
+                Analytics
+              </span>
+            ),
+            children: <AnalyticsSection />,
+          },
+        ]
+      : []),
   ];
 
   // ─────────────────────────────────────────────────────────────────────────
