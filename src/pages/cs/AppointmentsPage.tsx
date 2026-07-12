@@ -52,7 +52,6 @@ import {
   type AppointmentSource,
   type CreateAppointmentPayload
 } from '@/api/appointments';
-import { useSendTestSMSMutation } from '@/api/notifications';
 
 type Appointment = ApiAppointment & {
   date: string;
@@ -96,15 +95,15 @@ const getSourceConfig = (source: string) => {
 
 export const AppointmentsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user, hasRole } = useAuth();
-
+  const { user } = useAuth();
+  
   // States
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sourceFilter, setSourceFilter] = useState<string>('all');
   const [dateRange, setDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
-
+  
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
@@ -112,14 +111,6 @@ export const AppointmentsPage: React.FC = () => {
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [updateStatusModal, setUpdateStatusModal] = useState(false);
   const [statusForm] = Form.useForm();
-
-  // SMS reminder state — the backend has no appointment-SMS log, so "sent"
-  // status is only tracked client-side for the current session (it resets
-  // on refresh). Sending itself is real: POST /notifications/test.
-  const [smsModal, setSmsModal] = useState(false);
-  const [appointmentForSms, setAppointmentForSms] = useState<Appointment | null>(null);
-  const [smsForm] = Form.useForm();
-  const [smsSentIds, setSmsSentIds] = useState<Set<string>>(new Set());
 
   // Export states
   const [exportModal, setExportModal] = useState(false);
@@ -142,7 +133,6 @@ export const AppointmentsPage: React.FC = () => {
   // API Mutations
   const createAppointment = useCreateAppointmentMutation();
   const updateAppointment = useUpdateAppointmentMutation();
-  const sendTestSms = useSendTestSMSMutation();
 
   // Combine prospects and customers safely for select dropdown
   const allEntities = React.useMemo(() => {
@@ -173,51 +163,6 @@ export const AppointmentsPage: React.FC = () => {
       return { name: entity.name, phone: entity.phone };
     }
     return { name: 'Unknown', phone: '' };
-  };
-
-  // Handle SMS reminder — POST /notifications/test (admin only). Not tied to
-  // the appointment on the backend, so we track "sent" locally for this
-  // session only and pre-fill a reminder message the admin can edit.
-  const buildDefaultSmsMessage = (appointment: Appointment) => {
-    const entity = getEntityDetails(appointment);
-    const firstName = entity.name.split(' ')[0] || 'there';
-    const when = dayjs(appointment.scheduledFor).format('MMM D [at] h:mm A');
-    return `Hi ${firstName}, reminder: your appointment with Omark Real Estate is on ${when}. Call us if you need to reschedule.`.slice(0, 160);
-  };
-
-  const openSmsModal = (appointment: Appointment) => {
-    const entity = getEntityDetails(appointment);
-    setAppointmentForSms(appointment);
-    smsForm.setFieldsValue({
-      phoneNumber: entity.phone,
-      message: buildDefaultSmsMessage(appointment),
-    });
-    setSmsModal(true);
-  };
-
-  const handleSendSms = async (values: { phoneNumber: string; message: string }) => {
-    // Capture up front so a re-render between now and the request completing
-    // can't swap out which appointment we mark as sent.
-    const targetAppointmentId = appointmentForSms?.id;
-    if (!targetAppointmentId) return;
-
-    try {
-      await sendTestSms.mutateAsync(values);
-    } catch (error: any) {
-      message.error(error?.error?.message || error?.message || 'Failed to send SMS');
-      return;
-    }
-
-    // Only reachable once the request has actually succeeded — anything
-    // that throws here must never be mistaken for a failed send.
-    setSmsSentIds((prev) => {
-      const next = new Set(prev);
-      next.add(targetAppointmentId);
-      return next;
-    });
-    message.success('SMS sent successfully!');
-    setSmsModal(false);
-    setAppointmentForSms(null);
   };
 
   // Handle create appointment
@@ -480,17 +425,6 @@ export const AppointmentsPage: React.FC = () => {
                 Cancel Appointment
               </Button>
             </Popconfirm>
-            {hasRole(['admin']) && (
-              <Button
-                icon={<MessageOutlined />}
-                onClick={() => {
-                  setViewDrawerOpen(false);
-                  openSmsModal(selectedAppointment);
-                }}
-              >
-                {smsSentIds.has(selectedAppointment.id) ? 'Send SMS Again' : 'Send SMS Reminder'}
-              </Button>
-            )}
           </Space>
         </div>
 
@@ -637,37 +571,6 @@ export const AppointmentsPage: React.FC = () => {
           <Text>{text || 'No feedback'}</Text>
         </Tooltip>
       ),
-    },
-    {
-      title: 'SMS Reminder',
-      key: 'sms',
-      width: 150,
-      render: (_: any, record: Appointment) => {
-        const sent = smsSentIds.has(record.id);
-        return (
-          <Space direction="vertical" size={2}>
-            <Badge
-              status={sent ? 'success' : 'default'}
-              text={
-                <Text style={{ fontSize: 12 }}>
-                  {sent ? 'Sent this session' : 'Not sent'}
-                </Text>
-              }
-            />
-            {hasRole(['admin']) && (
-              <Button
-                type="link"
-                size="small"
-                icon={<MessageOutlined />}
-                style={{ padding: 0, height: 'auto' }}
-                onClick={() => openSmsModal(record)}
-              >
-                {sent ? 'Send again' : 'Send SMS'}
-              </Button>
-            )}
-          </Space>
-        );
-      },
     },
     {
       title: 'Created',
@@ -1304,65 +1207,6 @@ export const AppointmentsPage: React.FC = () => {
       >
         {selectedAppointment && renderDrawerContent()}
       </Drawer>
-
-      {/* Send SMS Reminder Modal */}
-      <Modal
-        title={
-          <Space>
-            <MessageOutlined style={{ color: tokens.primary }} />
-            <Text strong>Send SMS Reminder</Text>
-          </Space>
-        }
-        open={smsModal}
-        onCancel={() => {
-          setSmsModal(false);
-          setAppointmentForSms(null);
-          smsForm.resetFields();
-        }}
-        footer={null}
-        width={480}
-        style={{ maxWidth: '95%', top: 20 }}
-        bodyStyle={{ padding: '16px' }}
-        destroyOnClose
-      >
-        <Alert
-          type="info"
-          showIcon
-          message="Sends immediately via SMS"
-          description="This isn't tied to the appointment on the backend — it's a direct text to the number below. Whether it was sent is only remembered for this browser session."
-          style={{ marginBottom: 16 }}
-        />
-        <Form form={smsForm} layout="vertical" onFinish={handleSendSms}>
-          <Form.Item
-            name="phoneNumber"
-            label="Phone Number"
-            rules={[{ required: true, message: 'Phone number is required' }]}
-          >
-            <Input placeholder="+233 XX XXX XXXX" />
-          </Form.Item>
-          <Form.Item
-            name="message"
-            label="Message"
-            rules={[{ required: true, message: 'Message is required' }]}
-          >
-            <Input.TextArea rows={4} maxLength={160} showCount />
-          </Form.Item>
-          <Form.Item>
-            <Space wrap>
-              <Button type="primary" htmlType="submit" loading={sendTestSms.isPending}>
-                Send SMS
-              </Button>
-              <Button onClick={() => {
-                setSmsModal(false);
-                setAppointmentForSms(null);
-                smsForm.resetFields();
-              }}>
-                Cancel
-              </Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   );
 };

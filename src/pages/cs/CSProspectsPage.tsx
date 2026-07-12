@@ -57,6 +57,7 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
+import { useUsersQuery } from '@/api/users';
 import { prospectStatusLabels, prospectSourceLabels, interactionChannelLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import type { Prospect, ProspectStatus, ProspectSource } from '@/types';
@@ -121,6 +122,14 @@ export const CSProspectsPage: React.FC = () => {
   const updateProspect = useUpdateProspectMutation();
   const deleteProspect = useDeleteProspectMutation();
 
+  // Only admins can set assignedUserId at creation (per the API), and only
+  // admins need to pick — customer_service reps creating their own
+  // prospects should just self-assign, matching how the field is hidden
+  // for them below.
+  const isAdmin = hasRole(['admin']);
+  const { data: csStaffData } = useUsersQuery(isAdmin ? { role: 'customer_service' } : undefined);
+  const csStaff = isAdmin ? (csStaffData?.items ?? []) : [];
+
   // ── Data Extraction ──────────────────────────────────────────────────────
   const prospects: Prospect[] = prospectsData?.items ?? [];
 
@@ -148,7 +157,9 @@ export const CSProspectsPage: React.FC = () => {
       const payload = {
         ...values,
         source: 'customer_service' as ProspectSource,
-        assignedUserId: user?.id || '4',
+        // Admins explicitly choose the rep via the form below. Anyone else
+        // creating their own prospect self-assigns, as before.
+        assignedUserId: isAdmin ? values.assignedUserId : user?.id,
       };
 
       await createProspect.mutateAsync(payload);
@@ -979,7 +990,24 @@ export const CSProspectsPage: React.FC = () => {
           >
             <PhoneInput />
           </Form.Item>
-          
+
+          {isAdmin && (
+            <Form.Item
+              name="assignedUserId"
+              label="Assign To Rep"
+              rules={[{ required: true, message: 'Please choose which rep this prospect belongs to' }]}
+              extra="This can't be changed later — the API only accepts assignment at creation."
+            >
+              <Select placeholder="Select customer service rep" showSearch optionFilterProp="children">
+                {csStaff.map((staff) => (
+                  <Option key={staff.id} value={staff.id}>
+                    {staff.firstName} {staff.lastName} ({staff.email})
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
+
           <Form.Item
             name="reasonForContact"
             label="Reason for Contact"

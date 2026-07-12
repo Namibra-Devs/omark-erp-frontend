@@ -44,7 +44,10 @@ export const notificationsKeys = {
 
 // --- Hooks ---
 
-export function useNotificationsQuery(params?: NotificationsListParams) {
+// GET /notifications is only accessible to admin/secretary/accounts on the
+// backend — pass `enabled: false` for other roles so this doesn't fire a
+// request that's guaranteed to 403.
+export function useNotificationsQuery(params?: NotificationsListParams, enabled = true) {
   return useQuery({
     queryKey: notificationsKeys.list(params),
     queryFn: async () => {
@@ -61,6 +64,7 @@ export function useNotificationsQuery(params?: NotificationsListParams) {
         throw error;
       }
     },
+    enabled,
   });
 }
 
@@ -68,8 +72,12 @@ export function useNotificationsQuery(params?: NotificationsListParams) {
  * Count of pending (undelivered) SMS notifications, used for the nav badge.
  * There is no dedicated "unread count" endpoint — this reads the pagination
  * meta.total off a 1-row pending-status query instead of fetching a full page.
+ *
+ * GET /notifications is only accessible to admin/secretary/accounts on the
+ * backend — pass `enabled: false` for other roles so this doesn't fire a
+ * request that's guaranteed to 403.
  */
-export function usePendingNotificationsCountQuery() {
+export function usePendingNotificationsCountQuery(enabled = true) {
   return useQuery({
     queryKey: [...notificationsKeys.all, 'pending-count'],
     queryFn: async () => {
@@ -89,6 +97,7 @@ export function usePendingNotificationsCountQuery() {
       }
     },
     refetchInterval: 30000,
+    enabled,
   });
 }
 

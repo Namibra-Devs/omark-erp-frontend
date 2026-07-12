@@ -48,13 +48,16 @@ export interface SecretaryDashboardData {
   }>;
 }
 
+// The live /dashboard/marketing response only reliably includes these raw
+// pipeline counts — there is no revenue, satisfaction, response-time,
+// target, or growth data anywhere in this API. Don't add speculative
+// fields back here; anything not derivable from these counts doesn't exist.
 export interface MarketerPerformance {
   id: string;
   name: string;
   avatar?: string;
-  email: string;
-  phone: string;
-  department: string;
+  email?: string;
+  phone?: string;
   totalProspects: number;
   new: number;
   meetingScheduled: number;
@@ -62,16 +65,7 @@ export interface MarketerPerformance {
   postponed: number;
   suspended: number;
   converted: number;
-  lastActivity: string;
   conversionRate: number;
-  trend: 'up' | 'down' | 'flat';
-  revenueGenerated: number;
-  dealsClosed: number;
-  avgResponseTime: number;
-  customerSatisfaction: number;
-  weeklyGrowth: number;
-  monthlyTarget: number;
-  targetAchieved: number;
 }
 
 export interface MarketingDashboardData {

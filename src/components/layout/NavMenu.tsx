@@ -25,6 +25,11 @@ export const NavMenu: React.FC = () => {
   const location = useLocation();
   const { user, hasRole } = useAuth();
 
+  // GET /notifications is only accessible to admin/secretary/accounts on
+  // the backend — every other role 403s, so notifications are hidden from
+  // the nav entirely for them rather than showing a broken link.
+  const canSeeNotifications = hasRole(['admin', 'secretary', 'accounts']);
+
   // ── Pending Notifications Count Query ─────────────────────────────────────
   // Refetches every 30s on its own (see usePendingNotificationsCountQuery),
   // and TanStack Query refetches on window focus by default, so navigating
@@ -32,7 +37,7 @@ export const NavMenu: React.FC = () => {
   const {
     data: pendingCount = 0,
     isLoading: countLoading,
-  } = usePendingNotificationsCountQuery();
+  } = usePendingNotificationsCountQuery(canSeeNotifications);
 
   // Get the current selected key based on path
   const getSelectedKey = () => {
@@ -138,8 +143,9 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    // Notifications (with live count)
-    if (hasRole(['secretary', 'admin', 'customer_service', 'marketing_staff', 'marketing_director', 'accounts'])) {
+    // Notifications (with live count) — only for roles the backend actually
+    // grants GET /notifications to.
+    if (canSeeNotifications) {
       items.push({
         key: '/notifications',
         icon: <NotificationOutlined />,

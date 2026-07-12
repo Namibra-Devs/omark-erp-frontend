@@ -11,6 +11,7 @@ import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
+import { useUsersQuery } from '@/api/users';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -40,6 +41,13 @@ export const ProspectsPage: React.FC = () => {
   const updateProspectMutation = useUpdateProspectMutation();
   const deleteProspectMutation = useDeleteProspectMutation();
 
+  // Only admins can set assignedUserId at creation (per the API), and only
+  // admins need to pick — marketing_staff creating their own prospects
+  // should just self-assign, matching how the field is hidden for them below.
+  const isAdmin = hasRole(['admin']);
+  const { data: marketingStaffData } = useUsersQuery(isAdmin ? { role: 'marketing_staff' } : undefined);
+  const marketingStaff = isAdmin ? (marketingStaffData?.items ?? []) : [];
+
   const prospectList: Prospect[] = prospectsData?.items ?? [];
 
   const handleAddProspect = async (values: any) => {
@@ -47,7 +55,10 @@ export const ProspectsPage: React.FC = () => {
       await createProspectMutation.mutateAsync({
         ...values,
         source: 'marketing',
-        assignedUserId: user?.id || '2',
+        // Admins explicitly choose the marketer via the form below. Anyone
+        // else creating their own prospect self-assigns — leaving this as
+        // the logged-in user's id, as before.
+        assignedUserId: isAdmin ? values.assignedUserId : user?.id,
       });
       setIsModalOpen(false);
       form.resetFields();
@@ -216,11 +227,16 @@ export const ProspectsPage: React.FC = () => {
       <PageHeader
         title="Marketing Prospects"
         actions={[
-          {
-            label: 'Add Prospect',
-            onClick: () => setIsModalOpen(true),
-            icon: <PlusOutlined />,
-          },
+          // POST /prospects is only granted to admin/marketing_staff/customer_service
+          // on the backend — marketing_director can view this page but can't create,
+          // so the button is hidden rather than showing an action that always 403s.
+          ...(hasRole(['admin', 'marketing_staff'])
+            ? [{
+                label: 'Add Prospect',
+                onClick: () => setIsModalOpen(true),
+                icon: <PlusOutlined />,
+              }]
+            : []),
         ]}
       />
 
@@ -340,7 +356,24 @@ export const ProspectsPage: React.FC = () => {
           >
             <PhoneInput />
           </Form.Item>
-          
+
+          {isAdmin && (
+            <Form.Item
+              name="assignedUserId"
+              label="Assign To Marketer"
+              rules={[{ required: true, message: 'Please choose which marketer this prospect belongs to' }]}
+              extra="This can't be changed later — the API only accepts assignment at creation."
+            >
+              <Select placeholder="Select marketer" showSearch optionFilterProp="children">
+                {marketingStaff.map((staff) => (
+                  <Option key={staff.id} value={staff.id}>
+                    {staff.firstName} {staff.lastName} ({staff.email})
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
+
           <Form.Item
             name="reasonForContact"
             label="Reason for Contact"

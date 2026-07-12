@@ -30,10 +30,15 @@ const { Text } = Typography;
 
 export const TopHeader: React.FC = () => {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, logout, hasRole } = useAuth();
   const [profileModal, setProfileModal] = useState(false);
   const [notificationDrawer, setNotificationDrawer] = useState(false);
   const [form] = Form.useForm();
+
+  // GET /notifications is only accessible to admin/secretary/accounts on
+  // the backend — every other role 403s, so the bell/drawer are hidden
+  // entirely for them rather than showing a broken control.
+  const canSeeNotifications = hasRole(['admin', 'secretary', 'accounts']);
 
   // ── API Queries ────────────────────────────────────────────────────────────
   const {
@@ -49,11 +54,11 @@ export const TopHeader: React.FC = () => {
     data: notificationsData,
     isLoading: notificationsLoading,
     refetch: refetchNotifications
-  } = useNotificationsQuery({ pageSize: 10 });
+  } = useNotificationsQuery({ pageSize: 10 }, canSeeNotifications);
 
   // Sourced from the paginated total (not the 10 items on this page), so it
   // doesn't undercount once there are more than 10 pending notifications.
-  const { data: pendingCount = 0 } = usePendingNotificationsCountQuery();
+  const { data: pendingCount = 0 } = usePendingNotificationsCountQuery(canSeeNotifications);
 
   // ── API Mutations ──────────────────────────────────────────────────────────
   const updateUser = useUpdateUserMutation();
@@ -293,16 +298,18 @@ export const TopHeader: React.FC = () => {
         {user && (
           <Space size="middle">
             {/* Notifications Bell */}
-            <Badge count={pendingCount} offset={[-4, 4]}>
-              <BellOutlined 
-                style={{ fontSize: 20, cursor: 'pointer' }} 
-                onClick={() => {
-                  setNotificationDrawer(true);
-                  refetchNotifications();
-                }}
-              />
-            </Badge>
-            
+            {canSeeNotifications && (
+              <Badge count={pendingCount} offset={[-4, 4]}>
+                <BellOutlined
+                  style={{ fontSize: 20, cursor: 'pointer' }}
+                  onClick={() => {
+                    setNotificationDrawer(true);
+                    refetchNotifications();
+                  }}
+                />
+              </Badge>
+            )}
+
             {/* Role Tag */}
             <Tag color="blue" style={{ margin: 0, padding: '2px 12px' }}>
               {roleLabels[user.role as keyof typeof roleLabels] || user.role}

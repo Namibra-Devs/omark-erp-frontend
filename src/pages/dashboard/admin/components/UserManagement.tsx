@@ -342,6 +342,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       dataIndex: 'joined',
       key: 'joined',
       width: 120,
+      sorter: (a: User, b: User) => new Date(a.joined || 0).getTime() - new Date(b.joined || 0).getTime(),
       render: (date: string) => date ? new Date(date).toLocaleDateString() : 'N/A',
     },
     {

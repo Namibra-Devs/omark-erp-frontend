@@ -1,5 +1,5 @@
 // src/pages/dashboard/admin/hooks/useAdminDashboard.ts
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { message, Modal } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminDashboardOverviewQuery } from '@/api/dashboard';
@@ -13,14 +13,89 @@ import {
 } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
+import { useAppointmentsQuery } from '@/api/appointments';
+import { usePropertiesQuery } from '@/api/properties';
+import { useDeedsQuery } from '@/api/deeds';
 import type { Role } from '@/types';
 import type { User, SystemStats, ActivityLog } from '../types';
 
+// There is no activity-log endpoint anywhere in this API — "recent
+// activity" spanning prospects/appointments/properties/customers/deeds is
+// built here by fetching the latest page of each real entity list and
+// merging them into one timeline, sorted by their actual createdAt. This
+// is genuinely live data, just assembled client-side instead of coming
+// from a single backend feed.
+type LiveActivityEntry = ActivityLog & { _sortKey: string };
+
+const buildLiveActivityLog = (params: {
+  prospects: Array<{ id: string; firstName: string; lastName: string; source: string; status: string; createdAt: string }>;
+  customers: Array<{ id: string; firstName: string; lastName: string; type: string; createdAt: string }>;
+  appointments: Array<{ id: string; source: string; status: string; scheduledFor: string; createdAt: string }>;
+  properties: Array<{ id: string; houseNumber: string; offerNumber: string; createdAt: string }>;
+  deeds: Array<{ id: string; generatedAt: string; createdAt?: string }>;
+}): ActivityLog[] => {
+  const formatTs = (iso: string) => iso ? iso.replace('T', ' ').slice(0, 19) : '';
+
+  const entries: LiveActivityEntry[] = [
+    ...params.prospects.map((p): LiveActivityEntry => ({
+      id: `prospect-${p.id}`,
+      user: 'System',
+      action: 'New Prospect',
+      details: `${p.firstName} ${p.lastName} — ${p.source.replace('_', ' ')} (${p.status.replace('_', ' ')})`,
+      timestamp: formatTs(p.createdAt),
+      type: 'info',
+      _sortKey: p.createdAt,
+    })),
+    ...params.customers.map((c): LiveActivityEntry => ({
+      id: `customer-${c.id}`,
+      user: 'System',
+      action: 'New Customer',
+      details: `${c.firstName} ${c.lastName} — ${c.type.replace('_', ' ')}`,
+      timestamp: formatTs(c.createdAt),
+      type: 'success',
+      _sortKey: c.createdAt,
+    })),
+    ...params.appointments.map((a): LiveActivityEntry => ({
+      id: `appointment-${a.id}`,
+      user: 'System',
+      action: 'Appointment ' + (a.status === 'canceled' ? 'Canceled' : a.status === 'completed' ? 'Completed' : 'Scheduled'),
+      details: `${a.source === 'website' ? 'Website booking' : 'Staff booking'} for ${formatTs(a.scheduledFor)}`,
+      timestamp: formatTs(a.createdAt),
+      type: a.status === 'canceled' ? 'warning' : 'info',
+      _sortKey: a.createdAt,
+    })),
+    ...params.properties.map((p): LiveActivityEntry => ({
+      id: `property-${p.id}`,
+      user: 'System',
+      action: 'Property Added',
+      details: `${p.houseNumber} - ${p.offerNumber}`,
+      timestamp: formatTs(p.createdAt),
+      type: 'info',
+      _sortKey: p.createdAt,
+    })),
+    ...params.deeds.map((d): LiveActivityEntry => ({
+      id: `deed-${d.id}`,
+      user: 'System',
+      action: 'Deed Generated',
+      details: `Deed document #${d.id.slice(0, 8).toUpperCase()} generated`,
+      timestamp: formatTs(d.generatedAt || d.createdAt || ''),
+      type: 'success',
+      _sortKey: d.generatedAt || d.createdAt || '',
+    })),
+  ];
+
+  return entries
+    .filter((e) => e._sortKey)
+    .sort((a, b) => (a._sortKey < b._sortKey ? 1 : -1))
+    .map(({ _sortKey, ...rest }) => rest);
+};
+
 // Maps backend UserEntity -> local User shape used by admin dashboard UI.
-// `createdPassword` is only ever known for users created earlier in this
-// browser session (see `createdPasswords` state below) — the backend never
-// returns passwords, so it can't be recovered any other way.
-const mapApiUserToLocalUser = (entity: UserEntity, createdPassword?: string): User => {
+// `createdPasswords` is an in-memory (never persisted) map of userId -> the
+// plaintext password set at creation time, for users created earlier in this
+// browser session — the backend hashes passwords and never returns them, so
+// this is the only way to let an admin view/copy what they just set.
+const mapApiUserToLocalUser = (entity: UserEntity, createdPasswords: Record<string, string>): User => {
   const name =
     entity.name ??
     [entity.firstName, entity.lastName].filter(Boolean).join(' ').trim() ??
@@ -46,7 +121,7 @@ const mapApiUserToLocalUser = (entity: UserEntity, createdPassword?: string): Us
     department: entity.department || undefined,
     joined: entity.createdAt?.split('T')[0] ?? '',
     lastActive: entity.updatedAt?.split('T')[0] ?? '',
-    createdPassword,
+    createdPassword: createdPasswords[entity.id],
   } as User;
 };
 
@@ -57,17 +132,25 @@ export const useAdminDashboard = () => {
   const { data: apiStats, isLoading: statsLoading } = useAdminDashboardOverviewQuery();
   const { data: apiUsers, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
   
-  // ── Additional queries for prospects and customers if dashboard doesn't provide them ──
+  // pageSize: 10 (not 1) — these double as both the count fallback (via
+  // `.total`, accurate regardless of page size) and the source data for the
+  // live "Recent Activity" feed below, so we need actual rows, not just a count.
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({
-    source: 'marketing',
     page: 1,
-    pageSize: 1,
+    pageSize: 10,
   });
-  
+
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({
     page: 1,
-    pageSize: 1,
+    pageSize: 10,
   });
+
+  // ── Additional live sources for the Recent Activity feed ────────────────
+  // There is no activity-log endpoint in this API — these are the real,
+  // most-recent rows from each entity type, merged below into one timeline.
+  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 10 });
+  const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 10 });
+  const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 10 });
 
   // ── Mutations ───────────────────────────────────────────────────────────
   const createUserMutation = useCreateUserMutation();
@@ -78,22 +161,19 @@ export const useAdminDashboard = () => {
   const [localActivityLogs, setLocalActivityLogs] = useState<ActivityLog[]>([]);
   const [searchText, setSearchText] = useState('');
   const [filterRole, setFilterRole] = useState<string>('all');
-  // Passwords for users created earlier in this session, keyed by user id.
-  // In-memory only — never persisted (localStorage, etc.) and never sent
-  // anywhere but the original POST /users call, since the backend only
-  // stores a hash and will never return a password again.
+  // userId -> plaintext password, populated only when a user is created in
+  // this session (see addUser below). Never persisted, never re-fetched.
   const [createdPasswords, setCreatedPasswords] = useState<Record<string, string>>({});
 
   const loading =
     statsLoading || usersLoading || prospectsLoading || customersLoading ||
+    appointmentsLoading || propertiesLoading || deedsLoading ||
     createUserMutation.isPending || updateUserMutation.isPending || deleteUserMutation.isPending;
 
   // ── Map live users list to local User shape ────────────────────────────
   // useUsersQuery now always resolves to a flat { items, total, page, pageSize }
   // shape (see src/api/users.ts), so no format-sniffing is needed here.
-  const users: User[] = (apiUsers?.items ?? []).map((entity) =>
-    mapApiUserToLocalUser(entity, createdPasswords[entity.id])
-  );
+  const users: User[] = (apiUsers?.items ?? []).map((u) => mapApiUserToLocalUser(u, createdPasswords));
 
   // ── Extract prospects and customers counts from API ────────────────────
   // useProspectsQuery/useCustomersQuery also resolve to flat { items, total, ... }
@@ -119,7 +199,22 @@ export const useAdminDashboard = () => {
 
   console.log('📊 Final Stats Object:', stats);
 
-  const activityLogs = localActivityLogs;
+  // Live activity assembled from real recent rows (prospects, customers,
+  // appointments, properties, deeds), merged with this session's own
+  // user-management actions (also real, just observed client-side since
+  // they happened through this hook), sorted newest-first.
+  const activityLogs: ActivityLog[] = useMemo(() => {
+    const live = buildLiveActivityLog({
+      prospects: prospectsData?.items ?? [],
+      customers: customersData?.items ?? [],
+      appointments: appointmentsData?.items ?? [],
+      properties: propertiesData?.items ?? [],
+      deeds: deedsData?.items ?? [],
+    });
+    return [...localActivityLogs, ...live]
+      .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
+      .slice(0, 30);
+  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs]);
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const makeLog = (
@@ -219,25 +314,22 @@ export const useAdminDashboard = () => {
     createUserMutation.mutate(payload, {
       onSuccess: (response) => {
         console.log('✅ Registration successful:', response);
+        if (response?.id) {
+          setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
+        }
         setLocalActivityLogs(prev => [
           makeLog('User Created', `Created new user: ${fullName || firstName}`, 'success'),
           ...prev,
         ]);
-
-        // Remember the password for this session only, so it can be shown
-        // in the user table for handoff — the backend never returns it again.
-        if (response?.id) {
-          setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
-        }
-
+        
         // Show password in success message (without JSX)
-        const passwordMessage = `User ${fullName || firstName} added successfully!\n\nTemporary password: ${password}\n\nPlease share this password with the user. They can change it after first login. (It's also visible in the Login Password column below for the rest of this session.)`;
-
+        const passwordMessage = `User ${fullName || firstName} added successfully!\n\nTemporary password: ${password}\n\nPlease share this password with the user. They can change it after first login.`;
+        
         message.success({
           content: passwordMessage,
           duration: 10,
         });
-
+        
         // Force refetch users with a delay to ensure backend has processed
         setTimeout(() => {
           refetchUsers();
@@ -445,6 +537,11 @@ export const useAdminDashboard = () => {
     queryClient.invalidateQueries({ queryKey: usersKeys.lists() });
     queryClient.invalidateQueries({ queryKey: usersKeys.list() });
     queryClient.invalidateQueries({ queryKey: ['users'] });
+    queryClient.invalidateQueries({ queryKey: ['prospects'] });
+    queryClient.invalidateQueries({ queryKey: ['customers'] });
+    queryClient.invalidateQueries({ queryKey: ['appointments'] });
+    queryClient.invalidateQueries({ queryKey: ['properties'] });
+    queryClient.invalidateQueries({ queryKey: ['deeds'] });
     refetchUsers();
     setLocalActivityLogs(prev => [
       makeLog('Dashboard Refreshed', 'Manual dashboard refresh', 'info'),
