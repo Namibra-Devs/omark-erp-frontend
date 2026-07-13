@@ -185,8 +185,8 @@ export const DirectorOverviewPage: React.FC = () => {
       title: 'Converted',
       dataIndex: 'converted',
       key: 'converted',
-      width: 100,
-      render: (value: number) => <Tag color="purple">{value}</Tag>,
+      width: 130,
+      render: (value: number) => <Tag color="purple" style={{ fontSize: 13, padding: '2px 10px' }}>{value}</Tag>,
       sorter: (a: MarketerPerformance, b: MarketerPerformance) => a.converted - b.converted,
     },
     {
@@ -225,7 +225,7 @@ export const DirectorOverviewPage: React.FC = () => {
             <Button
               type="text"
               icon={<TeamOutlined />}
-              onClick={() => navigate(`/marketing/prospects?assignedUserId=${record.id}`)}
+              onClick={() => navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name)}`)}
             />
           </Tooltip>
         </Space>
@@ -408,7 +408,7 @@ export const DirectorOverviewPage: React.FC = () => {
                       rowKey="id"
                       loading={isFetching}
                       pagination={{ pageSize: 10 }}
-                      scroll={{ x: 900 }}
+                      scroll={{ x: 1000 }}
                     />
                   ) : (
                     <Empty description="No marketers found" />
@@ -672,7 +672,7 @@ export const DirectorOverviewPage: React.FC = () => {
                 type="primary"
                 block
                 onClick={() => {
-                  navigate(`/marketing/prospects?assignedUserId=${selectedMarketer.id}`);
+                  navigate(`/marketing/prospects?assignedUserId=${selectedMarketer.id}&name=${encodeURIComponent(selectedMarketer.name)}`);
                   setViewProfileDrawer(false);
                 }}
               >

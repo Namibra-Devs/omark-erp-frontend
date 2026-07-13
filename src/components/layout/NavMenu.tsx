@@ -53,6 +53,7 @@ export const NavMenu: React.FC = () => {
     if (path.startsWith('/notifications')) return '/notifications';
     if (path.startsWith('/admin/dashboard')) return '/admin/dashboard';
     if (path.startsWith('/admin/users')) return '/admin/users';
+    if (path.startsWith('/accounts/dashboard')) return '/accounts/dashboard';
     if (path.startsWith('/dashboard')) return '/dashboard';
     return path;
   };
@@ -61,16 +62,23 @@ export const NavMenu: React.FC = () => {
   const menuItems = useMemo(() => {
     const items = [];
 
-    // Dashboard section
+    // Dashboard section — each role gets its own distinct dashboard now
+    // (accounts used to silently reuse Secretary's page).
     if (hasRole(['admin'])) {
       items.push({
         key: '/admin/dashboard',
         icon: <DashboardOutlined />,
         label: 'Dashboard',
       });
-    } else if (hasRole(['secretary', 'accounts'])) {
+    } else if (hasRole(['secretary'])) {
       items.push({
         key: '/dashboard',
+        icon: <DashboardOutlined />,
+        label: 'Dashboard',
+      });
+    } else if (hasRole(['accounts'])) {
+      items.push({
+        key: '/accounts/dashboard',
         icon: <DashboardOutlined />,
         label: 'Dashboard',
       });

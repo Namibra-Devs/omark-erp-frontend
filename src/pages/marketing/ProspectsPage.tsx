@@ -1,8 +1,8 @@
 // src/pages/marketing/ProspectsPage.tsx
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin, Popconfirm, Tooltip } from 'antd';
-import { PlusOutlined, EyeOutlined, SearchOutlined, EditOutlined, DeleteOutlined, DollarOutlined } from '@ant-design/icons';
+import React, { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin, Popconfirm, Tooltip, Alert } from 'antd';
+import { PlusOutlined, EyeOutlined, SearchOutlined, EditOutlined, DeleteOutlined, DollarOutlined, CloseOutlined } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
@@ -19,23 +19,50 @@ const { Text } = Typography;
 
 export const ProspectsPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user, hasRole } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [editModal, setEditModal] = useState(false);
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
   const [convertModal, setConvertModal] = useState(false);
   const [prospectToConvert, setProspectToConvert] = useState<Prospect | null>(null);
   const [editForm] = Form.useForm();
 
-  // React Query hooks
+  // Drill-down from the Director Overview's per-marketer table ("View
+  // Prospects") lands here with these params — apply them as a filter
+  // instead of silently showing everyone's prospects.
+  const assignedUserIdFilter = searchParams.get('assignedUserId') || undefined;
+  const assignedUserName = searchParams.get('name') || undefined;
+
+  const clearAssignedFilter = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('assignedUserId');
+    next.delete('name');
+    setSearchParams(next);
+  };
+
+  // React Query hooks — page/pageSize are sent to the server (not just
+  // applied client-side) so lists longer than one page actually paginate
+  // instead of silently capping at whatever the server's default page returns.
   const { data: prospectsData, isLoading, refetch } = useProspectsQuery({
     source: 'marketing',
     status: statusFilter === 'all' ? undefined : statusFilter,
     q: searchText || undefined,
+    assignedUserId: assignedUserIdFilter,
+    page,
+    pageSize,
   });
+
+  // Reset to page 1 whenever a filter changes, so a new, smaller result set
+  // doesn't strand the user on a page that no longer exists.
+  useEffect(() => {
+    setPage(1);
+  }, [searchText, statusFilter, assignedUserIdFilter]);
 
   const createProspectMutation = useCreateProspectMutation();
   const updateProspectMutation = useUpdateProspectMutation();
@@ -240,6 +267,20 @@ export const ProspectsPage: React.FC = () => {
         ]}
       />
 
+      {assignedUserIdFilter && (
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+          message={`Showing prospects assigned to ${assignedUserName || 'this marketer'}`}
+          action={
+            <Button size="small" type="text" icon={<CloseOutlined />} onClick={clearAssignedFilter}>
+              Clear
+            </Button>
+          }
+        />
+      )}
+
       {/* Filters */}
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={[8, 8]}>
@@ -274,7 +315,7 @@ export const ProspectsPage: React.FC = () => {
           </Col>
           <Col xs={24} sm={24} md={8}>
             <Text type="secondary" style={{ display: 'block', textAlign: 'right' }}>
-              Total: {prospectList.length} prospects
+              Total: {prospectsData?.total ?? 0} prospects
             </Text>
           </Col>
         </Row>
@@ -290,10 +331,16 @@ export const ProspectsPage: React.FC = () => {
           size="middle"
           scroll={{ x: 700 }}
           pagination={{
-            pageSize: 10,
+            current: page,
+            pageSize,
+            total: prospectsData?.total ?? 0,
             showSizeChanger: true,
             showTotal: (total) => `Total ${total} prospects`,
             responsive: true,
+            onChange: (nextPage, nextPageSize) => {
+              setPage(nextPage);
+              setPageSize(nextPageSize);
+            },
           }}
           onRow={(record) => ({
             onClick: () => navigate(`/marketing/prospects/${record.id}`),

@@ -1,5 +1,5 @@
 // src/pages/dashboard/admin/hooks/useAdminDashboard.ts
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { message, Modal } from 'antd';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAdminDashboardOverviewQuery } from '@/api/dashboard';
@@ -28,13 +28,18 @@ import type { User, SystemStats, ActivityLog } from '../types';
 type LiveActivityEntry = ActivityLog & { _sortKey: string };
 
 const buildLiveActivityLog = (params: {
-  prospects: Array<{ id: string; firstName: string; lastName: string; source: string; status: string; createdAt: string }>;
+  prospects: Array<{ id: string; firstName: string; lastName: string; source: string; status: string; createdAt: string; updatedAt?: string }>;
   customers: Array<{ id: string; firstName: string; lastName: string; type: string; createdAt: string }>;
-  appointments: Array<{ id: string; source: string; status: string; scheduledFor: string; createdAt: string }>;
+  appointments: Array<{ id: string; source: string; status: string; scheduledFor: string; createdAt: string; updatedAt?: string }>;
   properties: Array<{ id: string; houseNumber: string; offerNumber: string; createdAt: string }>;
   deeds: Array<{ id: string; generatedAt: string; createdAt?: string }>;
 }): ActivityLog[] => {
   const formatTs = (iso: string) => iso ? iso.replace('T', ' ').slice(0, 19) : '';
+  // A record modified more than a minute after it was created is treated as
+  // a genuine update (status change, edit, etc.) rather than noise from the
+  // create request itself settling.
+  const wasUpdatedSinceCreation = (createdAt: string, updatedAt?: string) =>
+    !!updatedAt && Math.abs(new Date(updatedAt).getTime() - new Date(createdAt).getTime()) > 60_000;
 
   const entries: LiveActivityEntry[] = [
     ...params.prospects.map((p): LiveActivityEntry => ({
@@ -46,6 +51,19 @@ const buildLiveActivityLog = (params: {
       type: 'info',
       _sortKey: p.createdAt,
     })),
+    // Status changes, edits, etc. — the API only exposes `updatedAt`, not
+    // what changed, so this is reported generically as "now: <status>".
+    ...params.prospects
+      .filter((p) => wasUpdatedSinceCreation(p.createdAt, p.updatedAt))
+      .map((p): LiveActivityEntry => ({
+        id: `prospect-updated-${p.id}-${p.updatedAt}`,
+        user: 'System',
+        action: 'Prospect Status Updated',
+        details: `${p.firstName} ${p.lastName} — now ${p.status.replace('_', ' ')}`,
+        timestamp: formatTs(p.updatedAt as string),
+        type: p.status === 'purchased' ? 'success' : p.status === 'canceled' || p.status === 'suspended' ? 'warning' : 'info',
+        _sortKey: p.updatedAt as string,
+      })),
     ...params.customers.map((c): LiveActivityEntry => ({
       id: `customer-${c.id}`,
       user: 'System',
@@ -58,12 +76,23 @@ const buildLiveActivityLog = (params: {
     ...params.appointments.map((a): LiveActivityEntry => ({
       id: `appointment-${a.id}`,
       user: 'System',
-      action: 'Appointment ' + (a.status === 'canceled' ? 'Canceled' : a.status === 'completed' ? 'Completed' : 'Scheduled'),
+      action: 'Appointment Scheduled',
       details: `${a.source === 'website' ? 'Website booking' : 'Staff booking'} for ${formatTs(a.scheduledFor)}`,
       timestamp: formatTs(a.createdAt),
-      type: a.status === 'canceled' ? 'warning' : 'info',
+      type: 'info',
       _sortKey: a.createdAt,
     })),
+    ...params.appointments
+      .filter((a) => wasUpdatedSinceCreation(a.createdAt, a.updatedAt))
+      .map((a): LiveActivityEntry => ({
+        id: `appointment-updated-${a.id}-${a.updatedAt}`,
+        user: 'System',
+        action: 'Appointment Status Updated',
+        details: `Now ${a.status.replace('_', ' ')} — was for ${formatTs(a.scheduledFor)}`,
+        timestamp: formatTs(a.updatedAt as string),
+        type: a.status === 'canceled' ? 'warning' : a.status === 'completed' ? 'success' : 'info',
+        _sortKey: a.updatedAt as string,
+      })),
     ...params.properties.map((p): LiveActivityEntry => ({
       id: `property-${p.id}`,
       user: 'System',
@@ -152,6 +181,20 @@ export const useAdminDashboard = () => {
   const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 10 });
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 10 });
 
+  // There's no push/webhook mechanism in this API, so "live" for the
+  // activity feed and its notification count means polling — refetch the
+  // same real entity lists every 60s while this dashboard is mounted.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ['prospects'] });
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['appointments'] });
+      queryClient.invalidateQueries({ queryKey: ['properties'] });
+      queryClient.invalidateQueries({ queryKey: ['deeds'] });
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [queryClient]);
+
   // ── Mutations ───────────────────────────────────────────────────────────
   const createUserMutation = useCreateUserMutation();
   const updateUserMutation = useUpdateUserMutation();
@@ -164,6 +207,15 @@ export const useAdminDashboard = () => {
   // userId -> plaintext password, populated only when a user is created in
   // this session (see addUser below). Never persisted, never re-fetched.
   const [createdPasswords, setCreatedPasswords] = useState<Record<string, string>>({});
+
+  // There's no backend concept of "notifications" for admin activity — this
+  // is a live, honest substitute: count real activity entries (see
+  // buildLiveActivityLog above) newer than the last time the admin
+  // acknowledged them. Starts at "now" so it begins at 0 and only grows as
+  // genuinely new prospects/appointments/etc. show up (including via the
+  // 60s poll above), never fabricated.
+  const [lastSeenActivityAt, setLastSeenActivityAt] = useState(() => new Date().toISOString().replace('T', ' ').slice(0, 19));
+  const markActivitySeen = () => setLastSeenActivityAt(new Date().toISOString().replace('T', ' ').slice(0, 19));
 
   const loading =
     statsLoading || usersLoading || prospectsLoading || customersLoading ||
@@ -215,6 +267,11 @@ export const useAdminDashboard = () => {
       .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
       .slice(0, 30);
   }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs]);
+
+  const newActivityCount = useMemo(
+    () => activityLogs.filter((a) => a.timestamp > lastSeenActivityAt).length,
+    [activityLogs, lastSeenActivityAt]
+  );
 
   // ── Helpers ──────────────────────────────────────────────────────────────
   const makeLog = (
@@ -547,6 +604,7 @@ export const useAdminDashboard = () => {
       makeLog('Dashboard Refreshed', 'Manual dashboard refresh', 'info'),
       ...prev,
     ]);
+    markActivitySeen();
     message.success('Dashboard refreshed!');
   };
 
@@ -562,6 +620,8 @@ export const useAdminDashboard = () => {
     users: filteredUsers,
     allUsers: users,
     activityLogs,
+    newActivityCount,
+    markActivitySeen,
     stats,
     loading,
     searchText,

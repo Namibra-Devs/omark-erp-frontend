@@ -100,7 +100,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         marketing_staff: '/marketing/prospects',
         customer_service: '/cs/prospects',
         secretary: '/dashboard',
-        accounts: '/dashboard',
+        accounts: '/accounts/dashboard',
       };
       
       const redirectPath = roleRoutes[role] || '/dashboard';

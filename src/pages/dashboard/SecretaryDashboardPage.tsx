@@ -18,7 +18,8 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation } from '@/api/customers';
-import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
+import { usePaymentPlansQuery } from '@/api/paymentPlans';
+import { useRecordPaymentMutation } from '@/api/payments';
 import { usePropertiesQuery } from '@/api/properties';
 import { roleLabels, progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
@@ -63,7 +64,6 @@ export const SecretaryDashboardPage: React.FC = () => {
   // ── API Mutations ──────────────────────────────────────────────────────────
   const createCustomer = useCreateCustomerMutation();
   const updateCustomer = useUpdateCustomerMutation();
-  const createPaymentPlan = useCreatePaymentPlanMutation();
 
   // ── UI State ──────────────────────────────────────────────────────────────
   const [addCustomerModal, setAddCustomerModal] = useState(false);
@@ -77,6 +77,13 @@ export const SecretaryDashboardPage: React.FC = () => {
   const customers = customersData?.items ?? [];
   const paymentPlans = paymentPlansData?.items ?? [];
   const properties = propertiesData?.items ?? [];
+
+  // The defaulter/due-soon rows only carry a customerId, not a planId — look
+  // up the matching plan so we can record a payment against the *existing*
+  // plan (POST /payment-plans/{planId}/payments) instead of accidentally
+  // creating a brand new one.
+  const selectedPlan = paymentPlans.find((p: any) => p.customerId === selectedCustomer?.customerId);
+  const recordPayment = useRecordPaymentMutation(selectedPlan?.id ?? '');
 
   // ── Dashboard Data ──────────────────────────────────────────────────────
   const dashboard = {
@@ -219,13 +226,28 @@ export const SecretaryDashboardPage: React.FC = () => {
   const handleAddCustomer = async (values: any) => {
     try {
       setLoading(true);
+      // POST /customers requires a `createPlan` object when type is
+      // 'payment_plan' — omitting it (as this used to) fails validation on
+      // every submission.
+      const createPlan = values.type === 'payment_plan'
+        ? {
+            totalAmountMinor: Math.round(values.totalAmount * 100),
+            downPaymentMinor: Math.round(values.downPayment * 100),
+            planBasis: values.planBasis,
+            numMonths: values.planBasis === 'months' ? values.numMonths : undefined,
+            monthlyAmountMinor: values.planBasis === 'monthly_amount' ? Math.round(values.monthlyAmount * 100) : undefined,
+            startDate: values.startDate.format('YYYY-MM-DD'),
+          }
+        : undefined;
+
       await createCustomer.mutateAsync({
         firstName: values.firstName,
         lastName: values.lastName,
         phoneNumber: values.phoneNumber,
         address: values.address,
-        type: 'payment_plan',
+        type: values.type,
         propertyId: values.propertyId,
+        createPlan,
       });
       message.success('Customer added successfully!');
       setAddCustomerModal(false);
@@ -233,40 +255,34 @@ export const SecretaryDashboardPage: React.FC = () => {
       refetchCustomers();
       refetchDashboard();
     } catch (error: any) {
-      message.error(error?.message || 'Failed to add customer');
+      message.error(error?.error?.message || error?.message || 'Failed to add customer');
     } finally {
       setLoading(false);
     }
   };
 
   const handleRecordPayment = async (values: any) => {
+    if (!selectedPlan) {
+      message.error('No active payment plan found for this customer');
+      return;
+    }
+
     try {
       setLoading(true);
-      // Find the payment plan for this customer
-      const plan = paymentPlans.find((p: any) => p.customerId === selectedCustomer?.customerId);
-      
-      if (!plan) {
-        message.error('No active payment plan found for this customer');
-        return;
-      }
-
-      await createPaymentPlan.mutateAsync({
-        customerId: selectedCustomer.customerId,
-        totalAmountMinor: plan.totalAmountMinor || 0,
-        downPaymentMinor: plan.downPaymentMinor || 0,
-        planBasis: 'months',
-        numMonths: plan.numMonths || 12,
-        monthlyAmountMinor: plan.monthlyAmountMinor || 0,
-        startDate: plan.startDate || dayjs().format('YYYY-MM-DD'),
+      await recordPayment.mutateAsync({
+        amountMinor: Math.round(values.amount * 100),
+        paidOn: values.paymentDate.format('YYYY-MM-DD'),
+        method: values.method,
+        reference: values.reference || undefined,
       });
-      
+
       message.success('Payment recorded successfully!');
       setAddPaymentModal(false);
       paymentForm.resetFields();
       refetchPaymentPlans();
       refetchDashboard();
     } catch (error: any) {
-      message.error(error?.message || 'Failed to record payment');
+      message.error(error?.error?.message || error?.message || 'Failed to record payment');
     } finally {
       setLoading(false);
     }
@@ -496,7 +512,7 @@ export const SecretaryDashboardPage: React.FC = () => {
         width={600}
         style={{ top: 20 }}
       >
-        <Form form={form} layout="vertical" onFinish={handleAddCustomer}>
+        <Form form={form} layout="vertical" onFinish={handleAddCustomer} initialValues={{ type: 'payment_plan', planBasis: 'months' }}>
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item
@@ -546,6 +562,78 @@ export const SecretaryDashboardPage: React.FC = () => {
                 </Option>
               ))}
             </Select>
+          </Form.Item>
+
+          <Form.Item name="type" label="Customer Type" rules={[{ required: true }]}>
+            <Select>
+              <Option value="payment_plan">Payment Plan</Option>
+              <Option value="fully_paid">Fully Paid</Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item shouldUpdate={(prev, cur) => prev.type !== cur.type || prev.planBasis !== cur.planBasis} noStyle>
+            {({ getFieldValue }) => {
+              if (getFieldValue('type') !== 'payment_plan') return null;
+              const planBasis = getFieldValue('planBasis') || 'months';
+              return (
+                <>
+                  <Row gutter={16}>
+                    <Col span={12}>
+                      <Form.Item
+                        name="totalAmount"
+                        label="Total Amount (GHS)"
+                        rules={[{ required: true, message: 'Total amount is required' }]}
+                      >
+                        <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 150000" />
+                      </Form.Item>
+                    </Col>
+                    <Col span={12}>
+                      <Form.Item
+                        name="downPayment"
+                        label="Down Payment (GHS)"
+                        rules={[{ required: true, message: 'Down payment is required' }]}
+                      >
+                        <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 30000" />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+
+                  <Form.Item name="planBasis" label="Plan Basis" rules={[{ required: true }]}>
+                    <Select>
+                      <Option value="months">Fixed number of months</Option>
+                      <Option value="monthly_amount">Fixed monthly amount</Option>
+                    </Select>
+                  </Form.Item>
+
+                  {planBasis === 'months' ? (
+                    <Form.Item
+                      name="numMonths"
+                      label="Number of Months"
+                      rules={[{ required: true, message: 'Number of months is required' }]}
+                    >
+                      <InputNumber min={1} style={{ width: '100%' }} placeholder="e.g. 24" />
+                    </Form.Item>
+                  ) : (
+                    <Form.Item
+                      name="monthlyAmount"
+                      label="Monthly Amount (GHS)"
+                      rules={[{ required: true, message: 'Monthly amount is required' }]}
+                    >
+                      <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 3000" />
+                    </Form.Item>
+                  )}
+
+                  <Form.Item
+                    name="startDate"
+                    label="First Installment Date"
+                    rules={[{ required: true, message: 'Start date is required' }]}
+                    initialValue={dayjs()}
+                  >
+                    <DatePicker style={{ width: '100%' }} />
+                  </Form.Item>
+                </>
+              );
+            }}
           </Form.Item>
 
           <Form.Item>

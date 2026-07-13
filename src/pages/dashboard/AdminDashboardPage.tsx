@@ -100,6 +100,8 @@ export const AdminDashboardPage: React.FC = () => {
   const {
     users,
     activityLogs,
+    newActivityCount,
+    markActivitySeen,
     stats,
     loading,
     searchText,
@@ -151,12 +153,23 @@ export const AdminDashboardPage: React.FC = () => {
         <span className="adp-tab-label">
           <DashboardOutlined />
           Overview
+          {newActivityCount > 0 && (
+            <Badge
+              count={newActivityCount}
+              size="small"
+              style={{ marginLeft: 6 }}
+              title={`${newActivityCount} new activity item${newActivityCount === 1 ? '' : 's'} since you last checked`}
+            />
+          )}
         </span>
       ),
       children: (
         <RecentActivity
           activities={activityLogs}
           loading={loading}
+          onRefresh={() => {
+            refreshDashboard();
+          }}
         />
       ),
     },
@@ -326,7 +339,10 @@ export const AdminDashboardPage: React.FC = () => {
       <div className="adp-tabs">
         <Tabs
           activeKey={activeTab}
-          onChange={setActiveTab}
+          onChange={(key) => {
+            setActiveTab(key);
+            if (key === '1') markActivitySeen();
+          }}
           items={tabItems}
           size="middle"
           tabBarStyle={{ marginBottom: 16 }}

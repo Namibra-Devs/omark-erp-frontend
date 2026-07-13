@@ -13,6 +13,7 @@ import { LoginPage } from '@/pages/LoginPage';
 
 // Dashboard Pages
 import { SecretaryDashboardPage } from '@/pages/dashboard/SecretaryDashboardPage';
+import { AccountsDashboardPage } from '@/pages/dashboard/AccountsDashboardPage';
 import { AdminDashboardPage } from '@/pages/dashboard/AdminDashboardPage';
 
 // Prospect Pages
@@ -72,7 +73,7 @@ const RoleRedirect: React.FC = () => {
     marketing_director: '/marketing/overview',
     customer_service: '/cs/prospects',
     secretary: '/dashboard',
-    accounts: '/dashboard',
+    accounts: '/accounts/dashboard',
   };
   
   const redirectPath = defaultRoutes[user.role] || '/';
@@ -107,16 +108,26 @@ const AppRoutes: React.FC = () => {
         
         {/* ===== DASHBOARD ROUTES ===== */}
         
-        {/* Secretary/Accounts Dashboard - /dashboard */}
-        <Route 
-          path="/dashboard" 
+        {/* Secretary Dashboard - /dashboard */}
+        <Route
+          path="/dashboard"
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'accounts']}>
+            <ProtectedRoute allowedRoles={['secretary']}>
               <SecretaryDashboardPage />
             </ProtectedRoute>
-          } 
+          }
         />
-        
+
+        {/* Accounts Dashboard - /accounts/dashboard */}
+        <Route
+          path="/accounts/dashboard"
+          element={
+            <ProtectedRoute allowedRoles={['accounts']}>
+              <AccountsDashboardPage />
+            </ProtectedRoute>
+          }
+        />
+
         {/* Admin Dashboard - /admin/dashboard */}
         <Route 
           path="/admin/dashboard" 

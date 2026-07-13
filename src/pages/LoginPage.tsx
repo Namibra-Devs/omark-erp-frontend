@@ -24,7 +24,7 @@ export const LoginPage: React.FC = () => {
         marketing_director: '/marketing/overview',
         customer_service: '/cs/prospects',
         secretary: '/dashboard',
-        accounts: '/dashboard',
+        accounts: '/accounts/dashboard',
       };
       navigate(defaultRoutes[user.role] || '/');
     }
