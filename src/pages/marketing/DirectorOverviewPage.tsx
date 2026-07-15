@@ -64,8 +64,7 @@ export const DirectorOverviewPage: React.FC = () => {
 
   // ── Extract Data from API ──────────────────────────────────────────────────
   // The API docs never published a schema for /dashboard/marketing, so only
-  // the raw pipeline counts are trusted — everything shown is derived
-  // directly from these, nothing is fabricated or defaulted to fake values.
+
   const marketers: MarketerPerformance[] = useMemo(
     () =>
       (data?.marketers ?? []).map((m: Partial<MarketerPerformance> & { id: string; name: string }) => {
