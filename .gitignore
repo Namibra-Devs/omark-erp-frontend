@@ -22,3 +22,25 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Environment variables / secrets — never commit real values.
+# .env.example (or .env.sample) is the one exception: it's a template with
+# no real secrets, meant to be committed so contributors know what to set.
+.env
+.env.local
+.env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.*.local
+!.env.example
+!.env.sample
+
+# Credentials / keys of any kind
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*serviceAccount*.json
+.npmrc

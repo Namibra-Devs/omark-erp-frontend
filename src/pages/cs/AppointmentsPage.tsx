@@ -59,6 +59,7 @@ type Appointment = ApiAppointment & {
 };
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
+import { markSeen } from '@/mock/seenTracker';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import calendar from 'dayjs/plugin/calendar';
@@ -129,6 +130,11 @@ export const AppointmentsPage: React.FC = () => {
 
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 100 });
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
+
+  // Opening this page clears the "new appointments" nav badge (see NavMenu.tsx).
+  useEffect(() => {
+    if (user?.id) markSeen('appointments', user.id);
+  }, [user?.id, appointmentsData]);
 
   // API Mutations
   const createAppointment = useCreateAppointmentMutation();

@@ -57,7 +57,7 @@ export const appointmentsKeys = {
 
 // --- Hooks ---
 
-export function useAppointmentsQuery(params?: AppointmentsListParams) {
+export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = true) {
   return useQuery({
     queryKey: appointmentsKeys.list(params),
     queryFn: async () => {
@@ -79,6 +79,7 @@ export function useAppointmentsQuery(params?: AppointmentsListParams) {
         throw error;
       }
     },
+    enabled,
   });
 }
 

@@ -24,6 +24,8 @@ import {
   RiseOutlined,
   ExperimentOutlined,
   BankOutlined,
+  PlusOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
@@ -34,6 +36,8 @@ import { progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
+import { addExpense, useExpenses, type ExpenseType } from '@/mock/expenses';
+import { useAllPayroll } from '@/mock/payroll';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -67,6 +71,31 @@ export const AccountsDashboardPage: React.FC = () => {
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [paymentForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [addExpenseModal, setAddExpenseModal] = useState(false);
+  const [expenseForm] = Form.useForm();
+
+  // Expense tracking + payroll/bonuses (prototype — see src/mock/expenses.ts
+  // and src/mock/payroll.ts; no backend endpoint exists for either yet).
+  const expenses = useExpenses();
+  const payroll = useAllPayroll();
+  const internalExpensesMinor = expenses.filter((e) => e.type === 'internal').reduce((sum, e) => sum + e.amountMinor, 0);
+  const externalExpensesMinor = expenses.filter((e) => e.type === 'external').reduce((sum, e) => sum + e.amountMinor, 0);
+  const totalBonusesMinor = payroll.reduce((sum, p) => sum + p.bonusMinor, 0);
+  const pendingPayrollCount = payroll.filter((p) => p.status === 'pending').length;
+
+  const handleAddExpense = (values: { category: string; description: string; amountGHS: number; type: ExpenseType; date: dayjs.Dayjs }) => {
+    addExpense({
+      category: values.category,
+      description: values.description || '',
+      amountMinor: Math.round(values.amountGHS * 100),
+      type: values.type,
+      date: values.date.format('YYYY-MM-DD'),
+      recordedBy: user?.email || 'Accounts',
+    });
+    message.success('Expense recorded');
+    expenseForm.resetFields();
+    setAddExpenseModal(false);
+  };
 
   const paymentPlans = paymentPlansData?.items ?? [];
   const selectedPlan = paymentPlans.find((p: any) => p.customerId === selectedCustomer?.customerId);
@@ -342,41 +371,55 @@ export const AccountsDashboardPage: React.FC = () => {
         <AnalyticsSection />
       </div>
 
-      {/* ── Placeholder: features with no backend endpoint yet ──────────── */}
+      {/* ── Finance tools: prototype, local-only until real endpoints exist ── */}
       <Title level={4} style={{ marginBottom: 16 }}>
-        Coming Soon
-        <Tag color="gold" style={{ marginLeft: 12, fontWeight: 'normal' }}>Preview — sample data, not live</Tag>
+        Finance Tools
+        <Tag color="gold" style={{ marginLeft: 12, fontWeight: 'normal' }}>Preview — saved locally, not synced to a server yet</Tag>
       </Title>
       <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col xs={24} lg={12}>
+        <Col xs={24} lg={8}>
           <Card
-            title={<span><ExperimentOutlined style={{ marginRight: 8 }} />Expense Tracking</span>}
-            style={{ borderStyle: 'dashed', opacity: 0.85 }}
+            title={<span><ExperimentOutlined style={{ marginRight: 8 }} />Expenses</span>}
+            extra={<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddExpenseModal(true)}>Record</Button>}
           >
-            <Alert
-              type="warning"
-              showIcon
-              message="Not yet connected to a backend endpoint"
-              description="Expense tracking will show real data once the corresponding API is available. The rows below are illustrative only."
-              style={{ marginBottom: 12 }}
-            />
+            <Row gutter={12} style={{ marginBottom: 12 }}>
+              <Col span={12}><Statistic title="Internal" value={internalExpensesMinor / 100} prefix="GHS" precision={2} valueStyle={{ fontSize: 16 }} /></Col>
+              <Col span={12}><Statistic title="External" value={externalExpensesMinor / 100} prefix="GHS" precision={2} valueStyle={{ fontSize: 16 }} /></Col>
+            </Row>
             <List
               size="small"
-              dataSource={[
-                { label: 'Office Supplies', amount: 'GHS 1,200.00' },
-                { label: 'Staff Transport', amount: 'GHS 850.00' },
-                { label: 'Utilities', amount: 'GHS 2,300.00' },
-              ]}
+              dataSource={expenses.slice(0, 5)}
+              locale={{ emptyText: 'No expenses recorded yet.' }}
               renderItem={(item) => (
                 <List.Item>
-                  <Text type="secondary">{item.label}</Text>
-                  <Text type="secondary">{item.amount}</Text>
+                  <Space direction="vertical" size={0}>
+                    <Text style={{ fontSize: 13 }}>{item.category}</Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>{item.code} · {item.date}</Text>
+                  </Space>
+                  <Space direction="vertical" size={0} style={{ textAlign: 'right' }}>
+                    <Text strong style={{ fontSize: 13 }}>GHS {(item.amountMinor / 100).toLocaleString()}</Text>
+                    <Tag color={item.type === 'internal' ? 'blue' : 'purple'} style={{ fontSize: 10 }}>{item.type}</Tag>
+                  </Space>
                 </List.Item>
               )}
             />
           </Card>
         </Col>
-        <Col xs={24} lg={12}>
+        <Col xs={24} lg={8}>
+          <Card
+            title={<span><IdcardOutlined style={{ marginRight: 8 }} />Bonuses & Salaries</span>}
+            extra={<Button size="small" onClick={() => navigate('/accounts/payroll')}>Manage</Button>}
+          >
+            <Row gutter={12} style={{ marginBottom: 12 }}>
+              <Col span={12}><Statistic title="Bonuses Paid (sample)" value={totalBonusesMinor / 100} prefix="GHS" precision={2} valueStyle={{ fontSize: 16, color: '#52c41a' }} /></Col>
+              <Col span={12}><Statistic title="Pending Runs" value={pendingPayrollCount} valueStyle={{ fontSize: 16, color: pendingPayrollCount > 0 ? '#faad14' : '#52c41a' }} /></Col>
+            </Row>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Run payroll, add bonuses, and track payment status per branch from the full Bonuses & Salaries page.
+            </Text>
+          </Card>
+        </Col>
+        <Col xs={24} lg={8}>
           <Card
             title={<span><BankOutlined style={{ marginRight: 8 }} />Bank Reconciliation</span>}
             style={{ borderStyle: 'dashed', opacity: 0.85 }}
@@ -434,6 +477,42 @@ export const AccountsDashboardPage: React.FC = () => {
             <Space>
               <Button type="primary" htmlType="submit" loading={loading}>Record Payment</Button>
               <Button onClick={() => { setAddPaymentModal(false); paymentForm.resetFields(); setSelectedCustomer(null); }}>Cancel</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ── Record Expense Modal ─────────────────────────────────────────── */}
+      <Modal
+        title="Record Expense"
+        open={addExpenseModal}
+        onCancel={() => { setAddExpenseModal(false); expenseForm.resetFields(); }}
+        footer={null}
+        width={480}
+      >
+        <Form form={expenseForm} layout="vertical" onFinish={handleAddExpense} initialValues={{ type: 'internal', date: dayjs() }}>
+          <Form.Item name="category" label="Category" rules={[{ required: true, message: 'Please enter a category' }]}>
+            <Input placeholder="e.g. Office Supplies, Legal Fees" />
+          </Form.Item>
+          <Form.Item name="description" label="Description">
+            <Input placeholder="Optional detail" />
+          </Form.Item>
+          <Form.Item name="amountGHS" label="Amount (GHS)" rules={[{ required: true, message: 'Please enter amount' }]}>
+            <InputNumber style={{ width: '100%' }} prefix="GHS" precision={2} min={0.01} placeholder="Enter amount" />
+          </Form.Item>
+          <Form.Item name="type" label="Type" rules={[{ required: true }]}>
+            <Select>
+              <Option value="internal">Internal</Option>
+              <Option value="external">External</Option>
+            </Select>
+          </Form.Item>
+          <Form.Item name="date" label="Date" rules={[{ required: true, message: 'Please select a date' }]}>
+            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+          </Form.Item>
+          <Form.Item>
+            <Space>
+              <Button type="primary" htmlType="submit">Record Expense</Button>
+              <Button onClick={() => { setAddExpenseModal(false); expenseForm.resetFields(); }}>Cancel</Button>
             </Space>
           </Form.Item>
         </Form>

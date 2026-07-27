@@ -18,6 +18,8 @@ import { usePropertiesQuery } from '@/api/properties';
 import { useDeedsQuery } from '@/api/deeds';
 import type { Role } from '@/types';
 import type { User, SystemStats, ActivityLog } from '../types';
+import { setStaffAssignment } from '@/mock/staffAssignments';
+import { useMockActivityFeed } from './useMockActivityFeed';
 
 // There is no activity-log endpoint anywhere in this API — "recent
 // activity" spanning prospects/appointments/properties/customers/deeds is
@@ -255,6 +257,12 @@ export const useAdminDashboard = () => {
   // appointments, properties, deeds), merged with this session's own
   // user-management actions (also real, just observed client-side since
   // they happened through this hook), sorted newest-first.
+  // Accounts/Finance and other prototype-only activity (expenses, payroll
+  // & bonuses, complaints, branch approvals) — no backend endpoint exists
+  // for any of it, so it's assembled client-side from localStorage and
+  // merged in here so the admin has one place that sees everything.
+  const { logs: mockActivityLogs, stats: mockActivityStats } = useMockActivityFeed();
+
   const activityLogs: ActivityLog[] = useMemo(() => {
     const live = buildLiveActivityLog({
       prospects: prospectsData?.items ?? [],
@@ -263,10 +271,10 @@ export const useAdminDashboard = () => {
       properties: propertiesData?.items ?? [],
       deeds: deedsData?.items ?? [],
     });
-    return [...localActivityLogs, ...live]
+    return [...localActivityLogs, ...live, ...mockActivityLogs]
       .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
       .slice(0, 30);
-  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs]);
+  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs, mockActivityLogs]);
 
   const newActivityCount = useMemo(
     () => activityLogs.filter((a) => a.timestamp > lastSeenActivityAt).length,
@@ -356,6 +364,13 @@ export const useAdminDashboard = () => {
 
     const role = (roleMap[userData.role] || 'marketing_staff') as Role;
 
+    // Prototype-only branch/department assignment (see src/mock/staffAssignments.ts)
+    // — the real POST /users has no branchId/departmentId fields at all, so
+    // these never go in the API payload. Saved to the local mock store once
+    // we have the new user's id, in onSuccess below.
+    const branchId = userData.branchId as string | undefined;
+    const departmentId = userData.departmentId as string | undefined;
+
     // NOTE: `department` and `isActive` are intentionally NOT sent — POST /users
     // only accepts { firstName, lastName, email, phoneNumber?, password, role }.
     // The backend has no department concept, and isActive defaults server-side.
@@ -373,6 +388,9 @@ export const useAdminDashboard = () => {
         console.log('✅ Registration successful:', response);
         if (response?.id) {
           setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
+          if (branchId || departmentId) {
+            setStaffAssignment(response.id, { branchId, departmentId });
+          }
         }
         setLocalActivityLogs(prev => [
           makeLog('User Created', `Created new user: ${fullName || firstName}`, 'success'),
@@ -623,6 +641,7 @@ export const useAdminDashboard = () => {
     newActivityCount,
     markActivitySeen,
     stats,
+    mockActivityStats,
     loading,
     searchText,
     setSearchText,

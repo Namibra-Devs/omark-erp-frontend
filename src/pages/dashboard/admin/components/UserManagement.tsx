@@ -24,6 +24,9 @@ import {
 } from '@ant-design/icons';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
+import { useBranchContext } from '@/contexts/BranchContext';
+import { mockBranchDepartments } from '@/mock/branches';
+import { getStaffAssignment } from '@/mock/staffAssignments';
 import type { User } from '../types';
 
 const { Text } = Typography;
@@ -56,6 +59,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   onToggleStatus,
   onRefresh,
 }) => {
+  const { branches } = useBranchContext();
+
   // Row ids whose password is currently revealed (masked by default).
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
 
@@ -280,6 +285,30 @@ export const UserManagement: React.FC<UserManagementProps> = ({
           {roleLabels[role as keyof typeof roleLabels] || role}
         </Tag>
       ),
+    },
+    {
+      title: <span>Branch <Tag color="gold" style={{ fontSize: 9, marginLeft: 2 }}>Preview</Tag></span>,
+      key: 'branch',
+      width: 150,
+      render: (_: any, record: User) => {
+        const { branchId } = getStaffAssignment(record.id);
+        const branch = branches.find((b) => b.id === branchId);
+        return branch
+          ? <Tag color={tokens.primary}>{branch.name}</Tag>
+          : <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+      },
+    },
+    {
+      title: <span>Department <Tag color="gold" style={{ fontSize: 9, marginLeft: 2 }}>Preview</Tag></span>,
+      key: 'department',
+      width: 160,
+      render: (_: any, record: User) => {
+        const { departmentId } = getStaffAssignment(record.id);
+        const department = mockBranchDepartments.find((d) => d.id === departmentId);
+        return department
+          ? <Tag>{department.name}</Tag>
+          : <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+      },
     },
     {
       title: 'Login Password',

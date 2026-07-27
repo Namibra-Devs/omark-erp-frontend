@@ -21,6 +21,7 @@ import { AddUserModal } from './admin/components/AddUserModal';
 import { EditUserDrawer } from './admin/components/EditUserDrawer';
 import { ExportModal } from './admin/components/ExportModal';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
+import { CrossSystemActivity } from './admin/components/CrossSystemActivity';
 
 const { Title, Text } = Typography;
 
@@ -103,6 +104,7 @@ export const AdminDashboardPage: React.FC = () => {
     newActivityCount,
     markActivitySeen,
     stats,
+    mockActivityStats,
     loading,
     searchText,
     setSearchText,
@@ -164,13 +166,16 @@ export const AdminDashboardPage: React.FC = () => {
         </span>
       ),
       children: (
-        <RecentActivity
-          activities={activityLogs}
-          loading={loading}
-          onRefresh={() => {
-            refreshDashboard();
-          }}
-        />
+        <>
+          <CrossSystemActivity stats={mockActivityStats} />
+          <RecentActivity
+            activities={activityLogs}
+            loading={loading}
+            onRefresh={() => {
+              refreshDashboard();
+            }}
+          />
+        </>
       ),
     },
     {

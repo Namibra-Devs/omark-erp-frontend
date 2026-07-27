@@ -4,7 +4,10 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntdApp } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { BranchProvider } from '@/contexts/BranchContext';
+import { CustomerPortalAuthProvider } from '@/contexts/CustomerPortalAuthContext';
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
+import { PortalProtectedRoute } from '@/components/portal/PortalProtectedRoute';
 import { AppShell } from '@/components/layout/AppShell';
 import { tokens } from '@/constants/tokens';
 
@@ -41,9 +44,28 @@ import { NotificationsPage } from '@/pages/notifications/NotificationsPage';
 // Admin Pages
 import { UsersPage } from '@/pages/admin/UsersPage';
 import { PropertiesPage } from '@/pages/admin/PropertiesPage';
+import { ComplaintsPage } from '@/pages/admin/ComplaintsPage';
+import { DeedPolicyPage } from '@/pages/admin/DeedPolicyPage';
+import { MyProfilePage } from '@/pages/profile/MyProfilePage';
+
+// Branch Pages (prototype — see src/mock/branches.ts)
+import { BranchesPage } from '@/pages/branches/BranchesPage';
+import { HeadOfficeDashboard } from '@/pages/branches/HeadOfficeDashboard';
+import { BranchDashboard } from '@/pages/branches/BranchDashboard';
+import { MasterPricingPage } from '@/pages/branches/MasterPricingPage';
+import { ApprovalWorkflowPage } from '@/pages/branches/ApprovalWorkflowPage';
+import { PayrollPage } from '@/pages/branches/PayrollPage';
 
 // Public Pages
 import { BookingPage } from '@/pages/public/BookingPage';
+
+// Customer Portal Pages (prototype — see src/mock/portalAuth.ts)
+import { PortalLoginPage } from '@/pages/portal/PortalLoginPage';
+import { PortalLayout } from '@/pages/portal/PortalLayout';
+import { PortalDashboardPage } from '@/pages/portal/PortalDashboardPage';
+import { PortalPropertyPage } from '@/pages/portal/PortalPropertyPage';
+import { PortalPaymentsPage } from '@/pages/portal/PortalPaymentsPage';
+import { PortalComplaintsPage } from '@/pages/portal/PortalComplaintsPage';
 
 // Error pages
 const UnauthorizedPage = () => (
@@ -100,11 +122,29 @@ const AppRoutes: React.FC = () => {
       <Route path="/book-appointment" element={<BookingPage />} />
       <Route path="/403" element={<UnauthorizedPage />} />
       <Route path="/404" element={<NotFoundPage />} />
-      
+
+      {/* ============ CUSTOMER PORTAL (prototype) ============ */}
+      <Route path="/portal/login" element={<PortalLoginPage />} />
+      <Route
+        element={
+          <PortalProtectedRoute>
+            <PortalLayout />
+          </PortalProtectedRoute>
+        }
+      >
+        <Route path="/portal" element={<PortalDashboardPage />} />
+        <Route path="/portal/property" element={<PortalPropertyPage />} />
+        <Route path="/portal/payments" element={<PortalPaymentsPage />} />
+        <Route path="/portal/complaints" element={<PortalComplaintsPage />} />
+      </Route>
+
       {/* ============ PROTECTED ROUTES ============ */}
       <Route element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
         {/* Root redirect based on role */}
         <Route index element={<RoleRedirect />} />
+
+        {/* My Profile - any authenticated staff role */}
+        <Route path="/profile" element={<MyProfilePage />} />
         
         {/* ===== DASHBOARD ROUTES ===== */}
         
@@ -263,13 +303,91 @@ const AppRoutes: React.FC = () => {
         />
         
         {/* Properties Management - /admin/properties */}
-        <Route 
-          path="/admin/properties" 
+        <Route
+          path="/admin/properties"
           element={
             <ProtectedRoute allowedRoles={['admin']}>
               <PropertiesPage />
             </ProtectedRoute>
-          } 
+          }
+        />
+
+        {/* Complaints (prototype) - /admin/complaints */}
+        <Route
+          path="/admin/complaints"
+          element={
+            <ProtectedRoute allowedRoles={['admin', 'secretary', 'customer_service']}>
+              <ComplaintsPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Company Deed Policy (prototype) - /admin/deed-policy */}
+        <Route
+          path="/admin/deed-policy"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <DeedPolicyPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Branches (prototype) - /head-office, /branches, /branches/:branchId */}
+        <Route
+          path="/head-office"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <HeadOfficeDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/branches"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <BranchesPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/branches/:branchId"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <BranchDashboard />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/head-office/pricing"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <MasterPricingPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/head-office/approvals"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <ApprovalWorkflowPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/head-office/payroll"
+          element={
+            <ProtectedRoute allowedRoles={['admin']}>
+              <PayrollPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/accounts/payroll"
+          element={
+            <ProtectedRoute allowedRoles={['admin', 'accounts']}>
+              <PayrollPage />
+            </ProtectedRoute>
+          }
         />
       </Route>
       
@@ -302,7 +420,11 @@ const App: React.FC = () => {
         <QueryClientProvider client={queryClient}>
           <BrowserRouter>
             <AuthProvider>
-              <AppRoutes />
+              <BranchProvider>
+                <CustomerPortalAuthProvider>
+                  <AppRoutes />
+                </CustomerPortalAuthProvider>
+              </BranchProvider>
             </AuthProvider>
           </BrowserRouter>
         </QueryClientProvider>

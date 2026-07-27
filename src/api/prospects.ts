@@ -92,7 +92,7 @@ export const prospectKeys = {
 
 // --- Prospect Queries ---
 
-export const useProspectsQuery = (filter?: ProspectsFilter) => {
+export const useProspectsQuery = (filter?: ProspectsFilter, enabled = true) => {
   return useQuery({
     queryKey: prospectKeys.list(filter),
     queryFn: async () => {
@@ -109,6 +109,7 @@ export const useProspectsQuery = (filter?: ProspectsFilter) => {
         throw error;
       }
     },
+    enabled,
   });
 };
 

@@ -37,7 +37,7 @@ export const deedsKeys = {
 
 // --- Hooks ---
 
-export function useDeedsQuery(params?: DeedsListParams) {
+export function useDeedsQuery(params?: DeedsListParams, enabled = true) {
   return useQuery({
     queryKey: deedsKeys.list(params),
     queryFn: async () => {
@@ -54,6 +54,7 @@ export function useDeedsQuery(params?: DeedsListParams) {
         throw error;
       }
     },
+    enabled,
   });
 }
 

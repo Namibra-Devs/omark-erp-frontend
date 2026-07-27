@@ -3,11 +3,14 @@
 import axios, { AxiosError, AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 import type { ApiError, ApiResponse } from '@/types';
 
-// Nullish coalescing (not ||) is required here: setting VITE_API_BASE_URL
-// to an empty string is a deliberate choice (same-origin requests, proxied
-// via netlify.toml to dodge the backend's CORS allow-list) and must not be
-// treated the same as "unset".
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'https://api.erp.omarkrealestate.com';
+// An explicit VITE_API_BASE_URL always wins. Otherwise: local dev (`vite
+// dev`) talks to the real backend directly — its CORS already allows
+// http://localhost:3000. Any production build defaults to a *relative*
+// base URL instead, so requests go through the same-origin proxy defined
+// in netlify.toml (which forwards /api/* to the real backend server-side)
+// rather than hitting the backend's CORS allow-list directly. This means
+// no Netlify dashboard environment-variable configuration is needed at all.
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'https://api.erp.omarkrealestate.com' : '');
 
 let accessToken: string | null = localStorage.getItem('accessToken');
 let refreshToken: string | null = localStorage.getItem('refreshToken');

@@ -1,7 +1,7 @@
 // src/pages/LoginPage.tsx
 import React, { useState, useEffect } from 'react';
 import { Form, Input, Button, Card, Alert, Typography } from 'antd';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { tokens } from '@/constants/tokens';
 
@@ -123,6 +123,11 @@ export const LoginPage: React.FC = () => {
           </Form.Item>
         </Form>
 
+        <div style={{ textAlign: 'center', marginTop: 16 }}>
+          <Text type="secondary" style={{ fontSize: 13 }}>
+            Are you a customer? <Link to="/portal/login">Access your portal</Link>
+          </Text>
+        </div>
       </Card>
     </div>
   );

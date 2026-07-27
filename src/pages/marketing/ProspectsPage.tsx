@@ -12,6 +12,7 @@ import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
 import { useUsersQuery } from '@/api/users';
+import { markSeen } from '@/mock/seenTracker';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -63,6 +64,11 @@ export const ProspectsPage: React.FC = () => {
   useEffect(() => {
     setPage(1);
   }, [searchText, statusFilter, assignedUserIdFilter]);
+
+  // Opening this page clears the "new prospects" nav badge (see NavMenu.tsx).
+  useEffect(() => {
+    if (user?.id) markSeen('prospects', user.id);
+  }, [user?.id, prospectsData]);
 
   const createProspectMutation = useCreateProspectMutation();
   const updateProspectMutation = useUpdateProspectMutation();

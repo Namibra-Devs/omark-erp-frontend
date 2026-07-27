@@ -10,6 +10,8 @@ import {
 } from '@/api/customers';
 import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
 import { usePropertiesQuery } from '@/api/properties';
+import { cacheCustomerSummaries } from '@/mock/customerPortalCache';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
@@ -163,6 +165,15 @@ export const CustomersPage: React.FC = () => {
       return acc;
     }, {} as Record<string, any>);
   }, [properties]);
+
+  // Customer Portal (prototype) has no public/customer-authenticated way to
+  // read this data — see src/mock/customerPortalCache.ts. Piggyback on this
+  // already-authenticated fetch to keep that cache warm.
+  useEffect(() => {
+    if (customers.length > 0) {
+      cacheCustomerSummaries(customers, paymentPlanMap, propertyMap);
+    }
+  }, [customers, paymentPlanMap, propertyMap]);
 
   // UI States
   const [loading, setLoading] = useState(false);
@@ -474,7 +485,7 @@ const handleAddCustomer = async (values: any) => {
       width: 220,
       render: (_: any, record: Customer) => (
         <Space>
-          <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+          <PhotoUpload entityType="customer" entityId={record.id} size={32} editable={false} />
           <div>
             <Text strong>{record.firstName} {record.lastName}</Text>
             <br />

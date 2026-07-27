@@ -36,7 +36,9 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { ProgressCell } from '@/components/shared/ProgressCell';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { tokens } from '@/constants/tokens';
+import { useDeedPolicy } from '@/mock/deedPolicy';
 import { useCustomerQuery } from '@/api/customers';
 import { usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
 import { usePropertyQuery } from '@/api/properties';
@@ -47,6 +49,7 @@ import {
   getPaymentMethodConfig,
 } from '@/api/payments';
 import { useGenerateDeedMutation } from '@/api/deeds';
+import { cacheCustomerDetail } from '@/mock/customerPortalCache';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -78,6 +81,7 @@ export const CustomerDetailPage: React.FC = () => {
   ]);
 
   const paystackVerifyAttempted = useRef(false);
+  const deedPolicy = useDeedPolicy();
 
   // ── API Queries ────────────────────────────────────────────────────────────
   const {
@@ -131,6 +135,25 @@ export const CustomerDetailPage: React.FC = () => {
   const property = propertyData as any;
 
   const isFullyPaid = customer?.type === 'fully_paid' || paymentPlan?.status === 'completed';
+
+  // Customer Portal (prototype) has no public/customer-authenticated way to
+  // read this data — see src/mock/customerPortalCache.ts. Piggyback on this
+  // already-authenticated fetch to enrich the cache with the fuller detail
+  // (installments, payment history) that the customers list doesn't carry.
+  useEffect(() => {
+    if (customer?.id) {
+      cacheCustomerDetail(customer.id, {
+        firstName: customer.firstName,
+        lastName: customer.lastName,
+        phoneNumber: customer.phoneNumber,
+        property: property || undefined,
+        paymentPlan: paymentPlan || undefined,
+        installments: installments.length > 0 ? installments : undefined,
+        recentPayments: recentPayments.length > 0 ? recentPayments : undefined,
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer?.id, paymentPlan, installments, recentPayments, property]);
 
   // ── Paystack return-redirect verification ────────────────────────────────
   // Paystack redirects the customer back to this page with a `?reference=` (or
@@ -233,7 +256,16 @@ export const CustomerDetailPage: React.FC = () => {
 
   const resetDeedForm = () => {
     deedForm.resetFields();
-    setWitnesses([{ name: '', contact: '' }, { name: '', contact: '' }]);
+    setWitnesses(Array.from({ length: deedPolicy.defaultWitnessCount }, () => ({ name: '', contact: '' })));
+  };
+
+  // Applies the Company Deed Policy (src/mock/deedPolicy.ts) before opening
+  // the modal — pre-fills Business Contacts and starts with the policy's
+  // default witness count. Still fully editable per deed.
+  const openGenerateDeedModal = () => {
+    setWitnesses(Array.from({ length: deedPolicy.defaultWitnessCount }, () => ({ name: '', contact: '' })));
+    deedForm.setFieldsValue({ businessContacts: deedPolicy.standardBusinessContacts });
+    setGenerateDeedModal(true);
   };
 
   const handleGenerateDeed = async (values: any) => {
@@ -409,7 +441,7 @@ export const CustomerDetailPage: React.FC = () => {
           },
           {
             label: 'Generate Deed',
-            onClick: () => setGenerateDeedModal(true),
+            onClick: () => openGenerateDeedModal(),
             icon: <FileOutlined />,
           },
           {
@@ -431,7 +463,7 @@ export const CustomerDetailPage: React.FC = () => {
           <Card>
             <Row gutter={16}>
               <Col xs={24} sm={8}>
-                <Avatar size={64} icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+                <PhotoUpload entityType="customer" entityId={customer.id} size={64} />
                 <div style={{ marginTop: 8 }}>
                   <Title level={4} style={{ margin: 0 }}>{customer.firstName} {customer.lastName}</Title>
                   <Tag color={isFullyPaid ? 'green' : 'blue'}>
@@ -559,7 +591,7 @@ export const CustomerDetailPage: React.FC = () => {
                           </Button>
                           <Button
                             icon={<FileOutlined />}
-                            onClick={() => setGenerateDeedModal(true)}
+                            onClick={() => openGenerateDeedModal()}
                           >
                             Generate Deed
                           </Button>
@@ -707,13 +739,13 @@ export const CustomerDetailPage: React.FC = () => {
                   <Button
                     type="primary"
                     icon={<PlusOutlined />}
-                    onClick={() => setGenerateDeedModal(true)}
+                    onClick={() => openGenerateDeedModal()}
                   >
                     Generate Deed
                   </Button>
                 </div>
                 <Empty description="No deeds generated yet">
-                  <Button type="primary" onClick={() => setGenerateDeedModal(true)}>
+                  <Button type="primary" onClick={() => openGenerateDeedModal()}>
                     Generate First Deed
                   </Button>
                 </Empty>
@@ -946,7 +978,11 @@ export const CustomerDetailPage: React.FC = () => {
             style={{ marginBottom: 16 }}
           />
 
-          <Divider>Witnesses (minimum 1 required)</Divider>
+          <Tag color="gold" style={{ marginBottom: 16 }}>
+            Business Contacts pre-filled from Company Deed Policy — editable below
+          </Tag>
+
+          <Divider>Witnesses ({deedPolicy.defaultWitnessCount} required by policy, minimum 1)</Divider>
 
           {witnesses.map((witness, index) => (
             <Row key={index} gutter={[8, 8]} style={{ marginBottom: 8 }}>

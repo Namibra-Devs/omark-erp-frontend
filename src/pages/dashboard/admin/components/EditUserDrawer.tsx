@@ -1,7 +1,10 @@
 // src/pages/dashboard/admin/components/EditUserDrawer.tsx
 import React, { useEffect } from 'react';
-import { Drawer, Form, Input, Select, Space, Button, Typography, message } from 'antd';
+import { Drawer, Form, Input, Select, Space, Button, Typography, message, Divider, Tag } from 'antd';
 import { PhoneInput } from '@/components/shared/PhoneInput';
+import { useBranchContext } from '@/contexts/BranchContext';
+import { mockBranchDepartments } from '@/mock/branches';
+import { useStaffAssignment } from '@/mock/staffAssignments';
 import type { User } from '../types';
 
 const { Option } = Select;
@@ -23,6 +26,8 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
   loading,
 }) => {
   const [form] = Form.useForm();
+  const { branches } = useBranchContext();
+  const { assignment, update: updateAssignment } = useStaffAssignment(user?.id);
 
   useEffect(() => {
     if (user && open) {
@@ -38,16 +43,22 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
         status: user.status || 'active',
         department: user.department || '',
         isActive: user.status === 'active',
+        branchId: assignment.branchId,
+        departmentId: assignment.departmentId,
       };
-      
+
       console.log('📝 Setting form values:', formValues);
       form.setFieldsValue(formValues);
     }
-  }, [user, open, form]);
+  }, [user, open, form, assignment]);
 
   const handleSubmit = (values: any) => {
     console.log('📤 Edit form submitted:', values);
-    
+
+    // Branch/department are prototype-only (see src/mock/staffAssignments.ts)
+    // — saved to the local mock store, never sent to the real PATCH /users/{id}.
+    updateAssignment({ branchId: values.branchId, departmentId: values.departmentId });
+
     // Build the payload with proper field mapping
     const payload: any = {};
     
@@ -176,6 +187,32 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
               <Option value="active">Active</Option>
               <Option value="inactive">Inactive</Option>
               <Option value="suspended">Suspended</Option>
+            </Select>
+          </Form.Item>
+
+          <Divider orientation="left" orientationMargin={0}>
+            <Space size={6}>
+              <Text style={{ fontSize: 13 }}>Branch Assignment</Text>
+              <Tag color="gold" style={{ fontSize: 10 }}>Preview</Tag>
+            </Space>
+          </Divider>
+          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+            Not sent to the server yet — saved locally until the backend supports branches.
+          </Text>
+
+          <Form.Item name="branchId" label="Branch">
+            <Select placeholder="Select branch" allowClear>
+              {branches.map((b) => (
+                <Option key={b.id} value={b.id}>{b.name}</Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item name="departmentId" label="Department">
+            <Select placeholder="Select department" allowClear>
+              {mockBranchDepartments.map((d) => (
+                <Option key={d.id} value={d.id}>{d.name}</Option>
+              ))}
             </Select>
           </Form.Item>
 

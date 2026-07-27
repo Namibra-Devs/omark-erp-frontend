@@ -1,17 +1,21 @@
 // src/pages/dashboard/admin/components/AddUserModal.tsx
 import React, { useState } from 'react';
 import {
-  Modal, Form, Input, Select, Row, Col, Button, Tag, Typography, Avatar, Divider, message,
+  Modal, Form, Input, Select, Row, Col, Button, Tag, Typography, Avatar, Divider, Space, message,
 } from 'antd';
 import {
   UserOutlined, MailOutlined, LockOutlined, TeamOutlined,
   CheckCircleFilled, ArrowRightOutlined, ArrowLeftOutlined,
   CrownOutlined, CustomerServiceOutlined, AuditOutlined,
   SolutionOutlined, DollarCircleOutlined, BarChartOutlined,
+  BankOutlined,
 } from '@ant-design/icons';
 import { PhoneInput } from '@/components/shared/PhoneInput';
+import { useBranchContext } from '@/contexts/BranchContext';
+import { mockBranchDepartments } from '@/mock/branches';
 
 const { Text, Title } = Typography;
+const { Option } = Select;
 
 // ── Role definitions with icon + colour ────────────────────────────────────
 const ROLES = [
@@ -213,8 +217,8 @@ const RolePicker: React.FC<{
 );
 
 // ── Preview avatar built from form values ──────────────────────────────────
-const UserPreview: React.FC<{ firstName?: string; lastName?: string; role?: string }> = ({
-  firstName, lastName, role,
+const UserPreview: React.FC<{ firstName?: string; lastName?: string; role?: string; branchName?: string }> = ({
+  firstName, lastName, role, branchName,
 }) => {
   const roleInfo = ROLES.find((r) => r.value === role);
   const initials =
@@ -265,6 +269,11 @@ const UserPreview: React.FC<{ firstName?: string; lastName?: string; role?: stri
         ) : (
           <Text type="secondary" style={{ fontSize: 12 }}>No role selected</Text>
         )}
+        {branchName && (
+          <Text type="secondary" style={{ fontSize: 11, display: 'block', marginTop: 4 }}>
+            <BankOutlined /> {branchName}
+          </Text>
+        )}
       </div>
     </div>
   );
@@ -284,8 +293,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
   const [form] = Form.useForm();
   const [step, setStep] = useState(1);
   const [preview, setPreview] = useState<{
-    firstName?: string; lastName?: string; role?: string;
+    firstName?: string; lastName?: string; role?: string; branchId?: string;
   }>({});
+  const { branches } = useBranchContext();
 
   const reset = () => {
     form.resetFields();
@@ -306,7 +316,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
     try {
       await form.validateFields(fieldsPerStep[step]);
       const vals = form.getFieldsValue();
-      setPreview({ firstName: vals.firstName, lastName: vals.lastName, role: vals.role });
+      setPreview({ firstName: vals.firstName, lastName: vals.lastName, role: vals.role, branchId: vals.branchId });
       setStep((s) => s + 1);
     } catch {
       // validation errors managed by antd
@@ -339,6 +349,11 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
         role: values.role || 'marketing_staff',
         department: values.department || 'Marketing',
         isActive: true,
+        // Prototype-only — see src/mock/staffAssignments.ts. Not part of the
+        // real POST /users payload; useAdminDashboard.ts strips these out
+        // before calling the API and saves them locally after creation.
+        branchId: values.branchId,
+        departmentId: values.departmentId,
       };
 
       console.log('📤 AddUserModal - Payload being sent to addUser:', payload);
@@ -464,12 +479,48 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             placeholder="Auto-filled or enter manually"
           />
         </Form.Item>
+
+        <Divider orientation="left" orientationMargin={0} style={{ margin: '18px 0 8px' }}>
+          <Space size={6}>
+            <Text style={{ fontSize: 13 }}>Branch Assignment</Text>
+            <Tag color="gold" style={{ fontSize: 10 }}>Preview</Tag>
+          </Space>
+        </Divider>
+        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
+          Not sent to the server yet — saved locally until the backend supports branches.
+        </Text>
+
+        <Row gutter={14}>
+          <Col span={12}>
+            <Form.Item name="branchId" label="Branch">
+              <Select placeholder="Select branch" allowClear suffixIcon={<BankOutlined style={{ color: '#bbb' }} />}>
+                {branches.map((b) => (
+                  <Option key={b.id} value={b.id}>{b.name}</Option>
+                ))}
+              </Select>
+            </Form.Item>
+          </Col>
+          <Col span={12}>
+            <Form.Item name="departmentId" label="Branch Department">
+              <Select placeholder="Select department" allowClear>
+                {mockBranchDepartments.map((d) => (
+                  <Option key={d.id} value={d.id}>{d.name}</Option>
+                ))}
+              </Select>
+            </Form.Item>
+          </Col>
+        </Row>
       </div>
     ),
 
     3: (
       <div style={{ display: step === 3 ? 'block' : 'none' }}>
-        <UserPreview {...preview} />
+        <UserPreview
+          firstName={preview.firstName}
+          lastName={preview.lastName}
+          role={preview.role}
+          branchName={branches.find((b) => b.id === preview.branchId)?.name}
+        />
 
         <Form.Item
           name="password"
