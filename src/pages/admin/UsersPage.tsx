@@ -84,6 +84,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
@@ -592,11 +593,7 @@ export const UsersPage: React.FC = () => {
           borderBottom: '1px solid #f0f0f0'
         }}>
           <Space>
-            <Avatar 
-              size={48} 
-              icon={<UserOutlined />} 
-              style={{ backgroundColor: tokens.primary }}
-            />
+            <PhotoUpload entityType="staff" entityId={selectedUser.id} size={48} />
             <div>
               <Title level={4} style={{ margin: 0 }}>
                 {selectedUser.firstName} {selectedUser.lastName}

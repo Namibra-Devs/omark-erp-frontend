@@ -13,6 +13,8 @@ export type ExpenseType = 'internal' | 'external';
 export interface Expense {
   id: string;
   code: string;
+  /** Every expense is tagged to the branch that incurred it, so financial data stays logically separated per branch. */
+  branchId: string;
   category: string;
   description: string;
   amountMinor: number;
@@ -24,17 +26,18 @@ export interface Expense {
 }
 
 const SEED: Expense[] = [
-  { id: 'fin-exp-seed-1', code: 'FIN-EXP-2026-001', category: 'Office Supplies', description: 'Stationery and printing supplies for HQ', amountMinor: 1_200_00 * 100, type: 'internal', date: '2026-07-10', recordedBy: 'Accounts', recordedAt: '2026-07-10T09:00:00.000Z' },
-  { id: 'fin-exp-seed-2', code: 'FIN-EXP-2026-002', category: 'Staff Transport', description: 'Fuel allowance reimbursements', amountMinor: 850_00 * 100, type: 'internal', date: '2026-07-14', recordedBy: 'Accounts', recordedAt: '2026-07-14T09:00:00.000Z' },
-  { id: 'fin-exp-seed-3', code: 'FIN-EXP-2026-003', category: 'Utilities', description: 'Electricity and water — HQ office', amountMinor: 2_300_00 * 100, type: 'internal', date: '2026-07-18', recordedBy: 'Accounts', recordedAt: '2026-07-18T09:00:00.000Z' },
-  { id: 'fin-exp-seed-4', code: 'FIN-EXP-2026-004', category: 'Legal & Consultancy', description: 'External legal review of land documentation', amountMinor: 4_500_00 * 100, type: 'external', date: '2026-07-20', recordedBy: 'Accounts', recordedAt: '2026-07-20T09:00:00.000Z' },
+  { id: 'fin-exp-seed-1', code: 'FIN-EXP-2026-001', branchId: 'branch-accra-hq', category: 'Office Supplies', description: 'Stationery and printing supplies for HQ', amountMinor: 1_200_00 * 100, type: 'internal', date: '2026-07-10', recordedBy: 'Accounts', recordedAt: '2026-07-10T09:00:00.000Z' },
+  { id: 'fin-exp-seed-2', code: 'FIN-EXP-2026-002', branchId: 'branch-accra-hq', category: 'Staff Transport', description: 'Fuel allowance reimbursements', amountMinor: 850_00 * 100, type: 'internal', date: '2026-07-14', recordedBy: 'Accounts', recordedAt: '2026-07-14T09:00:00.000Z' },
+  { id: 'fin-exp-seed-3', code: 'FIN-EXP-2026-003', branchId: 'branch-accra-hq', category: 'Utilities', description: 'Electricity and water — HQ office', amountMinor: 2_300_00 * 100, type: 'internal', date: '2026-07-18', recordedBy: 'Accounts', recordedAt: '2026-07-18T09:00:00.000Z' },
+  { id: 'fin-exp-seed-4', code: 'FIN-EXP-2026-004', branchId: 'branch-accra-hq', category: 'Legal & Consultancy', description: 'External legal review of land documentation', amountMinor: 4_500_00 * 100, type: 'external', date: '2026-07-20', recordedBy: 'Accounts', recordedAt: '2026-07-20T09:00:00.000Z' },
 ];
 
-// Backfills `recordedAt`, added after this store first shipped, so records
-// already sitting in a user's localStorage from an earlier session don't
-// come back missing it and crash downstream consumers.
+// Backfills `recordedAt`/`branchId`, added after this store first shipped,
+// so records already sitting in a user's localStorage from an earlier
+// session don't come back missing them and crash/misfile downstream.
 const normalize = (expense: Expense): Expense => ({
   ...expense,
+  branchId: expense.branchId ?? 'branch-accra-hq',
   recordedAt: expense.recordedAt ?? `${expense.date}T00:00:00.000Z`,
 });
 
@@ -63,6 +66,7 @@ const nextCode = (expenses: Expense[]) => {
 export const getAllExpenses = (): Expense[] => load().sort((a, b) => b.date.localeCompare(a.date));
 
 export const addExpense = (input: {
+  branchId: string;
   category: string;
   description: string;
   amountMinor: number;

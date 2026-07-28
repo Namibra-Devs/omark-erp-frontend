@@ -48,7 +48,7 @@ import {
   usePaystackVerifyMutation,
   getPaymentMethodConfig,
 } from '@/api/payments';
-import { useGenerateDeedMutation } from '@/api/deeds';
+import { useDeedsQuery, useGenerateDeedMutation, downloadAndSaveDeedPDF } from '@/api/deeds';
 import { cacheCustomerDetail } from '@/mock/customerPortalCache';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -116,6 +116,12 @@ export const CustomerDetailPage: React.FC = () => {
     isLoading: propertyLoading
   } = usePropertyQuery(customer?.propertyId || '');
 
+  const {
+    data: deedsData,
+    isLoading: deedsLoading,
+    refetch: refetchDeeds,
+  } = useDeedsQuery({ customerId: id, pageSize: 50 }, !!id);
+
   // ── API Mutations ──────────────────────────────────────────────────────────
   const recordPayment = useRecordPaymentMutation(planId ?? '');
   const paystackInitialize = usePaystackInitializeMutation(planId ?? '');
@@ -133,6 +139,7 @@ export const CustomerDetailPage: React.FC = () => {
   // on the payment plan detail response.
   const recentPayments = (paymentPlanData as any)?.recentPayments ?? paymentPlan?.payments ?? [];
   const property = propertyData as any;
+  const deeds = deedsData?.items ?? [];
 
   const isFullyPaid = customer?.type === 'fully_paid' || paymentPlan?.status === 'completed';
 
@@ -285,6 +292,7 @@ export const CustomerDetailPage: React.FC = () => {
       message.success('Deed generated successfully!');
       setGenerateDeedModal(false);
       resetDeedForm();
+      refetchDeeds();
     } catch (error: any) {
       message.error(
         error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to generate deed'
@@ -292,9 +300,79 @@ export const CustomerDetailPage: React.FC = () => {
     }
   };
 
-  const handleDownloadDeed = (deedId: string) => {
-    // Will be implemented when deed document endpoint is ready
-    message.info('Deed download coming soon!');
+  // There's no server-generated payment-plan statement endpoint (unlike
+  // deeds, which are generated server-side) — this builds a printable
+  // statement client-side and hands off to the browser's print-to-PDF,
+  // rather than leaving the button as a dead stub.
+  const handleGeneratePlanPdf = () => {
+    if (!paymentPlan || !customer) return;
+
+    const rows = installments
+      .map((i: any) => `
+        <tr>
+          <td>${i.sequence}</td>
+          <td>${dayjs(i.dueDate).format('MMM DD, YYYY')}</td>
+          <td>GHS ${(i.expectedAmountMinor / 100).toLocaleString()}</td>
+          <td>${i.isPaid ? 'Paid' : 'Pending'}</td>
+          <td>${i.paidAt ? dayjs(i.paidAt).format('MMM DD, YYYY') : '—'}</td>
+        </tr>
+      `)
+      .join('');
+
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Payment Plan Statement — ${customer.firstName} ${customer.lastName}</title>
+        <style>
+          body { font-family: Arial, Helvetica, sans-serif; padding: 32px; color: #1a1a2e; }
+          h1 { font-size: 20px; margin-bottom: 2px; }
+          .muted { color: #666; font-size: 12px; margin-bottom: 20px; }
+          .summary div { margin-bottom: 4px; font-size: 13px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 8px; font-size: 12.5px; text-align: left; }
+          th { background: #f5f5f5; }
+        </style>
+      </head>
+      <body>
+        <h1>Omark Real Estate — Payment Plan Statement</h1>
+        <div class="muted">Generated ${dayjs().format('MMMM DD, YYYY HH:mm')}</div>
+        <div class="summary">
+          <div><strong>Customer:</strong> ${customer.firstName} ${customer.lastName}</div>
+          <div><strong>Phone:</strong> ${customer.phoneNumber}</div>
+          ${property ? `<div><strong>Property:</strong> ${property.houseNumber} — ${property.offerNumber}</div>` : ''}
+          <div><strong>Total Amount:</strong> GHS ${(paymentPlan.totalAmountMinor / 100).toLocaleString()}</div>
+          <div><strong>Down Payment:</strong> GHS ${(paymentPlan.downPaymentMinor / 100).toLocaleString()}</div>
+          <div><strong>Balance:</strong> GHS ${(paymentPlan.balanceMinor / 100).toLocaleString()}</div>
+          <div><strong>Status:</strong> ${paymentPlan.status}</div>
+        </div>
+        <table>
+          <thead><tr><th>#</th><th>Due Date</th><th>Amount</th><th>Status</th><th>Paid On</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <script>window.onload = function () { window.print(); };</script>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      message.error('Please allow pop-ups for this site to generate the PDF');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
+  const handleDownloadDeed = async (deedId: string) => {
+    try {
+      message.loading({ content: 'Preparing download...', key: 'deed-download', duration: 0 });
+      await downloadAndSaveDeedPDF(deedId);
+      message.success({ content: 'Deed opened in a new tab!', key: 'deed-download' });
+    } catch (error: any) {
+      message.error({ content: error?.message || 'Failed to download deed', key: 'deed-download' });
+    }
   };
 
   // ── Loading state ─────────────────────────────────────────────────────────
@@ -585,7 +663,7 @@ export const CustomerDetailPage: React.FC = () => {
                           <Button
                             type="primary"
                             icon={<DownloadOutlined />}
-                            onClick={() => message.info('PDF generation coming soon!')}
+                            onClick={handleGeneratePlanPdf}
                           >
                             Generate PDF
                           </Button>
@@ -744,11 +822,34 @@ export const CustomerDetailPage: React.FC = () => {
                     Generate Deed
                   </Button>
                 </div>
-                <Empty description="No deeds generated yet">
-                  <Button type="primary" onClick={() => openGenerateDeedModal()}>
-                    Generate First Deed
-                  </Button>
-                </Empty>
+                <Spin spinning={deedsLoading}>
+                  {deeds.length > 0 ? (
+                    <List
+                      dataSource={deeds}
+                      renderItem={(deed: any) => (
+                        <List.Item
+                          actions={[
+                            <Button key="download" icon={<DownloadOutlined />} onClick={() => handleDownloadDeed(deed.id)}>
+                              Download
+                            </Button>,
+                          ]}
+                        >
+                          <List.Item.Meta
+                            avatar={<FileOutlined style={{ fontSize: 20, color: tokens.primary }} />}
+                            title={`Deed #${deed.id.slice(0, 8)}`}
+                            description={`Generated ${dayjs(deed.generatedAt).format('MMMM DD, YYYY')} · ${deed.witnesses?.length ?? 0} witness(es)`}
+                          />
+                        </List.Item>
+                      )}
+                    />
+                  ) : (
+                    <Empty description="No deeds generated yet">
+                      <Button type="primary" onClick={() => openGenerateDeedModal()}>
+                        Generate First Deed
+                      </Button>
+                    </Empty>
+                  )}
+                </Spin>
               </Card>
             ),
           },

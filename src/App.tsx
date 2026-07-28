@@ -9,6 +9,7 @@ import { CustomerPortalAuthProvider } from '@/contexts/CustomerPortalAuthContext
 import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { PortalProtectedRoute } from '@/components/portal/PortalProtectedRoute';
 import { AppShell } from '@/components/layout/AppShell';
+import { ScrollToTop } from '@/components/layout/ScrollToTop';
 import { tokens } from '@/constants/tokens';
 
 // Pages
@@ -116,6 +117,8 @@ const queryClient = new QueryClient({
 // Main App Routes
 const AppRoutes: React.FC = () => {
   return (
+    <>
+    <ScrollToTop />
     <Routes>
       {/* ============ PUBLIC ROUTES ============ */}
       <Route path="/login" element={<LoginPage />} />
@@ -394,6 +397,7 @@ const AppRoutes: React.FC = () => {
       {/* ===== CATCH ALL ===== */}
       <Route path="*" element={<Navigate to="/404" replace />} />
     </Routes>
+    </>
   );
 };
 

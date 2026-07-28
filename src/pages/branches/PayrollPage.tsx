@@ -60,7 +60,7 @@ export const PayrollPage: React.FC = () => {
   };
 
   const columns = [
-    { title: 'Code', dataIndex: 'code', key: 'code', render: (v: string) => <Tag>{v}</Tag> },
+    { title: 'Branch ID', dataIndex: 'code', key: 'code', render: (v: string) => <Tag>{v}</Tag> },
     {
       title: 'Branch',
       key: 'branch',

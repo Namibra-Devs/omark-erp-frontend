@@ -67,6 +67,7 @@ export const mockPropertyTypes: string[] = [
 
 export interface BranchLead {
   id: string;
+  branchId: string;
   code: string;
   name: string;
   phone: string;
@@ -79,6 +80,7 @@ export interface BranchLead {
 
 export interface BranchAppointment {
   id: string;
+  branchId: string;
   code: string;
   clientName: string;
   time: string;
@@ -90,6 +92,7 @@ export interface BranchAppointment {
 
 export interface BranchPayment {
   id: string;
+  branchId: string;
   code: string;
   customerName: string;
   amountMinor: number;
@@ -103,6 +106,7 @@ export interface BranchPayment {
 
 export interface BranchTask {
   id: string;
+  branchId: string;
   title: string;
   assignee: string;
   dueDate: string;
@@ -113,6 +117,7 @@ export interface BranchTask {
 
 export interface BranchAttendanceEntry {
   id: string;
+  branchId: string;
   staffName: string;
   status: 'present' | 'late' | 'absent' | 'on_leave';
   checkInTime?: string;
@@ -120,6 +125,7 @@ export interface BranchAttendanceEntry {
 
 export interface BranchExpenseEntry {
   id: string;
+  branchId: string;
   code: string;
   category: string;
   amountMinor: number;
@@ -129,6 +135,7 @@ export interface BranchExpenseEntry {
 
 export interface BranchDocument {
   id: string;
+  branchId: string;
   code: string;
   title: string;
   submittedBy: string;
@@ -142,6 +149,7 @@ export interface BranchDocument {
 
 export interface BranchProject {
   id: string;
+  branchId: string;
   code: string;
   name: string;
   progressPercent: number;
@@ -153,6 +161,17 @@ export interface BranchProject {
 /** BRANCHCODE-TYPE-YEAR-### — e.g. KMA-SALE-2026-001 */
 export const generateRecordCode = (branchCode: string, typeCode: string, sequence: number, year = new Date().getFullYear()): string =>
   `${branchCode}-${typeCode}-${year}-${String(sequence).padStart(3, '0')}`;
+
+// Every branch-scoped transaction/record must carry its own `branchId` field
+// (not just live inside a `{ [branchId]: T[] }` bucket) so it stays
+// self-describing and logically separated from other branches' data even
+// once flattened/queried outside that bucket. This derives it from the map
+// key automatically, so the seed data below doesn't have to repeat it by
+// hand on every single entry (and can't drift out of sync with its bucket).
+const attachBranchId = <T>(map: Record<string, T[]>): Record<string, (T & { branchId: string })[]> =>
+  Object.fromEntries(
+    Object.entries(map).map(([branchId, items]) => [branchId, items.map((item) => ({ ...item, branchId }))])
+  );
 
 export const mockBranches: Branch[] = [
   {
@@ -259,7 +278,7 @@ export const mockTopStaff: TopStaffEntry[] = [
 // Dates span the last few days (relative to a 2026-07-26 "today") so the
 // date-range filter has something real to narrow down.
 
-export const mockBranchLeads: Record<string, BranchLead[]> = {
+export const mockBranchLeads: Record<string, BranchLead[]> = attachBranchId<Omit<BranchLead, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'lead-hq-1', code: generateRecordCode('HQ', 'LEAD', 1), name: 'Kwabena Owusu', phone: '+233 24 111 0001', source: 'Website', time: '08:42', date: '2026-07-26', departmentId: 'dept-marketing', handledBy: 'Jawaad Ismael' },
     { id: 'lead-hq-2', code: generateRecordCode('HQ', 'LEAD', 2), name: 'Efua Asante', phone: '+233 20 111 0002', source: 'Referral', time: '10:15', date: '2026-07-26', departmentId: 'dept-marketing', handledBy: 'Jawaad Ismael' },
@@ -275,9 +294,9 @@ export const mockBranchLeads: Record<string, BranchLead[]> = {
   'branch-tamale': [
     { id: 'lead-tam-1', code: generateRecordCode('TAM', 'LEAD', 1), name: 'Sulemana Abdul', phone: '+233 27 444 0001', source: 'Referral', time: '12:30', date: '2026-07-23', departmentId: 'dept-marketing', handledBy: 'Fatima Iddrisu' },
   ],
-};
+});
 
-export const mockBranchAppointments: Record<string, BranchAppointment[]> = {
+export const mockBranchAppointments: Record<string, BranchAppointment[]> = attachBranchId<Omit<BranchAppointment, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'appt-hq-1', code: generateRecordCode('HQ', 'APPT', 1), clientName: 'Kwabena Owusu', time: '09:00', date: '2026-07-26', departmentId: 'dept-customer-service', handledBy: 'Sarah Mensah', status: 'completed' },
     { id: 'appt-hq-2', code: generateRecordCode('HQ', 'APPT', 2), clientName: 'Nana Yeboah', time: '14:30', date: '2026-07-26', departmentId: 'dept-customer-service', handledBy: 'Sarah Mensah', status: 'scheduled' },
@@ -293,9 +312,9 @@ export const mockBranchAppointments: Record<string, BranchAppointment[]> = {
   'branch-tamale': [
     { id: 'appt-tam-1', code: generateRecordCode('TAM', 'APPT', 1), clientName: 'Sulemana Abdul', time: '13:00', date: '2026-07-23', departmentId: 'dept-marketing', handledBy: 'Fatima Iddrisu', status: 'canceled' },
   ],
-};
+});
 
-export const mockBranchPayments: Record<string, BranchPayment[]> = {
+export const mockBranchPayments: Record<string, BranchPayment[]> = attachBranchId<Omit<BranchPayment, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'pay-hq-1', code: generateRecordCode('HQ', 'PAY', 3), customerName: 'John Mensah', amountMinor: 5_000_00 * 100, method: 'Bank Transfer', time: '09:12', date: '2026-07-26', departmentId: 'dept-finance', receivedBy: 'Kindo Original', projectId: 'proj-hq-1' },
     { id: 'pay-hq-2', code: generateRecordCode('HQ', 'PAY', 4), customerName: 'Grace Owusu', amountMinor: 1_200_00 * 100, method: 'Mobile Money', time: '11:40', date: '2026-07-25', departmentId: 'dept-finance', receivedBy: 'Kindo Original', projectId: 'proj-hq-2' },
@@ -307,9 +326,9 @@ export const mockBranchPayments: Record<string, BranchPayment[]> = {
     { id: 'pay-tkd-1', code: generateRecordCode('TKD', 'PAY', 1), customerName: 'Efua Baiden', amountMinor: 800_00 * 100, method: 'Mobile Money', time: '14:20', date: '2026-07-24', departmentId: 'dept-finance', receivedBy: 'Kwesi Mensah', projectId: 'proj-tkd-1' },
   ],
   'branch-tamale': [],
-};
+});
 
-export const mockBranchTasks: Record<string, BranchTask[]> = {
+export const mockBranchTasks: Record<string, BranchTask[]> = attachBranchId<Omit<BranchTask, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'task-hq-1', title: 'Follow up with 3 overdue payment plans', assignee: 'Sarah Mensah', dueDate: 'Today', date: '2026-07-26', departmentId: 'dept-customer-service', priority: 'high' },
     { id: 'task-hq-2', title: 'Prepare weekly revenue report', assignee: 'Kindo Original', dueDate: 'Tomorrow', date: '2026-07-27', departmentId: 'dept-finance', priority: 'medium' },
@@ -324,9 +343,9 @@ export const mockBranchTasks: Record<string, BranchTask[]> = {
   'branch-tamale': [
     { id: 'task-tam-1', title: 'Onboard new customer service hire', assignee: 'Fatima Iddrisu', dueDate: 'This week', date: '2026-07-28', departmentId: 'dept-admin', priority: 'medium' },
   ],
-};
+});
 
-export const mockBranchAttendance: Record<string, BranchAttendanceEntry[]> = {
+export const mockBranchAttendance: Record<string, BranchAttendanceEntry[]> = attachBranchId<Omit<BranchAttendanceEntry, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'att-hq-1', staffName: 'Kindo Original', status: 'present', checkInTime: '08:01' },
     { id: 'att-hq-2', staffName: 'Sarah Mensah', status: 'present', checkInTime: '08:10' },
@@ -346,9 +365,9 @@ export const mockBranchAttendance: Record<string, BranchAttendanceEntry[]> = {
     { id: 'att-tam-1', staffName: 'Fatima Iddrisu', status: 'present', checkInTime: '08:00' },
     { id: 'att-tam-2', staffName: 'Sulemana Abdul', status: 'absent' },
   ],
-};
+});
 
-export const mockBranchExpenses: Record<string, BranchExpenseEntry[]> = {
+export const mockBranchExpenses: Record<string, BranchExpenseEntry[]> = attachBranchId<Omit<BranchExpenseEntry, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'exp-hq-1', code: generateRecordCode('HQ', 'EXP', 1), category: 'Utilities', amountMinor: 1_800_00 * 100, date: '2026-07-26', departmentId: 'dept-finance' },
     { id: 'exp-hq-2', code: generateRecordCode('HQ', 'EXP', 2), category: 'Office Supplies', amountMinor: 640_00 * 100, date: '2026-07-25', departmentId: 'dept-admin' },
@@ -362,9 +381,9 @@ export const mockBranchExpenses: Record<string, BranchExpenseEntry[]> = {
   'branch-tamale': [
     { id: 'exp-tam-1', code: generateRecordCode('TAM', 'EXP', 1), category: 'Office Rent', amountMinor: 900_00 * 100, date: '2026-07-21', departmentId: 'dept-finance' },
   ],
-};
+});
 
-export const mockBranchDocuments: Record<string, BranchDocument[]> = {
+export const mockBranchDocuments: Record<string, BranchDocument[]> = attachBranchId<Omit<BranchDocument, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'doc-hq-1', code: generateRecordCode('HQ', 'INV', 14), title: 'Property invoice — Kwabena Owusu', submittedBy: 'Sarah Mensah', status: 'pending', date: '2026-07-26', departmentId: 'dept-finance', propertyType: 'Apartment', projectId: 'proj-hq-1', amountMinor: 5_000_00 * 100 },
     { id: 'doc-hq-2', code: generateRecordCode('HQ', 'DOC', 15), title: 'Deed of purchase — Grace Owusu', submittedBy: 'Kindo Original', status: 'pending', date: '2026-07-25', departmentId: 'dept-secretariat', propertyType: 'Residential Land', projectId: 'proj-hq-2', amountMinor: 62_000_00 * 100 },
@@ -378,9 +397,9 @@ export const mockBranchDocuments: Record<string, BranchDocument[]> = {
   'branch-tamale': [
     { id: 'doc-tam-1', code: generateRecordCode('TAM', 'INV', 1), title: 'Deposit invoice — Sulemana Abdul', submittedBy: 'Fatima Iddrisu', status: 'pending', date: '2026-07-23', departmentId: 'dept-finance', propertyType: 'Warehouse', projectId: 'proj-tam-1', amountMinor: 15_000_00 * 100 },
   ],
-};
+});
 
-export const mockBranchProjects: Record<string, BranchProject[]> = {
+export const mockBranchProjects: Record<string, BranchProject[]> = attachBranchId<Omit<BranchProject, 'branchId'>>({
   'branch-accra-hq': [
     { id: 'proj-hq-1', code: generateRecordCode('HQ', 'PROJ', 1), name: 'Airport Hills Phase 2', progressPercent: 72, status: 'on_track', dueDate: 'Dec 2026', propertyType: 'Apartment' },
     { id: 'proj-hq-2', code: generateRecordCode('HQ', 'PROJ', 2), name: 'HQ Office Renovation', progressPercent: 40, status: 'at_risk', dueDate: 'Oct 2026', propertyType: 'Office Space' },
@@ -394,7 +413,7 @@ export const mockBranchProjects: Record<string, BranchProject[]> = {
   'branch-tamale': [
     { id: 'proj-tam-1', code: generateRecordCode('TAM', 'PROJ', 1), name: 'Tamale Branch Fit-out', progressPercent: 21, status: 'at_risk', dueDate: 'Nov 2026', propertyType: 'Warehouse' },
   ],
-};
+});
 
 export const getBranchMetrics = (branchId: string): BranchMetrics =>
   mockBranchMetrics[branchId] ?? {
@@ -438,5 +457,5 @@ export const getAllBranchUsers = (): { name: string; branchId: string }[] => {
 };
 
 /** All projects across branches, for the "project" filter dropdown. */
-export const getAllBranchProjects = (): (BranchProject & { branchId: string })[] =>
-  mockBranches.flatMap((b) => getBranchProjects(b.id).map((p) => ({ ...p, branchId: b.id })));
+export const getAllBranchProjects = (): BranchProject[] =>
+  mockBranches.flatMap((b) => getBranchProjects(b.id));

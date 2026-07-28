@@ -18,6 +18,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhoneInput } from '@/components/shared/PhoneInput';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { DollarOutlined, PlusOutlined } from '@ant-design/icons';
@@ -239,6 +240,16 @@ export const ProspectDetailPage: React.FC = () => {
           </Popconfirm>
         )}
       </div>
+
+      <Card style={{ marginBottom: 16 }}>
+        <Space align="center" size={16}>
+          <PhotoUpload entityType="prospect" entityId={prospect.id} size={64} />
+          <div>
+            <Text strong style={{ fontSize: 16, display: 'block' }}>{prospect.firstName} {prospect.lastName}</Text>
+            <StatusTag status={prospect.status} type="prospect" />
+          </div>
+        </Space>
+      </Card>
 
       <Row gutter={[16, 16]}>
         {/* Left Column - Prospect Info */}

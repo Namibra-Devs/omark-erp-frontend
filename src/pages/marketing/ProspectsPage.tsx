@@ -13,6 +13,8 @@ import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
 import { useUsersQuery } from '@/api/users';
 import { markSeen } from '@/mock/seenTracker';
+import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto } from '@/mock/photos';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -85,14 +87,22 @@ export const ProspectsPage: React.FC = () => {
 
   const handleAddProspect = async (values: any) => {
     try {
-      await createProspectMutation.mutateAsync({
-        ...values,
+      // `photo` isn't a real prospect field — POST /prospects would reject
+      // it, so pull it out before spreading the rest into the payload.
+      const { photo, ...prospectValues } = values;
+      const newProspect = await createProspectMutation.mutateAsync({
+        ...prospectValues,
         source: 'marketing',
         // Admins explicitly choose the marketer via the form below. Anyone
         // else creating their own prospect self-assigns — leaving this as
         // the logged-in user's id, as before.
         assignedUserId: isAdmin ? values.assignedUserId : user?.id,
       });
+      // Photo upload has no real endpoint (see src/mock/photos.ts) —
+      // applied locally once we have the prospect's real id back.
+      if (photo && (newProspect as any)?.id) {
+        setPhoto('prospect', (newProspect as any).id, photo);
+      }
       setIsModalOpen(false);
       form.resetFields();
       message.success('Prospect added successfully!');
@@ -373,6 +383,10 @@ export const ProspectsPage: React.FC = () => {
           layout="vertical"
           onFinish={handleAddProspect}
         >
+          <Form.Item name="photo" label="Photo" style={{ textAlign: 'center' }}>
+            <PendingPhotoUpload size={72} />
+          </Form.Item>
+
           <Row gutter={[8, 0]}>
             <Col xs={24} sm={12}>
               <Form.Item

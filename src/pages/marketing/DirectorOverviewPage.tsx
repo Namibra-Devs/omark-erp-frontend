@@ -2,12 +2,11 @@
 import React, { useState, useMemo } from 'react';
 import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Space, Button,
-  Progress, Tabs, Avatar, Tooltip,
+  Progress, Tabs, Tooltip,
   Empty, Alert, List, Descriptions, Drawer, Spin,
   message,
 } from 'antd';
 import {
-  UserOutlined,
   TeamOutlined,
   CheckCircleOutlined,
   EyeOutlined,
@@ -28,6 +27,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPerformance } from '@/api/dashboard';
 import { tokens } from '@/constants/tokens';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import {
   LineChart,
   Line,
@@ -153,7 +153,7 @@ export const DirectorOverviewPage: React.FC = () => {
       width: 200,
       render: (name: string, record: MarketerPerformance) => (
         <Space>
-          <Avatar src={record.avatar} icon={<UserOutlined />} />
+          <PhotoUpload entityType="staff" entityId={record.id} size={32} editable={false} />
           <Text strong>{name}</Text>
         </Space>
       ),
@@ -621,12 +621,9 @@ export const DirectorOverviewPage: React.FC = () => {
         {selectedMarketer && (
           <div>
             <div style={{ textAlign: 'center', marginBottom: 24 }}>
-              <Avatar
-                size={80}
-                src={selectedMarketer.avatar}
-                icon={<UserOutlined />}
-                style={{ marginBottom: 8 }}
-              />
+              <div style={{ display: 'inline-block', marginBottom: 8 }}>
+                <PhotoUpload entityType="staff" entityId={selectedMarketer.id} size={80} />
+              </div>
               <Title level={4}>{selectedMarketer.name}</Title>
             </div>
 

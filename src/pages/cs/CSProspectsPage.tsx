@@ -55,6 +55,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto } from '@/mock/photos';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { useUsersQuery } from '@/api/users';
@@ -154,15 +156,23 @@ export const CSProspectsPage: React.FC = () => {
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleAddProspect = async (values: any) => {
     try {
+      // `photo` isn't a real prospect field — POST /prospects would reject
+      // it, so pull it out before spreading the rest into the payload.
+      const { photo, ...prospectValues } = values;
       const payload = {
-        ...values,
+        ...prospectValues,
         source: 'customer_service' as ProspectSource,
         // Admins explicitly choose the rep via the form below. Anyone else
         // creating their own prospect self-assigns, as before.
         assignedUserId: isAdmin ? values.assignedUserId : user?.id,
       };
 
-      await createProspect.mutateAsync(payload);
+      const newProspect = await createProspect.mutateAsync(payload);
+      // Photo upload has no real endpoint (see src/mock/photos.ts) —
+      // applied locally once we have the prospect's real id back.
+      if (photo && (newProspect as any)?.id) {
+        setPhoto('prospect', (newProspect as any).id, photo);
+      }
       message.success('Customer Service prospect added successfully!');
       setIsModalOpen(false);
       form.resetFields();
@@ -954,6 +964,10 @@ export const CSProspectsPage: React.FC = () => {
           layout="vertical"
           onFinish={handleAddProspect}
         >
+          <Form.Item name="photo" label="Photo" style={{ textAlign: 'center' }}>
+            <PendingPhotoUpload size={72} />
+          </Form.Item>
+
           <Row gutter={[8, 0]}>
             <Col xs={24} sm={12}>
               <Form.Item

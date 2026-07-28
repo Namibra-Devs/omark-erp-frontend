@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 const STORAGE_KEY = 'omark_mock_photos';
 const MAX_DIMENSION = 256;
 
-export type PhotoEntityType = 'customer' | 'staff';
+export type PhotoEntityType = 'customer' | 'staff' | 'prospect';
 
 type PhotoMap = Record<string, string>;
 

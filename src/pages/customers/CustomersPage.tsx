@@ -11,7 +11,8 @@ import {
 import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
 import { usePropertiesQuery } from '@/api/properties';
 import { cacheCustomerSummaries } from '@/mock/customerPortalCache';
-import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto } from '@/mock/photos';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
@@ -287,6 +288,11 @@ const handleAddCustomer = async (values: any) => {
     console.log('📤 Creating customer with payload:', customerData);
 
     const newCustomer = await createCustomer.mutateAsync(customerData);
+    // Photo upload has no real endpoint (see src/mock/photos.ts) — applied
+    // locally once we have the customer's real id back from the server.
+    if (values.photo && newCustomer?.id) {
+      setPhoto('customer', newCustomer.id, values.photo);
+    }
     message.success('Customer created successfully!');
 
     setAddModal(false);
@@ -864,6 +870,10 @@ const handleAddCustomer = async (values: any) => {
           initialValues={{ type: 'payment_plan', paymentBasis: 'months' }}
         >
           <Divider>Customer Information</Divider>
+
+          <Form.Item name="photo" label="Photo" style={{ textAlign: 'center' }}>
+            <PendingPhotoUpload size={72} />
+          </Form.Item>
 
           <Row gutter={[8, 0]}>
             <Col xs={24} sm={12}>

@@ -38,6 +38,7 @@ import { MoneyText } from '@/components/shared/MoneyText';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { addExpense, useExpenses, type ExpenseType } from '@/mock/expenses';
 import { useAllPayroll } from '@/mock/payroll';
+import { useBranchContext } from '@/contexts/BranchContext';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -83,8 +84,11 @@ export const AccountsDashboardPage: React.FC = () => {
   const totalBonusesMinor = payroll.reduce((sum, p) => sum + p.bonusMinor, 0);
   const pendingPayrollCount = payroll.filter((p) => p.status === 'pending').length;
 
-  const handleAddExpense = (values: { category: string; description: string; amountGHS: number; type: ExpenseType; date: dayjs.Dayjs }) => {
+  const { branches } = useBranchContext();
+
+  const handleAddExpense = (values: { branchId: string; category: string; description: string; amountGHS: number; type: ExpenseType; date: dayjs.Dayjs }) => {
     addExpense({
+      branchId: values.branchId,
       category: values.category,
       description: values.description || '',
       amountMinor: Math.round(values.amountGHS * 100),
@@ -394,7 +398,9 @@ export const AccountsDashboardPage: React.FC = () => {
                 <List.Item>
                   <Space direction="vertical" size={0}>
                     <Text style={{ fontSize: 13 }}>{item.category}</Text>
-                    <Text type="secondary" style={{ fontSize: 11 }}>{item.code} · {item.date}</Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {item.code} · {branches.find((b) => b.id === item.branchId)?.name ?? item.branchId} · {item.date}
+                    </Text>
                   </Space>
                   <Space direction="vertical" size={0} style={{ textAlign: 'right' }}>
                     <Text strong style={{ fontSize: 13 }}>GHS {(item.amountMinor / 100).toLocaleString()}</Text>
@@ -491,6 +497,9 @@ export const AccountsDashboardPage: React.FC = () => {
         width={480}
       >
         <Form form={expenseForm} layout="vertical" onFinish={handleAddExpense} initialValues={{ type: 'internal', date: dayjs() }}>
+          <Form.Item name="branchId" label="Branch" rules={[{ required: true, message: 'Please select a branch' }]}>
+            <Select placeholder="Select branch" options={branches.map((b) => ({ value: b.id, label: b.name }))} />
+          </Form.Item>
           <Form.Item name="category" label="Category" rules={[{ required: true, message: 'Please enter a category' }]}>
             <Input placeholder="e.g. Office Supplies, Legal Fees" />
           </Form.Item>

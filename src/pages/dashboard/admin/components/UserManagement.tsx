@@ -249,7 +249,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
 
   const columns = [
     {
-      title: 'User',
+      title: 'Staff',
       key: 'user',
       width: 220,
       render: (_: any, record: User) => {
