@@ -42,6 +42,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { tokens } from '@/constants/tokens';
 import {
   useAppointmentsQuery,
@@ -511,7 +512,13 @@ export const AppointmentsPage: React.FC = () => {
         const entity = getEntityDetails(record);
         return (
           <Space>
-            <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+            {record.customerId ? (
+              <PhotoUpload entityType="customer" entityId={record.customerId} size={32} editable={false} />
+            ) : record.prospectId ? (
+              <PhotoUpload entityType="prospect" entityId={record.prospectId} size={32} editable={false} />
+            ) : (
+              <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+            )}
             <div>
               <Text strong>{entity.name}</Text>
               <br />

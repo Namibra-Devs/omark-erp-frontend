@@ -14,9 +14,11 @@ const { Title } = Typography;
 
 interface CrossSystemActivityProps {
   stats: MockActivityStats;
+  /** Name of the branch this data is scoped to, if the viewer is assigned to one. */
+  branchName?: string;
 }
 
-export const CrossSystemActivity: React.FC<CrossSystemActivityProps> = ({ stats }) => {
+export const CrossSystemActivity: React.FC<CrossSystemActivityProps> = ({ stats, branchName }) => {
   const navigate = useNavigate();
 
   return (
@@ -24,6 +26,7 @@ export const CrossSystemActivity: React.FC<CrossSystemActivityProps> = ({ stats 
       <Title level={5} style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
         Accounts, Finance & Branch Activity
         <Tag color="gold" style={{ fontWeight: 'normal' }}>Preview — local prototype data</Tag>
+        {branchName && <Tag color="blue" style={{ fontWeight: 'normal' }}>Scoped to {branchName}</Tag>}
       </Title>
       <Row gutter={16}>
         <Col xs={24} sm={12} lg={6}>

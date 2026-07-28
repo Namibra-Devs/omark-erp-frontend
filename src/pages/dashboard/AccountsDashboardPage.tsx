@@ -39,6 +39,7 @@ import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { addExpense, useExpenses, type ExpenseType } from '@/mock/expenses';
 import { useAllPayroll } from '@/mock/payroll';
 import { useBranchContext } from '@/contexts/BranchContext';
+import { useStaffAssignment } from '@/mock/staffAssignments';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -77,14 +78,23 @@ export const AccountsDashboardPage: React.FC = () => {
 
   // Expense tracking + payroll/bonuses (prototype — see src/mock/expenses.ts
   // and src/mock/payroll.ts; no backend endpoint exists for either yet).
-  const expenses = useExpenses();
-  const payroll = useAllPayroll();
+  const allExpenses = useExpenses();
+  const allPayroll = useAllPayroll();
+
+  const { branches } = useBranchContext();
+  // "Every branch is a unit on its own" — accounts staff assigned to a
+  // branch only see/record that branch's own expenses and payroll here.
+  // Unassigned staff (or admin viewing this page) still see everything.
+  const { assignment: myAssignment } = useStaffAssignment(user?.id);
+  const myBranchId = myAssignment.branchId;
+  const myBranchName = branches.find((b) => b.id === myBranchId)?.name;
+
+  const expenses = myBranchId ? allExpenses.filter((e) => e.branchId === myBranchId) : allExpenses;
+  const payroll = myBranchId ? allPayroll.filter((p) => p.branchId === myBranchId) : allPayroll;
   const internalExpensesMinor = expenses.filter((e) => e.type === 'internal').reduce((sum, e) => sum + e.amountMinor, 0);
   const externalExpensesMinor = expenses.filter((e) => e.type === 'external').reduce((sum, e) => sum + e.amountMinor, 0);
   const totalBonusesMinor = payroll.reduce((sum, p) => sum + p.bonusMinor, 0);
   const pendingPayrollCount = payroll.filter((p) => p.status === 'pending').length;
-
-  const { branches } = useBranchContext();
 
   const handleAddExpense = (values: { branchId: string; category: string; description: string; amountGHS: number; type: ExpenseType; date: dayjs.Dayjs }) => {
     addExpense({
@@ -379,6 +389,7 @@ export const AccountsDashboardPage: React.FC = () => {
       <Title level={4} style={{ marginBottom: 16 }}>
         Finance Tools
         <Tag color="gold" style={{ marginLeft: 12, fontWeight: 'normal' }}>Preview — saved locally, not synced to a server yet</Tag>
+        {myBranchName && <Tag color="blue" style={{ fontWeight: 'normal' }}>Scoped to {myBranchName}</Tag>}
       </Title>
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={8}>
@@ -496,9 +507,14 @@ export const AccountsDashboardPage: React.FC = () => {
         footer={null}
         width={480}
       >
-        <Form form={expenseForm} layout="vertical" onFinish={handleAddExpense} initialValues={{ type: 'internal', date: dayjs() }}>
-          <Form.Item name="branchId" label="Branch" rules={[{ required: true, message: 'Please select a branch' }]}>
-            <Select placeholder="Select branch" options={branches.map((b) => ({ value: b.id, label: b.name }))} />
+        <Form form={expenseForm} layout="vertical" onFinish={handleAddExpense} initialValues={{ type: 'internal', date: dayjs(), branchId: myBranchId }}>
+          <Form.Item
+            name="branchId"
+            label="Branch"
+            rules={[{ required: true, message: 'Please select a branch' }]}
+            extra={myBranchId ? "You're assigned to this branch — expenses stay within it." : undefined}
+          >
+            <Select placeholder="Select branch" disabled={!!myBranchId} options={branches.map((b) => ({ value: b.id, label: b.name }))} />
           </Form.Item>
           <Form.Item name="category" label="Category" rules={[{ required: true, message: 'Please enter a category' }]}>
             <Input placeholder="e.g. Office Supplies, Legal Fees" />

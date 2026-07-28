@@ -2,6 +2,7 @@
 import React, { useEffect } from 'react';
 import { Drawer, Form, Input, Select, Space, Button, Typography, message, Divider, Tag } from 'antd';
 import { PhoneInput } from '@/components/shared/PhoneInput';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/mock/branches';
 import { useStaffAssignment } from '@/mock/staffAssignments';
@@ -136,6 +137,10 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
             status: 'active',
           }}
         >
+          <div style={{ textAlign: 'center', marginBottom: 20 }}>
+            <PhotoUpload entityType="staff" entityId={user.id} size={80} />
+          </div>
+
           <Form.Item
             name="name"
             label="Full Name"

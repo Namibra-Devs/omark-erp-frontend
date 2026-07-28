@@ -11,6 +11,7 @@ import {
   BankOutlined,
 } from '@ant-design/icons';
 import { PhoneInput } from '@/components/shared/PhoneInput';
+import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/mock/branches';
 
@@ -354,6 +355,10 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
         // before calling the API and saves them locally after creation.
         branchId: values.branchId,
         departmentId: values.departmentId,
+        // Prototype-only — see src/mock/photos.ts. No upload endpoint exists
+        // on the real API; useAdminDashboard.ts strips this out before
+        // calling POST /users and saves it locally after creation.
+        photo: values.photo,
       };
 
       console.log('📤 AddUserModal - Payload being sent to addUser:', payload);
@@ -405,6 +410,10 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
   const STEP_CONTENT: Record<number, React.ReactNode> = {
     1: (
       <div style={{ display: step === 1 ? 'block' : 'none' }}>
+        <Form.Item name="photo" label="Photo" style={{ textAlign: 'center' }}>
+          <PendingPhotoUpload size={72} />
+        </Form.Item>
+
         <Row gutter={14}>
           <Col span={12}>
             <Form.Item

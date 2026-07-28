@@ -64,6 +64,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
@@ -71,11 +72,11 @@ import { tokens } from '@/constants/tokens';
 import {
   useDeedsQuery,
   useGenerateDeedMutation,
-  downloadAndSaveDeedPDF,
   formatDeedNumber,
   type Deed,
   type GenerateDeedPayload
 } from '@/api/deeds';
+import { printDeedWithPhoto } from '@/components/shared/printDeedWithPhoto';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery } from '@/api/properties';
 import type { Customer } from '@/types';
@@ -215,7 +216,7 @@ export const DeedsPage: React.FC = () => {
   const handleDownloadDeed = async (deed: Deed) => {
     try {
       message.loading('Preparing download...', 0.5);
-      await downloadAndSaveDeedPDF(deed.id);
+      await printDeedWithPhoto(deed.id, deed.customerId, getCustomerName(deed.customerId));
       message.success('Deed opened in a new tab!');
     } catch (error: any) {
       message.error(error?.message || 'Failed to download deed');
@@ -349,7 +350,7 @@ export const DeedsPage: React.FC = () => {
       width: 200,
       render: (_: any, record: Deed) => (
         <Space>
-          <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+          <PhotoUpload entityType="customer" entityId={record.customerId} size={32} editable={false} />
           <div>
             <Text strong>{getCustomerName(record.customerId)}</Text>
             <br />

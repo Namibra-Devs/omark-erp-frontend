@@ -27,10 +27,18 @@ const asTimestamp = (iso: string | undefined) => {
   return iso.length === 10 ? `${iso} 00:00:00` : iso.replace('T', ' ').slice(0, 19);
 };
 
-const buildMockActivityLogs = (): ActivityLog[] => {
+// "Every branch is a unit on its own" — when a branchId is passed, this
+// feed only shows that branch's own expenses/payroll/approvals, never
+// another branch's. Complaints have no branch attribution anywhere in the
+// data model (Customer carries no branchId), so they're left out of a
+// branch-scoped view entirely rather than guessed at or shown unscoped.
+const buildMockActivityLogs = (branchId?: string): ActivityLog[] => {
   const logs: ActivityLog[] = [];
+  const branchesInScope = branchId ? mockBranches.filter((b) => b.id === branchId) : mockBranches;
 
-  getAllExpenses().forEach((e) => {
+  getAllExpenses()
+    .filter((e) => !branchId || e.branchId === branchId)
+    .forEach((e) => {
     logs.push({
       id: `mock-expense-${e.id}`,
       user: e.recordedBy,
@@ -41,7 +49,9 @@ const buildMockActivityLogs = (): ActivityLog[] => {
     });
   });
 
-  getAllBranchPayroll().forEach((p) => {
+  getAllBranchPayroll()
+    .filter((p) => !branchId || p.branchId === branchId)
+    .forEach((p) => {
     const branch = mockBranches.find((b) => b.id === p.branchId);
     const bonusNote = p.bonusMinor > 0 ? ` incl. GHS ${(p.bonusMinor / 100).toLocaleString()} bonus` : '';
     logs.push({
@@ -54,20 +64,24 @@ const buildMockActivityLogs = (): ActivityLog[] => {
     });
   });
 
-  getAllComplaints().forEach((c) => {
-    logs.push({
-      id: `mock-complaint-${c.id}`,
-      user: c.customerName,
-      action: c.status === 'resolved' ? 'Complaint resolved' : c.status === 'in_progress' ? 'Complaint in progress' : 'Complaint logged',
-      details: `${c.subject} (${c.code}) · Preview, local only`,
-      timestamp: asTimestamp(c.updatedAt),
-      type: c.status === 'resolved' ? 'success' : c.status === 'open' ? 'warning' : 'info',
+  // Complaints have no branch attribution — only show them in the
+  // unscoped (company-wide) feed, never in a single branch's view.
+  if (!branchId) {
+    getAllComplaints().forEach((c) => {
+      logs.push({
+        id: `mock-complaint-${c.id}`,
+        user: c.customerName,
+        action: c.status === 'resolved' ? 'Complaint resolved' : c.status === 'in_progress' ? 'Complaint in progress' : 'Complaint logged',
+        details: `${c.subject} (${c.code}) · Preview, local only`,
+        timestamp: asTimestamp(c.updatedAt),
+        type: c.status === 'resolved' ? 'success' : c.status === 'open' ? 'warning' : 'info',
+      });
     });
-  });
+  }
 
   const overrides = getAllApprovalOverrides();
   Object.entries(overrides).forEach(([recordId, override]) => {
-    for (const branch of mockBranches) {
+    for (const branch of branchesInScope) {
       const doc = getBranchDocuments(branch.id).find((d) => d.id === recordId);
       const exp = !doc ? getBranchExpenseEntries(branch.id).find((e) => e.id === recordId) : undefined;
       const label = doc?.title ?? exp?.category;
@@ -97,16 +111,18 @@ export interface MockActivityStats {
   pendingApprovalsCount: number;
 }
 
-const buildMockStats = (): MockActivityStats => {
-  const expenses = getAllExpenses();
-  const payroll = getAllBranchPayroll();
-  const complaints = getAllComplaints();
+const buildMockStats = (branchId?: string): MockActivityStats => {
+  const expenses = getAllExpenses().filter((e) => !branchId || e.branchId === branchId);
+  const payroll = getAllBranchPayroll().filter((p) => !branchId || p.branchId === branchId);
+  // No branch attribution on complaints — only counted in the unscoped view.
+  const complaints = branchId ? [] : getAllComplaints();
+  const branchesInScope = branchId ? mockBranches.filter((b) => b.id === branchId) : mockBranches;
 
   // Only documents carry a real pending-approval concept in the mock data
   // (status: 'pending'); branch expense entries have no status field.
   const overrides = getAllApprovalOverrides();
   let pendingApprovalsCount = 0;
-  mockBranches.forEach((branch) => {
+  branchesInScope.forEach((branch) => {
     getBranchDocuments(branch.id).forEach((doc) => {
       if (doc.status === 'pending' && !overrides[doc.id]) pendingApprovalsCount += 1;
     });
@@ -123,23 +139,29 @@ const buildMockStats = (): MockActivityStats => {
   };
 };
 
-/** Re-reads whenever any prototype mock store changes, even from another tab/page. */
-export const useMockActivityFeed = () => {
-  const [logs, setLogs] = useState<ActivityLog[]>(() => buildMockActivityLogs());
-  const [stats, setStats] = useState<MockActivityStats>(() => buildMockStats());
+/**
+ * Re-reads whenever any prototype mock store changes, even from another
+ * tab/page. Pass `branchId` to scope everything to a single branch — "every
+ * branch is a unit on its own" — omit it for the company-wide (Head
+ * Office / unassigned-admin) view.
+ */
+export const useMockActivityFeed = (branchId?: string) => {
+  const [logs, setLogs] = useState<ActivityLog[]>(() => buildMockActivityLogs(branchId));
+  const [stats, setStats] = useState<MockActivityStats>(() => buildMockStats(branchId));
 
   useEffect(() => {
     const refresh = () => {
-      setLogs(buildMockActivityLogs());
-      setStats(buildMockStats());
+      setLogs(buildMockActivityLogs(branchId));
+      setStats(buildMockStats(branchId));
     };
+    refresh();
     MOCK_EVENTS.forEach((evt) => window.addEventListener(evt, refresh));
     window.addEventListener('storage', refresh);
     return () => {
       MOCK_EVENTS.forEach((evt) => window.removeEventListener(evt, refresh));
       window.removeEventListener('storage', refresh);
     };
-  }, []);
+  }, [branchId]);
 
   return { logs, stats };
 };

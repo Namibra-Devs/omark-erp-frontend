@@ -1206,6 +1206,11 @@ const handleAddCustomer = async (values: any) => {
                 label: 'Customer Information',
                 children: (
                   <>
+                    {selectedCustomer && (
+                      <div style={{ textAlign: 'center', marginBottom: 16 }}>
+                        <PhotoUpload entityType="customer" entityId={selectedCustomer.id} size={72} />
+                      </div>
+                    )}
                     <Row gutter={[8, 0]}>
                       <Col xs={24} sm={12}>
                         <Form.Item

@@ -48,7 +48,8 @@ import {
   usePaystackVerifyMutation,
   getPaymentMethodConfig,
 } from '@/api/payments';
-import { useDeedsQuery, useGenerateDeedMutation, downloadAndSaveDeedPDF } from '@/api/deeds';
+import { useDeedsQuery, useGenerateDeedMutation } from '@/api/deeds';
+import { printDeedWithPhoto } from '@/components/shared/printDeedWithPhoto';
 import { cacheCustomerDetail } from '@/mock/customerPortalCache';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -368,7 +369,7 @@ export const CustomerDetailPage: React.FC = () => {
   const handleDownloadDeed = async (deedId: string) => {
     try {
       message.loading({ content: 'Preparing download...', key: 'deed-download', duration: 0 });
-      await downloadAndSaveDeedPDF(deedId);
+      await printDeedWithPhoto(deedId, customer.id, `${customer.firstName} ${customer.lastName}`);
       message.success({ content: 'Deed opened in a new tab!', key: 'deed-download' });
     } catch (error: any) {
       message.error({ content: error?.message || 'Failed to download deed', key: 'deed-download' });

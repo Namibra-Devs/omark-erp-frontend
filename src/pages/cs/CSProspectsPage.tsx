@@ -55,7 +55,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
-import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
+import { PendingPhotoUpload, PhotoUpload } from '@/components/shared/PhotoUpload';
 import { setPhoto } from '@/mock/photos';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
@@ -374,10 +374,7 @@ export const CSProspectsPage: React.FC = () => {
       width: 200,
       render: (_: any, record: Prospect) => (
         <Space>
-          <Avatar 
-            icon={<UserOutlined />} 
-            style={{ backgroundColor: tokens.primary }}
-          />
+          <PhotoUpload entityType="prospect" entityId={record.id} size={32} editable={false} />
           <div>
             <Text strong>{record.firstName} {record.lastName}</Text>
             <br />
@@ -1077,6 +1074,12 @@ export const CSProspectsPage: React.FC = () => {
           layout="vertical"
           onFinish={handleEditProspect}
         >
+          {editingProspect && (
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <PhotoUpload entityType="prospect" entityId={editingProspect.id} size={72} />
+            </div>
+          )}
+
           <Row gutter={[8, 0]}>
             <Col xs={24} sm={12}>
               <Form.Item

@@ -61,6 +61,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { ProgressCell } from '@/components/shared/ProgressCell';
@@ -324,7 +325,7 @@ export const PaymentPlansPage: React.FC = () => {
       width: 200,
       render: (_: any, record: PaymentPlan) => (
         <Space>
-          <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+          <PhotoUpload entityType="customer" entityId={record.customerId} size={32} editable={false} />
           <div>
             <Text strong>{getCustomerName(record.customerId)}</Text>
             <br />

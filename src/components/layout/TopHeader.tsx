@@ -1,7 +1,7 @@
 // src/components/layout/TopHeader.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Layout, Space, Typography, Tag, Dropdown, Avatar, Badge, Button, message, List, Spin, Empty, Drawer } from 'antd';
+import { Layout, Space, Typography, Tag, Dropdown, Badge, Button, message, List, Spin, Empty, Drawer } from 'antd';
 import {
   UserOutlined,
   LogoutOutlined,
@@ -14,6 +14,7 @@ import {
   CloseCircleOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { roleLabels } from '@/constants/enums';
 import { useUserQuery } from '@/api/users';
 import { useNotificationsQuery, usePendingNotificationsCountQuery, type NotificationLog } from '@/api/notifications';
@@ -278,11 +279,7 @@ export const TopHeader: React.FC = () => {
             {/* User Dropdown */}
             <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
               <Space style={{ cursor: 'pointer', padding: '4px 8px', borderRadius: 4 }}>
-                <Avatar 
-                  icon={<UserOutlined />} 
-                  style={{ backgroundColor: '#2E5E8C' }}
-                  size="default"
-                />
+                <PhotoUpload entityType="staff" entityId={user.id} size={32} editable={false} />
                 <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
                   <Text strong style={{ fontSize: 14 }}>
                     {user.firstName} {user.lastName}

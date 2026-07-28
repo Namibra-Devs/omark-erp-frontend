@@ -1,7 +1,7 @@
 // src/pages/dashboard/admin/components/UserManagement.tsx
 import React, { useState } from 'react';
 import {
-  Card, Table, Input, Select, Button, Space, Tag, Avatar,
+  Card, Table, Input, Select, Button, Space, Tag,
   Typography, Tooltip, Popconfirm, Badge, Empty, message, Modal
 } from 'antd';
 import {
@@ -11,7 +11,6 @@ import {
   DeleteOutlined,
   LockOutlined,
   UnlockOutlined,
-  UserOutlined,
   UserAddOutlined,
   ReloadOutlined,
   FilterOutlined,
@@ -27,6 +26,7 @@ import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/mock/branches';
 import { getStaffAssignment } from '@/mock/staffAssignments';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import type { User } from '../types';
 
 const { Text } = Typography;
@@ -256,13 +256,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         const fullName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || record.email;
         return (
           <Space>
-            <Avatar 
-              icon={<UserOutlined />} 
-              style={{ 
-                backgroundColor: record.status === 'active' ? tokens.primary : '#d9d9d9',
-                flexShrink: 0
-              }} 
-            />
+            <PhotoUpload entityType="staff" entityId={record.id} size={32} editable={false} />
             <div style={{ minWidth: 0 }}>
               <Text strong style={{ display: 'block', fontSize: 13 }}>
                 {fullName}

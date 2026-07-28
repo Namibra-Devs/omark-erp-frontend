@@ -13,7 +13,7 @@ import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
 import { useUsersQuery } from '@/api/users';
 import { markSeen } from '@/mock/seenTracker';
-import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
+import { PendingPhotoUpload, PhotoUpload } from '@/components/shared/PhotoUpload';
 import { setPhoto } from '@/mock/photos';
 
 const { Option } = Select;
@@ -486,6 +486,12 @@ export const ProspectsPage: React.FC = () => {
           layout="vertical"
           onFinish={handleEditProspect}
         >
+          {editingProspect && (
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <PhotoUpload entityType="prospect" entityId={editingProspect.id} size={72} />
+            </div>
+          )}
+
           <Row gutter={[8, 0]}>
             <Col xs={24} sm={12}>
               <Form.Item

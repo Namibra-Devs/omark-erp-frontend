@@ -22,6 +22,8 @@ import { EditUserDrawer } from './admin/components/EditUserDrawer';
 import { ExportModal } from './admin/components/ExportModal';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { CrossSystemActivity } from './admin/components/CrossSystemActivity';
+import { useBranchContext } from '@/contexts/BranchContext';
+import { useStaffAssignment } from '@/mock/staffAssignments';
 
 const { Title, Text } = Typography;
 
@@ -98,6 +100,9 @@ const LiveDot: React.FC = () => (
 export const AdminDashboardPage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const canViewAnalytics = hasRole(['admin', 'accounts', 'marketing_director']);
+  const { branches } = useBranchContext();
+  const { assignment: myAssignment } = useStaffAssignment(user?.id);
+  const myBranchName = branches.find((b) => b.id === myAssignment.branchId)?.name;
   const {
     users,
     activityLogs,
@@ -167,7 +172,7 @@ export const AdminDashboardPage: React.FC = () => {
       ),
       children: (
         <>
-          <CrossSystemActivity stats={mockActivityStats} />
+          <CrossSystemActivity stats={mockActivityStats} branchName={myBranchName} />
           <RecentActivity
             activities={activityLogs}
             loading={loading}

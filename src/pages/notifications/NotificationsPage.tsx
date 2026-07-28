@@ -34,6 +34,7 @@ import {
   SendOutlined,
 } from '@ant-design/icons';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { notificationStatusLabels, notificationTypeLabels } from '@/constants/enums';
@@ -244,7 +245,7 @@ export const NotificationsPage: React.FC = () => {
       width: 200,
       render: (_: any, record: NotificationLog) => (
         <Space>
-          <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
+          <PhotoUpload entityType="customer" entityId={record.customerId} size={32} editable={false} />
           <div>
             <Text strong>{getCustomerName(record.customerId)}</Text>
             <br />

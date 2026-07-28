@@ -13,6 +13,8 @@ import { ArrowLeftOutlined, PlusOutlined } from '@ant-design/icons';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { MockDataBanner } from '@/components/shared/MockDataBanner';
 import { useBranchContext } from '@/contexts/BranchContext';
+import { useAuth } from '@/contexts/AuthContext';
+import { useStaffAssignment } from '@/mock/staffAssignments';
 import { addPayrollRecord, updatePayrollStatus, useAllPayroll, type PayrollRecord, type PayrollStatus } from '@/mock/payroll';
 
 const statusColor: Record<PayrollStatus, string> = { pending: 'gold', processed: 'blue', paid: 'green' };
@@ -22,12 +24,24 @@ export const PayrollPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { branches } = useBranchContext();
-  const [branchId, setBranchId] = useState<string | undefined>(undefined);
+  const { user, hasRole } = useAuth();
+
+  // "Every branch is a unit on its own" — non-admin staff assigned to a
+  // branch (see src/mock/staffAssignments.ts) are locked to that branch's
+  // own payroll here; they can't view or add entries for another branch.
+  // Admin keeps full cross-branch oversight (matches the Head Office role).
+  const isAdmin = hasRole(['admin']);
+  const { assignment: myAssignment } = useStaffAssignment(user?.id);
+  const myBranchId = myAssignment.branchId;
+  const isLockedToOwnBranch = !isAdmin && !!myBranchId;
+
+  const [branchId, setBranchId] = useState<string | undefined>(isLockedToOwnBranch ? myBranchId : undefined);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [form] = Form.useForm();
 
   const allPayroll = useAllPayroll();
-  const payroll = allPayroll.filter((p) => !branchId || p.branchId === branchId);
+  const effectiveBranchId = isLockedToOwnBranch ? myBranchId : branchId;
+  const payroll = allPayroll.filter((p) => !effectiveBranchId || p.branchId === effectiveBranchId);
 
   const totalNetMinor = payroll.reduce((sum, p) => sum + p.netPayMinor, 0);
   const totalBonusMinor = payroll.reduce((sum, p) => sum + p.bonusMinor, 0);
@@ -118,10 +132,11 @@ export const PayrollPage: React.FC = () => {
         <Col xs={24} sm={6}>
           <Card>
             <Select
-              allowClear
+              allowClear={!isLockedToOwnBranch}
+              disabled={isLockedToOwnBranch}
               placeholder="Filter by branch"
               style={{ width: '100%' }}
-              value={branchId}
+              value={effectiveBranchId}
               onChange={setBranchId}
               options={branches.map((b) => ({ value: b.id, label: b.name }))}
             />
@@ -134,9 +149,14 @@ export const PayrollPage: React.FC = () => {
       </Card>
 
       <Modal title="Add Payroll Entry" open={addModalOpen} onCancel={() => setAddModalOpen(false)} footer={null} destroyOnClose>
-        <Form form={form} layout="vertical" onFinish={handleAdd}>
-          <Form.Item name="branchId" label="Branch" rules={[{ required: true, message: 'Please select a branch' }]}>
-            <Select placeholder="Select branch" options={branches.map((b) => ({ value: b.id, label: b.name }))} />
+        <Form form={form} layout="vertical" onFinish={handleAdd} initialValues={{ branchId: isLockedToOwnBranch ? myBranchId : undefined }}>
+          <Form.Item
+            name="branchId"
+            label="Branch"
+            rules={[{ required: true, message: 'Please select a branch' }]}
+            extra={isLockedToOwnBranch ? "You're assigned to this branch — payroll entries stay within it." : undefined}
+          >
+            <Select placeholder="Select branch" disabled={isLockedToOwnBranch} options={branches.map((b) => ({ value: b.id, label: b.name }))} />
           </Form.Item>
           <Form.Item name="staffName" label="Staff Name" rules={[{ required: true, message: 'Please enter a name' }]}>
             <Input placeholder="Full name" />

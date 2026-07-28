@@ -18,8 +18,10 @@ import { usePropertiesQuery } from '@/api/properties';
 import { useDeedsQuery } from '@/api/deeds';
 import type { Role } from '@/types';
 import type { User, SystemStats, ActivityLog } from '../types';
-import { setStaffAssignment } from '@/mock/staffAssignments';
+import { setStaffAssignment, useStaffAssignment } from '@/mock/staffAssignments';
+import { setPhoto } from '@/mock/photos';
 import { useMockActivityFeed } from './useMockActivityFeed';
+import { useAuth } from '@/contexts/AuthContext';
 
 // There is no activity-log endpoint anywhere in this API — "recent
 // activity" spanning prospects/appointments/properties/customers/deeds is
@@ -159,6 +161,14 @@ const mapApiUserToLocalUser = (entity: UserEntity, createdPasswords: Record<stri
 export const useAdminDashboard = () => {
   const queryClient = useQueryClient();
 
+  // "Every branch is a unit on its own" — an admin assigned to a specific
+  // branch (see src/mock/staffAssignments.ts) only sees that branch's own
+  // cross-system activity here. An admin with no branch assignment (Head
+  // Office / unassigned) still sees everything, matching the oversight
+  // role the dedicated Head Office pages already provide.
+  const { user: currentUser } = useAuth();
+  const { assignment: myAssignment } = useStaffAssignment(currentUser?.id);
+
   // ── Live API queries ────────────────────────────────────────────────────
   const { data: apiStats, isLoading: statsLoading } = useAdminDashboardOverviewQuery();
   const { data: apiUsers, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
@@ -260,8 +270,9 @@ export const useAdminDashboard = () => {
   // Accounts/Finance and other prototype-only activity (expenses, payroll
   // & bonuses, complaints, branch approvals) — no backend endpoint exists
   // for any of it, so it's assembled client-side from localStorage and
-  // merged in here so the admin has one place that sees everything.
-  const { logs: mockActivityLogs, stats: mockActivityStats } = useMockActivityFeed();
+  // merged in here. Scoped to this admin's own branch if they're assigned
+  // one; unassigned (Head Office) admins see everything, company-wide.
+  const { logs: mockActivityLogs, stats: mockActivityStats } = useMockActivityFeed(myAssignment.branchId);
 
   const activityLogs: ActivityLog[] = useMemo(() => {
     const live = buildLiveActivityLog({
@@ -370,6 +381,9 @@ export const useAdminDashboard = () => {
     // we have the new user's id, in onSuccess below.
     const branchId = userData.branchId as string | undefined;
     const departmentId = userData.departmentId as string | undefined;
+    // Prototype-only photo (see src/mock/photos.ts) — no upload endpoint
+    // exists on the real API, so this never goes in the API payload either.
+    const photo = userData.photo as string | undefined;
 
     // NOTE: `department` and `isActive` are intentionally NOT sent — POST /users
     // only accepts { firstName, lastName, email, phoneNumber?, password, role }.
@@ -390,6 +404,9 @@ export const useAdminDashboard = () => {
           setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
           if (branchId || departmentId) {
             setStaffAssignment(response.id, { branchId, departmentId });
+          }
+          if (photo) {
+            setPhoto('staff', response.id, photo);
           }
         }
         setLocalActivityLogs(prev => [
