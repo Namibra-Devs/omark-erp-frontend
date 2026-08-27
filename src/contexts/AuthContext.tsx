@@ -162,9 +162,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (error) {
       console.error('Failed to refresh user:', error);
-      if (error instanceof Error && (error as any).response?.status === 401) {
-        logout();
-      }
+      clearTokens();
+      setUser(null);
     }
   }, [logout]);
 

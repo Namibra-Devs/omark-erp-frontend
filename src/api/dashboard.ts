@@ -53,7 +53,8 @@ export interface SecretaryDashboardData {
 // target, or growth data anywhere in this API. Don't add speculative
 // fields back here; anything not derivable from these counts doesn't exist.
 export interface MarketerPerformance {
-  id: string;
+  id?: string;
+  userId?: string;
   name: string;
   avatar?: string;
   email?: string;
@@ -66,6 +67,14 @@ export interface MarketerPerformance {
   suspended: number;
   converted: number;
   conversionRate: number;
+  satisfaction?: number;
+  responseTime?: number;
+  targetMinor?: number;
+  revenueMinor?: number;
+  thisMonthProspects?: number;
+  lastMonthProspects?: number;
+  growthPercent?: number;
+  byStatus?: Record<string, number>;
 }
 
 export interface MarketingDashboardData {

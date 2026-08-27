@@ -1,75 +1,74 @@
 // src/pages/admin/ComplaintsPage.tsx
-// ⚠️ PROTOTYPE — see src/mock/complaints.ts. Staff-side triage view for
-// complaints logged through the Customer Portal (also a prototype).
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Button, Card, Input, Select, Space, Table, Tag, Typography, Modal, Form, message } from 'antd';
 import { MessageOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { PageHeader } from '@/components/shared/PageHeader';
-import { MockDataBanner } from '@/components/shared/MockDataBanner';
-import { useAuth } from '@/contexts/AuthContext';
-import { markSeen } from '@/mock/seenTracker';
-import { useComplaints, updateComplaintStatus, type Complaint, type ComplaintStatus } from '@/mock/complaints';
+import { useComplaintsQuery, useUpdateComplaintMutation, type ComplaintEntity } from '@/api/complaints';
 
 const { Text, Paragraph } = Typography;
 const { TextArea } = Input;
 
-const statusColor: Record<ComplaintStatus, string> = { open: 'gold', in_progress: 'blue', resolved: 'green' };
+const statusColor: Record<string, string> = { open: 'gold', in_progress: 'blue', resolved: 'green' };
 
 export const ComplaintsPage: React.FC = () => {
-  const { user } = useAuth();
-  const complaints = useComplaints();
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [active, setActive] = useState<Complaint | null>(null);
+  const [statusFilter, setStatusFilter] = useState<'open' | 'in_progress' | 'resolved' | undefined>(undefined);
+  const { data: complaintsData, isLoading } = useComplaintsQuery(statusFilter ? { status: statusFilter } : undefined);
+  const updateComplaint = useUpdateComplaintMutation();
+
+  const complaints: ComplaintEntity[] = complaintsData?.items ?? [];
+  const [active, setActive] = useState<ComplaintEntity | null>(null);
   const [form] = Form.useForm();
 
-  // Opening this page clears the "new complaints" nav badge (see NavMenu.tsx).
-  useEffect(() => {
-    if (user?.id) markSeen('complaints-staff', user.id);
-  }, [user?.id, complaints]);
-
-  const filtered = complaints.filter((c) => statusFilter === 'all' || c.status === statusFilter);
-
-  const openRespond = (complaint: Complaint) => {
+  const openRespond = (complaint: ComplaintEntity) => {
     setActive(complaint);
-    form.setFieldsValue({ status: complaint.status, staffNote: complaint.staffNote });
+    form.setFieldsValue({ status: complaint.status, response: complaint.response });
   };
 
-  const handleRespond = (values: { status: ComplaintStatus; staffNote?: string }) => {
+  const handleRespond = async (values: { status: 'open' | 'in_progress' | 'resolved'; response?: string }) => {
     if (!active) return;
-    updateComplaintStatus(active.id, values.status, values.staffNote);
-    message.success(`${active.code} updated`);
-    setActive(null);
+    try {
+      await updateComplaint.mutateAsync({
+        id: active.id,
+        payload: {
+          status: values.status,
+          response: values.response,
+        },
+      });
+      message.success('Complaint status updated');
+      setActive(null);
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Update failed');
+    }
   };
 
   const columns = [
-    { title: 'Code', dataIndex: 'code', key: 'code', render: (v: string) => <Tag>{v}</Tag> },
-    { title: 'Customer', dataIndex: 'customerName', key: 'customerName' },
+    { title: 'Customer', dataIndex: 'customerName', key: 'customerName', render: (v: string) => v || 'Customer' },
     { title: 'Subject', dataIndex: 'subject', key: 'subject' },
-    { title: 'Category', dataIndex: 'category', key: 'category', render: (v: string) => <Tag color="purple">{v}</Tag> },
-    { title: 'Logged', dataIndex: 'createdAt', key: 'createdAt', render: (v: string) => dayjs(v).format('MMM D, YYYY') },
-    { title: 'Status', dataIndex: 'status', key: 'status', render: (v: ComplaintStatus) => <Tag color={statusColor[v]}>{v.replace('_', ' ')}</Tag> },
+    { title: 'Message', dataIndex: 'message', key: 'message', ellipsis: true },
+    { title: 'Logged', dataIndex: 'createdAt', key: 'createdAt', render: (v: string) => v ? dayjs(v).format('MMM D, YYYY') : 'N/A' },
+    { title: 'Status', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={statusColor[v] || 'default'}>{v.replace('_', ' ')}</Tag> },
     {
       title: 'Action',
       key: 'action',
-      render: (_: any, record: Complaint) => <Button type="link" size="small" onClick={() => openRespond(record)}>Review</Button>,
+      render: (_: any, record: ComplaintEntity) => <Button type="link" size="small" onClick={() => openRespond(record)}>Review</Button>,
     },
   ];
 
   return (
     <div>
       <PageHeader title="Customer Complaints" actions={[]} />
-      <MockDataBanner />
 
       <Card
-        title={<span><MessageOutlined style={{ marginRight: 8 }} />All Complaints (sample)</span>}
+        title={<span><MessageOutlined style={{ marginRight: 8 }} />All Customer Complaints</span>}
         extra={
           <Select
+            allowClear
             style={{ width: 160 }}
+            placeholder="All statuses"
             value={statusFilter}
             onChange={setStatusFilter}
             options={[
-              { value: 'all', label: 'All statuses' },
               { value: 'open', label: 'Open' },
               { value: 'in_progress', label: 'In Progress' },
               { value: 'resolved', label: 'Resolved' },
@@ -77,15 +76,15 @@ export const ComplaintsPage: React.FC = () => {
           />
         }
       >
-        <Table columns={columns} dataSource={filtered} rowKey="id" size="small" pagination={{ pageSize: 10 }} />
+        <Table columns={columns} dataSource={complaints} rowKey="id" loading={isLoading} size="small" pagination={{ pageSize: 10 }} />
       </Card>
 
-      <Modal title={active?.code} open={!!active} onCancel={() => setActive(null)} footer={null} destroyOnClose>
+      <Modal title={active?.subject || 'Review Complaint'} open={!!active} onCancel={() => setActive(null)} footer={null} destroyOnClose>
         {active && (
           <>
             <Paragraph><Text strong>{active.subject}</Text></Paragraph>
             <Paragraph type="secondary">{active.message}</Paragraph>
-            <Text type="secondary" style={{ fontSize: 12 }}>From {active.customerName} · {dayjs(active.createdAt).format('MMM D, YYYY')}</Text>
+            <Text type="secondary" style={{ fontSize: 12 }}>From {active.customerName || 'Customer'} · {dayjs(active.createdAt).format('MMM D, YYYY')}</Text>
 
             <Form form={form} layout="vertical" onFinish={handleRespond} style={{ marginTop: 16 }}>
               <Form.Item name="status" label="Status" rules={[{ required: true }]}>
@@ -97,12 +96,12 @@ export const ComplaintsPage: React.FC = () => {
                   ]}
                 />
               </Form.Item>
-              <Form.Item name="staffNote" label="Response (visible to customer)">
+              <Form.Item name="response" label="Response (visible to customer)">
                 <TextArea rows={3} placeholder="Let the customer know what's happening" />
               </Form.Item>
               <Form.Item>
                 <Space>
-                  <Button type="primary" htmlType="submit">Save</Button>
+                  <Button type="primary" htmlType="submit" loading={updateComplaint.isPending}>Save</Button>
                   <Button onClick={() => setActive(null)}>Cancel</Button>
                 </Space>
               </Form.Item>

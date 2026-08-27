@@ -1,60 +1,69 @@
 // src/components/shared/PhotoUpload.tsx
-// ⚠️ PROTOTYPE — see src/mock/photos.ts. Stored locally only.
 import React, { useState } from 'react';
 import { Avatar, Upload, message, Spin } from 'antd';
 import { UserOutlined, CameraOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
-import { fileToResizedDataUrl, setPhoto, usePhoto, type PhotoEntityType } from '@/mock/photos';
+import { useUploadFileMutation } from '@/api/uploads';
+
+export type PhotoEntityType = 'staff' | 'customer' | 'property' | 'prospect';
 
 interface PhotoUploadProps {
   entityType: PhotoEntityType;
   entityId: string | undefined;
   size?: number;
   editable?: boolean;
+  src?: string;
+  onPhotoChange?: (url: string) => void;
 }
 
-export const PhotoUpload: React.FC<PhotoUploadProps> = ({ entityType, entityId, size = 72, editable = true }) => {
-  const photo = usePhoto(entityType, entityId);
-  const [uploading, setUploading] = useState(false);
+export const PhotoUpload: React.FC<PhotoUploadProps> = ({
+  size = 72,
+  editable = true,
+  src,
+  onPhotoChange,
+}) => {
+  const uploadFile = useUploadFileMutation();
+  const [photoUrl, setPhotoUrl] = useState<string | undefined>(src);
 
   const beforeUpload: UploadProps['beforeUpload'] = async (file) => {
-    if (!entityId) return Upload.LIST_IGNORE;
     if (!file.type.startsWith('image/')) {
       message.error('Please choose an image file');
       return Upload.LIST_IGNORE;
     }
-    if (file.size > 8 * 1024 * 1024) {
-      message.error('Image must be under 8MB');
+    if (file.size > 10 * 1024 * 1024) {
+      message.error('Image must be under 10MB');
       return Upload.LIST_IGNORE;
     }
-    setUploading(true);
     try {
-      const dataUrl = await fileToResizedDataUrl(file);
-      setPhoto(entityType, entityId, dataUrl);
-      message.success('Photo updated');
-    } catch {
-      message.error('Could not process that image');
-    } finally {
-      setUploading(false);
+      const res = await uploadFile.mutateAsync(file);
+      if (res?.url) {
+        setPhotoUrl(res.url);
+        onPhotoChange?.(res.url);
+        message.success('Photo uploaded successfully!');
+      }
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Photo upload failed');
     }
     return Upload.LIST_IGNORE;
   };
 
+  const currentPhoto = photoUrl || src;
+
   const avatar = (
     <Avatar
       size={size}
-      src={photo}
-      icon={!photo ? <UserOutlined /> : undefined}
-      style={{ backgroundColor: photo ? undefined : '#bfbfbf' }}
+      src={currentPhoto}
+      icon={!currentPhoto ? <UserOutlined /> : undefined}
+      style={{ backgroundColor: currentPhoto ? undefined : '#bfbfbf' }}
     />
   );
 
   if (!editable) return avatar;
 
   return (
-    <Upload accept="image/*" showUploadList={false} beforeUpload={beforeUpload} disabled={uploading}>
+    <Upload accept="image/*" showUploadList={false} beforeUpload={beforeUpload} disabled={uploadFile.isPending}>
       <div style={{ position: 'relative', cursor: 'pointer', width: size, height: size }}>
-        {uploading ? (
+        {uploadFile.isPending ? (
           <div style={{ width: size, height: size, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f0f0' }}>
             <Spin size="small" />
           </div>
@@ -84,47 +93,39 @@ export const PhotoUpload: React.FC<PhotoUploadProps> = ({ entityType, entityId, 
 };
 
 interface PendingPhotoUploadProps {
-  /** Controlled data-URL value — antd Form.Item wires this up automatically via value/onChange. */
   value?: string;
-  onChange?: (dataUrl: string | undefined) => void;
+  onChange?: (url: string | undefined) => void;
   size?: number;
 }
 
-/**
- * Same picker UI as PhotoUpload, but for "add new X" forms where the
- * entity doesn't have a real id yet. Holds the picked image as a data URL
- * in the form's own state instead of writing straight to the photo store —
- * the caller should call setPhoto(type, newId, value) once the entity is
- * actually created.
- */
 export const PendingPhotoUpload: React.FC<PendingPhotoUploadProps> = ({ value, onChange, size = 72 }) => {
-  const [uploading, setUploading] = useState(false);
+  const uploadFile = useUploadFileMutation();
 
   const beforeUpload: UploadProps['beforeUpload'] = async (file) => {
     if (!file.type.startsWith('image/')) {
       message.error('Please choose an image file');
       return Upload.LIST_IGNORE;
     }
-    if (file.size > 8 * 1024 * 1024) {
-      message.error('Image must be under 8MB');
+    if (file.size > 10 * 1024 * 1024) {
+      message.error('Image must be under 10MB');
       return Upload.LIST_IGNORE;
     }
-    setUploading(true);
     try {
-      const dataUrl = await fileToResizedDataUrl(file);
-      onChange?.(dataUrl);
-    } catch {
-      message.error('Could not process that image');
-    } finally {
-      setUploading(false);
+      const res = await uploadFile.mutateAsync(file);
+      if (res?.url) {
+        onChange?.(res.url);
+        message.success('Photo uploaded');
+      }
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Could not process that image');
     }
     return Upload.LIST_IGNORE;
   };
 
   return (
-    <Upload accept="image/*" showUploadList={false} beforeUpload={beforeUpload} disabled={uploading}>
+    <Upload accept="image/*" showUploadList={false} beforeUpload={beforeUpload} disabled={uploadFile.isPending}>
       <div style={{ position: 'relative', cursor: 'pointer', width: size, height: size }}>
-        {uploading ? (
+        {uploadFile.isPending ? (
           <div style={{ width: size, height: size, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f0f0f0' }}>
             <Spin size="small" />
           </div>

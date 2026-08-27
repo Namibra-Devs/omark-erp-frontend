@@ -489,15 +489,9 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           />
         </Form.Item>
 
-        <Divider orientation="left" orientationMargin={0} style={{ margin: '18px 0 8px' }}>
-          <Space size={6}>
-            <Text style={{ fontSize: 13 }}>Branch Assignment</Text>
-            <Tag color="gold" style={{ fontSize: 10 }}>Preview</Tag>
-          </Space>
+        <Divider orientation="left" orientationMargin={0} style={{ margin: '18px 0 12px' }}>
+          <Text style={{ fontSize: 13 }}>Branch & Department Assignment</Text>
         </Divider>
-        <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-          Not sent to the server yet — saved locally until the backend supports branches.
-        </Text>
 
         <Row gutter={14}>
           <Col span={12}>

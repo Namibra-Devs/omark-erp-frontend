@@ -76,9 +76,72 @@ export const usersKeys = {
   list: (params?: UsersListParams) => [...usersKeys.lists(), params ?? {}] as const,
   details: () => [...usersKeys.all, 'detail'] as const,
   detail: (id: string) => [...usersKeys.details(), id] as const,
+  unseenCounts: (id: string) => [...usersKeys.all, 'unseen-counts', id] as const,
+  assignment: (id: string) => [...usersKeys.all, 'assignment', id] as const,
+  bonuses: (id: string) => [...usersKeys.all, 'bonuses', id] as const,
+  activity: (id: string) => [...usersKeys.all, 'activity', id] as const,
 };
 
 // --- Hooks ---
+
+export function useUserAssignmentQuery(userId: string | undefined) {
+  return useQuery({
+    queryKey: usersKeys.assignment(userId ?? ''),
+    queryFn: async () => {
+      const res = await apiClient.get<import('@/types').ApiResponse<{ branchId?: string; branchName?: string; departmentId?: string; departmentName?: string }>>(`/users/${userId}/assignment`);
+      return unwrapData(res);
+    },
+    enabled: Boolean(userId),
+  });
+}
+
+export function useUpdateUserAssignmentMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ userId, payload }: { userId: string; payload: { branchId?: string | null; departmentId?: string | null } }) => {
+      const res = await apiClient.patch<import('@/types').ApiResponse<{ branchId?: string; departmentId?: string }>>(`/users/${userId}/assignment`, payload);
+      return unwrapData(res);
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: usersKeys.assignment(variables.userId) });
+    },
+  });
+}
+
+export function useUserBonusesQuery(userId: string | undefined) {
+  return useQuery({
+    queryKey: usersKeys.bonuses(userId ?? ''),
+    queryFn: async () => {
+      const res = await apiClient.get<import('@/types').ApiResponse<Array<{ id: string; amountMinor: number; reason: string; createdAt: string }>>>(`/users/${userId}/bonuses`);
+      return unwrapData(res) ?? [];
+    },
+    enabled: Boolean(userId),
+  });
+}
+
+export function useUserActivityQuery(userId: string | undefined) {
+  return useQuery({
+    queryKey: usersKeys.activity(userId ?? ''),
+    queryFn: async () => {
+      const res = await apiClient.get<import('@/types').ApiResponse<Array<{ id: string; type: string; title: string; description?: string; createdAt: string }>>>(`/users/${userId}/activity`);
+      return unwrapData(res) ?? [];
+    },
+    enabled: Boolean(userId),
+  });
+}
+
+export function useUnseenCountsQuery(userId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: usersKeys.unseenCounts(userId ?? ''),
+    queryFn: async () => {
+      const res = await apiClient.get<import('@/types').ApiResponse<import('@/types').UnseenCounts>>(`/users/${userId}/unseen-counts`);
+      return unwrapData(res);
+    },
+    enabled: Boolean(userId) && enabled,
+    refetchInterval: 30000,
+  });
+}
 
 export function useUsersQuery(params?: UsersListParams) {
   return useQuery({

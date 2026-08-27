@@ -1,6 +1,4 @@
 // src/pages/branches/BranchesPage.tsx
-// ⚠️ PROTOTYPE — see src/mock/branches.ts. Branches are stored locally
-// (localStorage via BranchContext), not on the backend.
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -8,18 +6,17 @@ import {
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, EnvironmentOutlined, PhoneOutlined, TeamOutlined, EyeOutlined } from '@ant-design/icons';
 import { PageHeader } from '@/components/shared/PageHeader';
-import { MockDataBanner } from '@/components/shared/MockDataBanner';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { getBranchMetrics } from '@/mock/branches';
-import type { Branch } from '@/mock/branches';
+import type { BranchEntity } from '@/api/branches';
 
 const { Text } = Typography;
 
 export const BranchesPage: React.FC = () => {
   const navigate = useNavigate();
-  const { branches, addBranch, updateBranch, deleteBranch } = useBranchContext();
+  const { branches, isLoading, addBranch, updateBranch, deleteBranch } = useBranchContext();
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingBranch, setEditingBranch] = useState<Branch | null>(null);
+  const [editingBranch, setEditingBranch] = useState<BranchEntity | null>(null);
+  const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
 
   const openCreate = () => {
@@ -28,29 +25,57 @@ export const BranchesPage: React.FC = () => {
     setModalOpen(true);
   };
 
-  const openEdit = (branch: Branch) => {
+  const openEdit = (branch: BranchEntity) => {
     setEditingBranch(branch);
-    form.setFieldsValue(branch);
+    form.setFieldsValue({
+      name: branch.name,
+      branchCode: branch.branchCode,
+      location: branch.location,
+      phone: branch.phone,
+      managerUserId: branch.managerUserId,
+    });
     setModalOpen(true);
   };
 
-  const handleSubmit = (values: any) => {
-    if (editingBranch) {
-      updateBranch(editingBranch.id, values);
-      message.success('Branch updated');
-    } else {
-      addBranch(values);
-      message.success('Branch created');
+  const handleSubmit = async (values: any) => {
+    setSubmitting(true);
+    try {
+      if (editingBranch) {
+        await updateBranch(editingBranch.id, values);
+        message.success('Branch updated successfully');
+      } else {
+        await addBranch(values);
+        message.success('Branch created successfully');
+      }
+      setModalOpen(false);
+      form.resetFields();
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Action failed');
+    } finally {
+      setSubmitting(false);
     }
-    setModalOpen(false);
-    form.resetFields();
+  };
+
+  const handleDelete = async (id: string) => {
+    try {
+      await deleteBranch(id);
+      message.success('Branch deleted successfully');
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Delete failed');
+    }
   };
 
   const columns = [
     {
-      title: 'Branch',
+      title: 'Branch Code',
+      dataIndex: 'branchCode',
+      key: 'branchCode',
+      render: (code: string) => <Tag color="blue">{code}</Tag>,
+    },
+    {
+      title: 'Branch Name',
       key: 'name',
-      render: (_: any, record: Branch) => (
+      render: (_: any, record: BranchEntity) => (
         <div>
           <Text strong>{record.name}</Text>
           <br />
@@ -62,37 +87,27 @@ export const BranchesPage: React.FC = () => {
     },
     {
       title: 'Manager',
-      dataIndex: 'managerName',
-      key: 'managerName',
+      key: 'manager',
+      render: (_: any, record: BranchEntity) => (
+        record.managerInfo ? `${record.managerInfo.firstName} ${record.managerInfo.lastName}` : (record.managerUserId || 'N/A')
+      ),
     },
     {
       title: 'Phone',
       dataIndex: 'phone',
       key: 'phone',
-      render: (phone: string) => <a href={`tel:${phone}`}><PhoneOutlined /> {phone}</a>,
+      render: (phone?: string) => phone ? <a href={`tel:${phone}`}><PhoneOutlined /> {phone}</a> : 'N/A',
     },
     {
-      title: 'Staff',
+      title: 'Staff Count',
       dataIndex: 'staffCount',
       key: 'staffCount',
-      render: (count: number) => <Tag icon={<TeamOutlined />}>{count}</Tag>,
-    },
-    {
-      title: 'This Month (sample)',
-      key: 'metrics',
-      render: (_: any, record: Branch) => {
-        const m = getBranchMetrics(record.id);
-        return (
-          <Tooltip title="Sample data — see the branch dashboard for details">
-            <Tag color="gold">{m.salesThisMonth} sales</Tag>
-          </Tooltip>
-        );
-      },
+      render: (count?: number) => <Tag icon={<TeamOutlined />}>{count ?? 0}</Tag>,
     },
     {
       title: 'Actions',
       key: 'actions',
-      render: (_: any, record: Branch) => (
+      render: (_: any, record: BranchEntity) => (
         <Space>
           <Tooltip title="View Dashboard">
             <Button type="text" icon={<EyeOutlined />} onClick={() => navigate(`/branches/${record.id}`)} />
@@ -102,8 +117,10 @@ export const BranchesPage: React.FC = () => {
           </Tooltip>
           <Popconfirm
             title="Delete Branch"
-            description="This only removes it from this local prototype, not any real system."
-            onConfirm={() => { deleteBranch(record.id); message.success('Branch deleted'); }}
+            description="Are you sure you want to delete or deactivate this branch?"
+            onConfirm={() => handleDelete(record.id)}
+            okText="Yes"
+            cancelText="No"
           >
             <Tooltip title="Delete">
               <Button type="text" danger icon={<DeleteOutlined />} />
@@ -121,13 +138,8 @@ export const BranchesPage: React.FC = () => {
         actions={[{ label: 'Add Branch', onClick: openCreate, icon: <PlusOutlined /> }]}
       />
 
-      <MockDataBanner
-        message="Preview — branches are stored locally, not on the backend"
-        description="This management screen works end-to-end for demo purposes (create/edit/delete persist to this browser only), but no real branch data model exists on the API yet. Nothing here is synced to any server."
-      />
-
       <Card>
-        <Table columns={columns} dataSource={branches} rowKey="id" pagination={false} />
+        <Table columns={columns} dataSource={branches} rowKey="id" loading={isLoading} pagination={false} />
       </Card>
 
       <Modal
@@ -139,20 +151,20 @@ export const BranchesPage: React.FC = () => {
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item name="name" label="Branch Name" rules={[{ required: true, message: 'Branch name is required' }]}>
-            <Input placeholder="e.g. Sunyani Branch" />
+            <Input placeholder="e.g. Kumasi Main" />
+          </Form.Item>
+          <Form.Item name="branchCode" label="Branch Prefix / Code" rules={[{ required: true, message: 'Branch code is required' }]}>
+            <Input placeholder="e.g. KMA" disabled={Boolean(editingBranch)} />
           </Form.Item>
           <Form.Item name="location" label="Location" rules={[{ required: true, message: 'Location is required' }]}>
-            <Input placeholder="e.g. Central Market, Sunyani" />
+            <Input placeholder="e.g. Central Market, Kumasi" />
           </Form.Item>
-          <Form.Item name="managerName" label="Branch Manager" rules={[{ required: true, message: 'Manager name is required' }]}>
-            <Input placeholder="e.g. Kwame Owusu" />
-          </Form.Item>
-          <Form.Item name="phone" label="Phone Number" rules={[{ required: true, message: 'Phone number is required' }]}>
+          <Form.Item name="phone" label="Phone Number">
             <Input placeholder="+233 XX XXX XXXX" />
           </Form.Item>
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit">{editingBranch ? 'Save Changes' : 'Create Branch'}</Button>
+              <Button type="primary" htmlType="submit" loading={submitting}>{editingBranch ? 'Save Changes' : 'Create Branch'}</Button>
               <Button onClick={() => { setModalOpen(false); form.resetFields(); }}>Cancel</Button>
             </Space>
           </Form.Item>

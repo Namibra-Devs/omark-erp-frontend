@@ -1,20 +1,11 @@
 // src/pages/dashboard/AccountsDashboardPage.tsx
-//
-// Distinct from SecretaryDashboardPage — same underlying customer/payment
-// data where it's genuinely shared, but framed around collections and
-// revenue rather than customer service, and adds the real Analytics view
-// (GET /dashboard/analytics), which this role has access to and Secretary
-// does not. A couple of sections below are explicitly-labeled placeholders
-// for finance features (expense tracking, reconciliation) that don't have
-// a backend endpoint yet — real endpoints are expected soon per the business.
 import React, { useState } from 'react';
 import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Progress, Empty, Spin, Alert,
-  Button, Space, Modal, Form, InputNumber, DatePicker, Select, Input, message, Badge, List, Tooltip,
+  Button, Space, Modal, Form, InputNumber, DatePicker, Select, Input, message, Badge, List, Divider,
 } from 'antd';
 import {
   DollarOutlined,
-  TeamOutlined,
   WarningOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
@@ -32,14 +23,14 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery, useAnalyticsDashboardQuery } from '@/api/dashboard';
 import { usePaymentPlansQuery } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
+import { useExpensesQuery, useCreateExpenseMutation } from '@/api/expenses';
+import { usePayrollQuery } from '@/api/payroll';
 import { progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
-import { addExpense, useExpenses, type ExpenseType } from '@/mock/expenses';
-import { useAllPayroll } from '@/mock/payroll';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { useStaffAssignment } from '@/mock/staffAssignments';
+import { useUnmatchedBankEntriesQuery, useImportBankStatementMutation, type BankReconciliationSummary } from '@/api/bankReconciliation';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -50,8 +41,6 @@ export const AccountsDashboardPage: React.FC = () => {
   const navigate = useNavigate();
 
   // ── API Queries ──────────────────────────────────────────────────────────
-  // Shared with Secretary — real, live data (progress bands, defaulters, due
-  // soon). GET /dashboard/analytics below is the part Secretary doesn't get.
   const {
     data: dashboardData,
     isLoading: dashboardLoading,
@@ -67,6 +56,14 @@ export const AccountsDashboardPage: React.FC = () => {
   } = usePaymentPlansQuery({ pageSize: 100 });
 
   const { data: analyticsData, isLoading: analyticsLoading } = useAnalyticsDashboardQuery();
+  const { data: expensesData, refetch: refetchExpenses } = useExpensesQuery();
+  const { data: payrollData } = usePayrollQuery();
+  const payroll = payrollData?.items ?? [];
+  const createExpenseMutation = useCreateExpenseMutation();
+
+  // ── Bank Reconciliation API ────────────────────────────────────────────────
+  const { data: unmatchedBankEntries = [], refetch: refetchUnmatchedBank } = useUnmatchedBankEntriesQuery();
+  const importBankMutation = useImportBankStatementMutation();
 
   // ── UI State ─────────────────────────────────────────────────────────────
   const [addPaymentModal, setAddPaymentModal] = useState(false);
@@ -75,40 +72,35 @@ export const AccountsDashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [addExpenseModal, setAddExpenseModal] = useState(false);
   const [expenseForm] = Form.useForm();
-
-  // Expense tracking + payroll/bonuses (prototype — see src/mock/expenses.ts
-  // and src/mock/payroll.ts; no backend endpoint exists for either yet).
-  const allExpenses = useExpenses();
-  const allPayroll = useAllPayroll();
+  const [importBankModal, setImportBankModal] = useState(false);
+  const [bankForm] = Form.useForm();
+  const [reconciliationResult, setReconciliationResult] = useState<BankReconciliationSummary | null>(null);
 
   const { branches } = useBranchContext();
-  // "Every branch is a unit on its own" — accounts staff assigned to a
-  // branch only see/record that branch's own expenses and payroll here.
-  // Unassigned staff (or admin viewing this page) still see everything.
-  const { assignment: myAssignment } = useStaffAssignment(user?.id);
-  const myBranchId = myAssignment.branchId;
-  const myBranchName = branches.find((b) => b.id === myBranchId)?.name;
+  const expenses = expensesData?.items ?? [];
 
-  const expenses = myBranchId ? allExpenses.filter((e) => e.branchId === myBranchId) : allExpenses;
-  const payroll = myBranchId ? allPayroll.filter((p) => p.branchId === myBranchId) : allPayroll;
   const internalExpensesMinor = expenses.filter((e) => e.type === 'internal').reduce((sum, e) => sum + e.amountMinor, 0);
   const externalExpensesMinor = expenses.filter((e) => e.type === 'external').reduce((sum, e) => sum + e.amountMinor, 0);
-  const totalBonusesMinor = payroll.reduce((sum, p) => sum + p.bonusMinor, 0);
+  const totalBonusesMinor = payroll.reduce((sum, p) => sum + (p.bonusMinor || 0), 0);
   const pendingPayrollCount = payroll.filter((p) => p.status === 'pending').length;
 
-  const handleAddExpense = (values: { branchId: string; category: string; description: string; amountGHS: number; type: ExpenseType; date: dayjs.Dayjs }) => {
-    addExpense({
-      branchId: values.branchId,
-      category: values.category,
-      description: values.description || '',
-      amountMinor: Math.round(values.amountGHS * 100),
-      type: values.type,
-      date: values.date.format('YYYY-MM-DD'),
-      recordedBy: user?.email || 'Accounts',
-    });
-    message.success('Expense recorded');
-    expenseForm.resetFields();
-    setAddExpenseModal(false);
+  const handleAddExpense = async (values: { branchId?: string; category: string; description?: string; amountGHS: number; type: 'internal' | 'external'; date: dayjs.Dayjs }) => {
+    try {
+      await createExpenseMutation.mutateAsync({
+        branchId: values.branchId,
+        category: values.category,
+        description: values.description,
+        amountMinor: Math.round(values.amountGHS * 100),
+        type: values.type,
+        incurredOn: values.date.format('YYYY-MM-DD'),
+      });
+      message.success('Expense recorded successfully');
+      expenseForm.resetFields();
+      setAddExpenseModal(false);
+      refetchExpenses();
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Failed to record expense');
+    }
   };
 
   const paymentPlans = paymentPlansData?.items ?? [];
@@ -128,8 +120,6 @@ export const AccountsDashboardPage: React.FC = () => {
     dueSoon: dashboardData?.dueSoon ?? [],
   };
 
-  // Outstanding balance across all payment plans — real, summed client-side
-  // from the live payment-plans list (no single endpoint returns this total).
   const totalOutstandingMinor = paymentPlans.reduce((sum: number, p: any) => sum + (p.balanceMinor ?? 0), 0);
 
   const bandConfig = [
@@ -168,6 +158,7 @@ export const AccountsDashboardPage: React.FC = () => {
   const handleRefresh = () => {
     refetchDashboard();
     refetchPaymentPlans();
+    refetchExpenses();
     message.success('Dashboard refreshed!');
   };
 
@@ -379,17 +370,15 @@ export const AccountsDashboardPage: React.FC = () => {
         </Col>
       </Row>
 
-      {/* ── Analytics (real — GET /dashboard/analytics, not available to Secretary) ── */}
+      {/* ── Analytics ── */}
       <Title level={4} style={{ marginBottom: 16 }}>Revenue Analytics</Title>
       <div style={{ marginBottom: 24 }}>
         <AnalyticsSection />
       </div>
 
-      {/* ── Finance tools: prototype, local-only until real endpoints exist ── */}
+      {/* ── Finance tools ── */}
       <Title level={4} style={{ marginBottom: 16 }}>
         Finance Tools
-        <Tag color="gold" style={{ marginLeft: 12, fontWeight: 'normal' }}>Preview — saved locally, not synced to a server yet</Tag>
-        {myBranchName && <Tag color="blue" style={{ fontWeight: 'normal' }}>Scoped to {myBranchName}</Tag>}
       </Title>
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={8}>
@@ -410,7 +399,7 @@ export const AccountsDashboardPage: React.FC = () => {
                   <Space direction="vertical" size={0}>
                     <Text style={{ fontSize: 13 }}>{item.category}</Text>
                     <Text type="secondary" style={{ fontSize: 11 }}>
-                      {item.code} · {branches.find((b) => b.id === item.branchId)?.name ?? item.branchId} · {item.date}
+                      {item.code || 'EXP'} · {item.incurredOn}
                     </Text>
                   </Space>
                   <Space direction="vertical" size={0} style={{ textAlign: 'right' }}>
@@ -428,7 +417,7 @@ export const AccountsDashboardPage: React.FC = () => {
             extra={<Button size="small" onClick={() => navigate('/accounts/payroll')}>Manage</Button>}
           >
             <Row gutter={12} style={{ marginBottom: 12 }}>
-              <Col span={12}><Statistic title="Bonuses Paid (sample)" value={totalBonusesMinor / 100} prefix="GHS" precision={2} valueStyle={{ fontSize: 16, color: '#52c41a' }} /></Col>
+              <Col span={12}><Statistic title="Bonuses Paid" value={totalBonusesMinor / 100} prefix="GHS" precision={2} valueStyle={{ fontSize: 16, color: '#52c41a' }} /></Col>
               <Col span={12}><Statistic title="Pending Runs" value={pendingPayrollCount} valueStyle={{ fontSize: 16, color: pendingPayrollCount > 0 ? '#faad14' : '#52c41a' }} /></Col>
             </Row>
             <Text type="secondary" style={{ fontSize: 12 }}>
@@ -439,18 +428,32 @@ export const AccountsDashboardPage: React.FC = () => {
         <Col xs={24} lg={8}>
           <Card
             title={<span><BankOutlined style={{ marginRight: 8 }} />Bank Reconciliation</span>}
-            style={{ borderStyle: 'dashed', opacity: 0.85 }}
+            extra={<Button size="small" type="primary" onClick={() => { setReconciliationResult(null); bankForm.resetFields(); setImportBankModal(true); }}>Import Statement</Button>}
           >
-            <Alert
-              type="warning"
-              showIcon
-              message="Not yet connected to a backend endpoint"
-              description="Once a reconciliation endpoint exists, this card will compare recorded payments against bank statement imports."
-              style={{ marginBottom: 12 }}
+            <Statistic
+              title="Unmatched Statement Entries"
+              value={unmatchedBankEntries.length}
+              valueStyle={{ color: unmatchedBankEntries.length > 0 ? '#faad14' : '#52c41a' }}
             />
-            <Tooltip title="Sample only — not a real reconciliation status">
-              <Statistic title="Unreconciled Transactions (sample)" value={0} valueStyle={{ color: '#bbb' }} />
-            </Tooltip>
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
+              Entries imported from bank statements requiring payment reconciliation.
+            </Text>
+            {unmatchedBankEntries.length > 0 && (
+              <List
+                size="small"
+                style={{ marginTop: 12 }}
+                dataSource={unmatchedBankEntries.slice(0, 3)}
+                renderItem={(item: any) => (
+                  <List.Item>
+                    <Space direction="vertical" size={0}>
+                      <Text style={{ fontSize: 12 }}>{item.description || item.reference || 'Bank Entry'}</Text>
+                      <Text type="secondary" style={{ fontSize: 10 }}>{item.date?.split('T')[0]}</Text>
+                    </Space>
+                    <Text strong style={{ fontSize: 12 }}>GHS {(item.amountMinor / 100).toLocaleString()}</Text>
+                  </List.Item>
+                )}
+              />
+            )}
           </Card>
         </Col>
       </Row>
@@ -507,14 +510,9 @@ export const AccountsDashboardPage: React.FC = () => {
         footer={null}
         width={480}
       >
-        <Form form={expenseForm} layout="vertical" onFinish={handleAddExpense} initialValues={{ type: 'internal', date: dayjs(), branchId: myBranchId }}>
-          <Form.Item
-            name="branchId"
-            label="Branch"
-            rules={[{ required: true, message: 'Please select a branch' }]}
-            extra={myBranchId ? "You're assigned to this branch — expenses stay within it." : undefined}
-          >
-            <Select placeholder="Select branch" disabled={!!myBranchId} options={branches.map((b) => ({ value: b.id, label: b.name }))} />
+        <Form form={expenseForm} layout="vertical" onFinish={handleAddExpense} initialValues={{ type: 'internal', date: dayjs() }}>
+          <Form.Item name="branchId" label="Branch">
+            <Select allowClear placeholder="Select branch (Optional)" options={branches.map((b) => ({ value: b.id, label: b.name }))} />
           </Form.Item>
           <Form.Item name="category" label="Category" rules={[{ required: true, message: 'Please enter a category' }]}>
             <Input placeholder="e.g. Office Supplies, Legal Fees" />
@@ -536,11 +534,120 @@ export const AccountsDashboardPage: React.FC = () => {
           </Form.Item>
           <Form.Item>
             <Space>
-              <Button type="primary" htmlType="submit">Record Expense</Button>
+              <Button type="primary" htmlType="submit" loading={createExpenseMutation.isPending}>Record Expense</Button>
               <Button onClick={() => { setAddExpenseModal(false); expenseForm.resetFields(); }}>Cancel</Button>
             </Space>
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ── Import Bank Statement Modal ───────────────────────────────────── */}
+      <Modal
+        title="Import & Reconcile Bank Statement"
+        open={importBankModal}
+        onCancel={() => { setImportBankModal(false); bankForm.resetFields(); setReconciliationResult(null); }}
+        footer={null}
+        width={640}
+      >
+        {reconciliationResult ? (
+          <div>
+            <Alert
+              type="success"
+              showIcon
+              message="Bank Statement Reconciliation Complete"
+              description={`Total Imported: ${reconciliationResult.totalImported} | Matched: ${reconciliationResult.matchedCount} | Unmatched: ${reconciliationResult.unmatchedCount}`}
+              style={{ marginBottom: 16 }}
+            />
+            {reconciliationResult.matched.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <Text strong>Matched Payments ({reconciliationResult.matched.length}):</Text>
+                <List
+                  size="small"
+                  bordered
+                  dataSource={reconciliationResult.matched}
+                  renderItem={(m) => (
+                    <List.Item>
+                      <Space direction="vertical" size={0}>
+                        <Text strong>Ref: {m.transaction.reference || m.payment.reference || 'N/A'}</Text>
+                        <Text type="secondary" style={{ fontSize: 11 }}>Date: {m.payment.paidOn?.split('T')[0]}</Text>
+                      </Space>
+                      <Tag color="green">GHS {(m.payment.amountMinor / 100).toLocaleString()}</Tag>
+                    </List.Item>
+                  )}
+                />
+              </div>
+            )}
+            <Button
+              type="primary"
+              onClick={() => {
+                setReconciliationResult(null);
+                bankForm.resetFields();
+              }}
+            >
+              Import Another
+            </Button>
+          </div>
+        ) : (
+          <Form
+            form={bankForm}
+            layout="vertical"
+            onFinish={async (values) => {
+              try {
+                let transactions: any[] = [];
+                if (values.jsonText) {
+                  transactions = JSON.parse(values.jsonText);
+                } else {
+                  transactions = [
+                    {
+                      date: values.date ? values.date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+                      amountMinor: Math.round((values.amountGHS || 0) * 100),
+                      reference: values.reference || undefined,
+                      description: values.description || undefined,
+                    },
+                  ];
+                }
+                const summary = await importBankMutation.mutateAsync({ transactions });
+                setReconciliationResult(summary);
+                message.success(`Processed statement! ${summary.matchedCount} matched, ${summary.unmatchedCount} unmatched.`);
+                refetchUnmatchedBank();
+              } catch (error: any) {
+                message.error(error?.error?.message || error?.message || 'Failed to import bank statement');
+              }
+            }}
+            initialValues={{ date: dayjs() }}
+          >
+            <Form.Item name="date" label="Transaction Date">
+              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+            </Form.Item>
+            <Form.Item name="amountGHS" label="Amount (GHS)" rules={[{ required: true, message: 'Please enter amount' }]}>
+              <InputNumber style={{ width: '100%' }} prefix="GHS" precision={2} min={0.01} placeholder="1200.00" />
+            </Form.Item>
+            <Form.Item name="reference" label="Reference Code">
+              <Input placeholder="e.g. MOM-88321" />
+            </Form.Item>
+            <Form.Item name="description" label="Description">
+              <Input placeholder="e.g. MTN Mobile Money Cashin" />
+            </Form.Item>
+
+            <Divider>OR Paste JSON Array of Transactions</Divider>
+
+            <Form.Item name="jsonText" label="JSON Transactions">
+              <Input.TextArea
+                rows={4}
+                placeholder={`[{"date": "2026-08-20T00:00:00.000Z", "amountMinor": 120000, "reference": "MOM-88321", "description": "MTN Cashin GHS 1200"}]`}
+              />
+            </Form.Item>
+
+            <Form.Item>
+              <Space>
+                <Button type="primary" htmlType="submit" loading={importBankMutation.isPending}>
+                  Import & Reconcile
+                </Button>
+                <Button onClick={() => setImportBankModal(false)}>Cancel</Button>
+              </Space>
+            </Form.Item>
+          </Form>
+        )}
       </Modal>
     </div>
   );

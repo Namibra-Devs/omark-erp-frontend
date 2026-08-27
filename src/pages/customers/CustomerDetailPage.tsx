@@ -558,6 +558,9 @@ export const CustomerDetailPage: React.FC = () => {
                   <Descriptions.Item label={<EnvironmentOutlined />}>
                     {customer.address}
                   </Descriptions.Item>
+                  <Descriptions.Item label="Sales Code">
+                    {customer.code ? <Tag color="geekblue">{customer.code}</Tag> : 'N/A'}
+                  </Descriptions.Item>
                   <Descriptions.Item label="Property">
                     {property ? `${property.houseNumber} - ${property.offerNumber}` : customer.propertyId || 'N/A'}
                   </Descriptions.Item>

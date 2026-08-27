@@ -25,12 +25,38 @@ import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/mock/branches';
-import { getStaffAssignment } from '@/mock/staffAssignments';
+import { useUserAssignmentQuery } from '@/api/users';
+import { useDepartmentsQuery } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import type { User } from '../types';
 
 const { Text } = Typography;
 const { Option } = Select;
+
+const StaffBranchCell: React.FC<{ userId: string; branches: any[] }> = ({ userId, branches }) => {
+  const { data: assignment } = useUserAssignmentQuery(userId);
+  const branchId = assignment?.branchId;
+  const branch = branches.find((b) => b.id === branchId || b.branchCode === branchId);
+  const name = assignment?.branchName || branch?.name;
+
+  if (name) {
+    return <Tag color={tokens.primary}>{name}</Tag>;
+  }
+  return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+};
+
+const StaffDepartmentCell: React.FC<{ userId: string }> = ({ userId }) => {
+  const { data: assignment } = useUserAssignmentQuery(userId);
+  const { data: departments = [] } = useDepartmentsQuery();
+  const deptId = assignment?.departmentId;
+  const dept = departments.find((d) => d.id === deptId);
+  const name = assignment?.departmentName || dept?.name;
+
+  if (name) {
+    return <Tag>{name}</Tag>;
+  }
+  return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+};
 
 interface UserManagementProps {
   users: User[];
@@ -281,28 +307,20 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       ),
     },
     {
-      title: <span>Branch <Tag color="gold" style={{ fontSize: 9, marginLeft: 2 }}>Preview</Tag></span>,
+      title: 'Branch',
       key: 'branch',
       width: 150,
-      render: (_: any, record: User) => {
-        const { branchId } = getStaffAssignment(record.id);
-        const branch = branches.find((b) => b.id === branchId);
-        return branch
-          ? <Tag color={tokens.primary}>{branch.name}</Tag>
-          : <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
-      },
+      render: (_: any, record: User) => (
+        <StaffBranchCell userId={record.id} branches={branches} />
+      ),
     },
     {
-      title: <span>Department <Tag color="gold" style={{ fontSize: 9, marginLeft: 2 }}>Preview</Tag></span>,
+      title: 'Department',
       key: 'department',
       width: 160,
-      render: (_: any, record: User) => {
-        const { departmentId } = getStaffAssignment(record.id);
-        const department = mockBranchDepartments.find((d) => d.id === departmentId);
-        return department
-          ? <Tag>{department.name}</Tag>
-          : <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
-      },
+      render: (_: any, record: User) => (
+        <StaffDepartmentCell userId={record.id} />
+      ),
     },
     {
       title: 'Login Password',

@@ -59,6 +59,7 @@ export interface ConvertProspectResponse {
   address: string;
   type: CustomerType;
   propertyId: string;
+  code?: string;
   createdAt: string;
   updatedAt: string;
 }

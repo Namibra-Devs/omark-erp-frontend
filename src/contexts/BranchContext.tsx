@@ -1,27 +1,17 @@
 // src/contexts/BranchContext.tsx
-
-
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import { mockBranches as seedBranches, type Branch } from '@/mock/branches';
+import { useBranchesQuery, useCreateBranchMutation, useUpdateBranchMutation, useDeleteBranchMutation, type BranchEntity } from '@/api/branches';
 
-const BRANCHES_STORAGE_KEY = 'omark_mock_branches';
-const VIEWING_STORAGE_KEY = 'omark_mock_viewing_branch_id';
+export type Branch = BranchEntity;
 
-const loadBranches = (): Branch[] => {
-  try {
-    const raw = localStorage.getItem(BRANCHES_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // fall through to seed data
-  }
-  return seedBranches;
-};
+const VIEWING_STORAGE_KEY = 'omark_viewing_branch_id';
 
 interface BranchContextType {
   branches: Branch[];
-  addBranch: (branch: Omit<Branch, 'id' | 'createdAt' | 'staffCount'>) => Branch;
-  updateBranch: (id: string, updates: Partial<Omit<Branch, 'id' | 'createdAt'>>) => void;
-  deleteBranch: (id: string) => void;
+  isLoading: boolean;
+  addBranch: (branch: { name: string; branchCode: string; location: string; phone?: string; managerUserId?: string; targetRevenueMinor?: number; approvalLimitMinor?: number }) => Promise<Branch>;
+  updateBranch: (id: string, updates: Partial<Branch>) => Promise<void>;
+  deleteBranch: (id: string) => Promise<void>;
   /** null = "Head Office (All Branches)" view */
   viewingBranchId: string | null;
   viewingBranch: Branch | null;
@@ -37,14 +27,14 @@ export const useBranchContext = () => {
 };
 
 export const BranchProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [branches, setBranches] = useState<Branch[]>(loadBranches);
+  const { data: branches = [], isLoading } = useBranchesQuery();
+  const createBranchMutation = useCreateBranchMutation();
+  const updateBranchMutation = useUpdateBranchMutation();
+  const deleteBranchMutation = useDeleteBranchMutation();
+
   const [viewingBranchId, setViewingBranchIdState] = useState<string | null>(
     () => localStorage.getItem(VIEWING_STORAGE_KEY) || null
   );
-
-  useEffect(() => {
-    localStorage.setItem(BRANCHES_STORAGE_KEY, JSON.stringify(branches));
-  }, [branches]);
 
   useEffect(() => {
     if (viewingBranchId) {
@@ -54,32 +44,34 @@ export const BranchProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     }
   }, [viewingBranchId]);
 
-  const addBranch: BranchContextType['addBranch'] = (branch) => {
-    const newBranch: Branch = {
-      ...branch,
-      id: `branch-${Date.now()}`,
-      staffCount: 0,
-      createdAt: new Date().toISOString(),
-    };
-    setBranches((prev) => [...prev, newBranch]);
-    return newBranch;
+  const addBranch = async (branch: { name: string; branchCode: string; location: string; phone?: string; managerUserId?: string; targetRevenueMinor?: number; approvalLimitMinor?: number }) => {
+    return await createBranchMutation.mutateAsync(branch);
   };
 
-  const updateBranch: BranchContextType['updateBranch'] = (id, updates) => {
-    setBranches((prev) => prev.map((b) => (b.id === id ? { ...b, ...updates } : b)));
+  const updateBranch = async (id: string, updates: Partial<Branch>) => {
+    await updateBranchMutation.mutateAsync({ id, payload: updates });
   };
 
-  const deleteBranch: BranchContextType['deleteBranch'] = (id) => {
-    setBranches((prev) => prev.filter((b) => b.id !== id));
+  const deleteBranch = async (id: string) => {
+    await deleteBranchMutation.mutateAsync(id);
     setViewingBranchIdState((current) => (current === id ? null : current));
   };
 
   const setViewingBranchId = (branchId: string | null) => setViewingBranchIdState(branchId);
-  const viewingBranch = branches.find((b) => b.id === viewingBranchId) ?? null;
+  const viewingBranch = branches.find((b: Branch) => b.id === viewingBranchId) ?? null;
 
   return (
     <BranchContext.Provider
-      value={{ branches, addBranch, updateBranch, deleteBranch, viewingBranchId, viewingBranch, setViewingBranchId }}
+      value={{
+        branches,
+        isLoading,
+        addBranch,
+        updateBranch,
+        deleteBranch,
+        viewingBranchId,
+        viewingBranch,
+        setViewingBranchId,
+      }}
     >
       {children}
     </BranchContext.Provider>

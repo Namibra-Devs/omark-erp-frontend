@@ -1,18 +1,25 @@
 // src/pages/portal/PortalPropertyPage.tsx
-// ⚠️ PROTOTYPE — see src/mock/customerPortalCache.ts.
 import React from 'react';
-import { Card, Descriptions, Empty, Progress, Tag, Typography } from 'antd';
+import { Card, Descriptions, Empty, Progress, Spin, Tag, Typography } from 'antd';
 import { HomeOutlined } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
-import { useCustomerPortalAuth } from '@/contexts/CustomerPortalAuthContext';
+import { usePortalMeQuery } from '@/api/portal';
 
 const { Title } = Typography;
 
 export const PortalPropertyPage: React.FC = () => {
-  const { customer } = useCustomerPortalAuth();
-  if (!customer) return null;
+  const { data: portalData, isLoading } = usePortalMeQuery();
 
-  const { property, paymentPlan } = customer;
+  if (isLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
+        <Spin size="large" tip="Loading property details..." />
+      </div>
+    );
+  }
+
+  const property = portalData?.property;
+  const paymentPlan = portalData?.paymentPlan;
 
   return (
     <div>
@@ -23,8 +30,11 @@ export const PortalPropertyPage: React.FC = () => {
           <Descriptions title={property.houseNumber} column={{ xs: 1, sm: 2 }} bordered>
             <Descriptions.Item label="Offer Number">{property.offerNumber}</Descriptions.Item>
             <Descriptions.Item label="Price">
-              <Tag color={tokens.primary}>{property.currency} {(property.priceMinor / 100).toLocaleString()}</Tag>
+              <Tag color={tokens.primary}>{property.currency || 'GHS'} {(property.priceMinor / 100).toLocaleString()}</Tag>
             </Descriptions.Item>
+            {property.description && (
+              <Descriptions.Item label="Description" span={2}>{property.description}</Descriptions.Item>
+            )}
           </Descriptions>
         </Card>
       ) : (
@@ -34,14 +44,14 @@ export const PortalPropertyPage: React.FC = () => {
       <Card title="Payment Plan Progress">
         {paymentPlan ? (
           <>
-            <Progress percent={paymentPlan.progressPercent} strokeColor={tokens.primary} />
+            <Progress percent={paymentPlan.progressPercent || 0} strokeColor={tokens.primary} />
             <Descriptions column={{ xs: 1, sm: 2 }} style={{ marginTop: 16 }}>
-              <Descriptions.Item label="Total Price">{paymentPlan.currency} {(paymentPlan.totalAmountMinor / 100).toLocaleString()}</Descriptions.Item>
-              <Descriptions.Item label="Down Payment">{paymentPlan.currency} {(paymentPlan.downPaymentMinor / 100).toLocaleString()}</Descriptions.Item>
-              <Descriptions.Item label="Monthly Installment">{paymentPlan.currency} {(paymentPlan.monthlyAmountMinor / 100).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Total Price">{paymentPlan.currency || 'GHS'} {(paymentPlan.totalAmountMinor / 100).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Down Payment">{paymentPlan.currency || 'GHS'} {(paymentPlan.downPaymentMinor / 100).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Monthly Installment">{paymentPlan.currency || 'GHS'} {(paymentPlan.monthlyAmountMinor / 100).toLocaleString()}</Descriptions.Item>
               <Descriptions.Item label="Duration">{paymentPlan.numMonths} months</Descriptions.Item>
-              <Descriptions.Item label="Balance Remaining">{paymentPlan.currency} {(paymentPlan.balanceMinor / 100).toLocaleString()}</Descriptions.Item>
-              <Descriptions.Item label="Status"><Tag>{paymentPlan.status.replace('_', ' ')}</Tag></Descriptions.Item>
+              <Descriptions.Item label="Balance Remaining">{paymentPlan.currency || 'GHS'} {(paymentPlan.balanceMinor / 100).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Status"><Tag color="blue">{paymentPlan.status}</Tag></Descriptions.Item>
             </Descriptions>
           </>
         ) : (

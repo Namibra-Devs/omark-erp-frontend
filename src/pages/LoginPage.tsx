@@ -37,7 +37,7 @@ export const LoginPage: React.FC = () => {
       await login(values.email, values.password);
     } catch (err: any) {
       console.error('Login error:', err);
-      const errorMessage = err?.response?.data?.message || err?.message || 'Login failed. Please try again.';
+      const errorMessage = err?.error?.message || err?.response?.data?.message || err?.message || 'Login failed. Please try again.';
       setError(errorMessage);
     } finally {
       setLoading(false);

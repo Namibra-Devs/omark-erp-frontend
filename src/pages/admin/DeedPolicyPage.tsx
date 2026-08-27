@@ -1,53 +1,66 @@
 // src/pages/admin/DeedPolicyPage.tsx
-// ⚠️ PROTOTYPE — see src/mock/deedPolicy.ts. Sample data only.
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Alert, Button, Card, Form, Input, InputNumber, Typography, message } from 'antd';
 import { SaveOutlined } from '@ant-design/icons';
 import { PageHeader } from '@/components/shared/PageHeader';
-import { MockDataBanner } from '@/components/shared/MockDataBanner';
-import { useAuth } from '@/contexts/AuthContext';
-import { useDeedPolicy, updateDeedPolicy } from '@/mock/deedPolicy';
+import { useDeedPolicyQuery, useUpdateDeedPolicyMutation } from '@/api/deedPolicy';
 
 const { TextArea } = Input;
 const { Text } = Typography;
 
 export const DeedPolicyPage: React.FC = () => {
-  const { user } = useAuth();
-  const policy = useDeedPolicy();
+  const { data: policy, isLoading } = useDeedPolicyQuery();
+  const updatePolicy = useUpdateDeedPolicyMutation();
   const [form] = Form.useForm();
 
-  const handleSave = (values: { standardBusinessContacts: string; defaultWitnessCount: number; internalNotes: string }) => {
-    updateDeedPolicy(values, user ? `${user.firstName} ${user.lastName}` : 'Admin');
-    message.success('Company Deed Policy updated');
+  useEffect(() => {
+    if (policy) {
+      form.setFieldsValue({
+        businessContacts: policy.businessContacts,
+        defaultWitnessCount: policy.defaultWitnessCount || 2,
+        notes: policy.notes,
+      });
+    }
+  }, [policy, form]);
+
+  const handleSave = async (values: any) => {
+    try {
+      await updatePolicy.mutateAsync({
+        businessContacts: values.businessContacts,
+        defaultWitnessCount: values.defaultWitnessCount,
+        notes: values.notes,
+      });
+      message.success('Company Deed Policy updated successfully');
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Policy update failed');
+    }
   };
 
   return (
     <div>
       <PageHeader title="Company Deed Policy" actions={[]} />
-      <MockDataBanner />
 
       <Alert
         type="info"
         showIcon
         style={{ marginBottom: 24 }}
-        message="What this actually affects"
-        description="The real Generate Deed endpoint only accepts customerId, propertyId, witnesses and a free-text Business Contacts field. 'Standard Business Contacts' below pre-fills that field on every new deed. 'Default Witness Count' only shapes how many witness rows the form starts with — witness names must still be entered per deed. 'Internal Notes' is for staff reference only and is never sent anywhere."
+        message="Governance Policy"
+        description="Business Contacts pre-fills official company witness & legal contact information on newly generated deed certificates. Default Witness Count configures mandatory witness entries per document."
       />
 
-      <Card title="Policy">
+      <Card title="Policy Configuration" loading={isLoading}>
         <Form
           form={form}
           layout="vertical"
-          initialValues={policy}
           onFinish={handleSave}
         >
           <Form.Item
-            name="standardBusinessContacts"
+            name="businessContacts"
             label="Standard Business Contacts"
-            rules={[{ required: true, message: 'Required' }]}
-            extra="Auto-fills the Business Contacts field when staff open Generate Deed."
+            rules={[{ required: true, message: 'Business contact details required' }]}
+            extra="Auto-fills the Business Contacts field when staff generate deed certificates."
           >
-            <TextArea rows={4} />
+            <TextArea rows={4} placeholder="Company Legal Representative, Contact Details, HQ Address" />
           </Form.Item>
           <Form.Item
             name="defaultWitnessCount"
@@ -56,13 +69,15 @@ export const DeedPolicyPage: React.FC = () => {
           >
             <InputNumber min={1} max={5} style={{ width: 160 }} />
           </Form.Item>
-          <Form.Item name="internalNotes" label="Internal Notes (staff reference only)">
-            <TextArea rows={3} />
+          <Form.Item name="notes" label="Internal Notes (staff reference)">
+            <TextArea rows={3} placeholder="Internal legal guidelines or notes" />
           </Form.Item>
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 16 }}>
-            Last updated {new Date(policy.updatedAt).toLocaleString()} by {policy.updatedBy}
-          </Text>
-          <Button type="primary" htmlType="submit" icon={<SaveOutlined />}>Save Policy</Button>
+          {policy?.updatedAt && (
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 16 }}>
+              Last updated {new Date(policy.updatedAt).toLocaleString()}
+            </Text>
+          )}
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={updatePolicy.isPending}>Save Policy</Button>
         </Form>
       </Card>
     </div>

@@ -45,8 +45,9 @@ function onTokenRefreshed(token: string) {
 const addAuthInterceptor = (instance: AxiosInstance) => {
   instance.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
-      if (accessToken) {
-        config.headers.Authorization = `Bearer ${accessToken}`;
+      const token = getAccessToken() || (window.location.pathname.startsWith('/portal') ? localStorage.getItem('portal_token') : null);
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
       }
       return config;
     },
@@ -67,8 +68,9 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
     async (error: AxiosError<ApiError>) => {
       const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
-      // Handle 401 - try refresh
-      if (error.response?.status === 401 && !originalRequest._retry) {
+      // Handle 401 - try refresh (exclude auth login/refresh requests)
+      const isAuthEndpoint = originalRequest?.url?.includes('/auth/login') || originalRequest?.url?.includes('/auth/refresh') || originalRequest?.url?.includes('/portal/auth');
+      if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
         if (isRefreshing) {
           return new Promise((resolve) => {
             subscribeTokenRefresh((token: string) => {
@@ -82,23 +84,30 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
         isRefreshing = true;
 
         try {
-          if (!refreshToken) {
+          const currentRefreshToken = getRefreshToken();
+          if (!currentRefreshToken) {
             throw new Error('No refresh token available');
           }
           // Request refresh from backend using standalone axios to avoid interceptor side effects
-          const refreshRes = await axios.post(`${BASE_URL}/api/v1/auth/refresh`, { refreshToken });
-          const newAccessToken = refreshRes.data.data.accessToken;
-          const newRefreshToken = refreshRes.data.data.refreshToken;
+          const refreshRes = await axios.post(`${BASE_URL}/api/v1/auth/refresh`, { refreshToken: currentRefreshToken });
+          const newAccessToken = refreshRes.data?.data?.accessToken || refreshRes.data?.accessToken;
+          const newRefreshToken = refreshRes.data?.data?.refreshToken || refreshRes.data?.refreshToken;
 
-          setTokens(newAccessToken, newRefreshToken);
+          if (!newAccessToken) {
+            throw new Error('Refresh endpoint returned empty token');
+          }
+
+          setTokens(newAccessToken, newRefreshToken || currentRefreshToken);
           onTokenRefreshed(newAccessToken);
 
           originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
           return instance(originalRequest);
         } catch (refreshError) {
-          // Refresh failed — clear tokens and redirect to login
+          // Refresh failed — clear tokens and redirect to login if not on /login
           clearTokens();
-          window.location.href = '/login';
+          if (window.location.pathname !== '/login' && !window.location.pathname.startsWith('/portal/login')) {
+            window.location.href = '/login';
+          }
           return Promise.reject(refreshError);
         } finally {
           isRefreshing = false;
@@ -125,8 +134,12 @@ addResponseInterceptor(erpClient);
 export const setTokens = (access: string, refresh: string) => {
   accessToken = access;
   refreshToken = refresh;
-  localStorage.setItem('accessToken', access);
-  localStorage.setItem('refreshToken', refresh);
+  if (access) {
+    localStorage.setItem('accessToken', access);
+  }
+  if (refresh) {
+    localStorage.setItem('refreshToken', refresh);
+  }
 };
 
 export const clearTokens = () => {
@@ -134,10 +147,11 @@ export const clearTokens = () => {
   refreshToken = null;
   localStorage.removeItem('accessToken');
   localStorage.removeItem('refreshToken');
+  localStorage.removeItem('portal_token');
 };
 
-export const getAccessToken = () => accessToken;
-export const getRefreshToken = () => refreshToken;
+export const getAccessToken = () => accessToken || localStorage.getItem('accessToken');
+export const getRefreshToken = () => refreshToken || localStorage.getItem('refreshToken');
 
 // The backend always wraps single-resource responses as { data: T } and
 // paginated list responses as { data: T[], meta: PaginationMeta }.

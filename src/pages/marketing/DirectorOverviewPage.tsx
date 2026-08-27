@@ -21,6 +21,7 @@ import {
   DashboardOutlined,
   UserSwitchOutlined,
   DollarOutlined,
+  StarFilled,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
@@ -67,23 +68,36 @@ export const DirectorOverviewPage: React.FC = () => {
 
   const marketers: MarketerPerformance[] = useMemo(
     () =>
-      (data?.marketers ?? []).map((m: Partial<MarketerPerformance> & { id: string; name: string }) => {
+      (data?.marketers ?? []).map((m: Partial<MarketerPerformance> & { id?: string; userId?: string; name: string }) => {
+        const id = m.userId || m.id || '';
         const totalProspects = m.totalProspects ?? 0;
         const converted = m.converted ?? 0;
+        const statusNew = m.byStatus?.new ?? m.new ?? 0;
+        const statusScheduled = m.byStatus?.meeting_scheduled ?? m.meetingScheduled ?? 0;
+        const statusCompleted = m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0;
         return {
-          id: m.id,
+          id,
+          userId: id,
           name: m.name,
           avatar: m.avatar,
           email: m.email,
           phone: m.phone,
           totalProspects,
-          new: m.new ?? 0,
-          meetingScheduled: m.meetingScheduled ?? 0,
-          meetingCompleted: m.meetingCompleted ?? 0,
+          new: statusNew,
+          meetingScheduled: statusScheduled,
+          meetingCompleted: statusCompleted,
           postponed: m.postponed ?? 0,
           suspended: m.suspended ?? 0,
           converted,
-          conversionRate: totalProspects > 0 ? (converted / totalProspects) * 100 : 0,
+          conversionRate: m.conversionRate ?? (totalProspects > 0 ? (converted / totalProspects) * 100 : 0),
+          satisfaction: m.satisfaction,
+          responseTime: m.responseTime,
+          targetMinor: m.targetMinor,
+          revenueMinor: m.revenueMinor,
+          thisMonthProspects: m.thisMonthProspects,
+          lastMonthProspects: m.lastMonthProspects,
+          growthPercent: m.growthPercent,
+          byStatus: m.byStatus,
         };
       }),
     [data]
@@ -202,6 +216,42 @@ export const DirectorOverviewPage: React.FC = () => {
         />
       ),
       sorter: (a: MarketerPerformance, b: MarketerPerformance) => a.conversionRate - b.conversionRate,
+    },
+    {
+      title: 'Satisfaction & Speed',
+      key: 'satisfaction',
+      width: 170,
+      render: (_: any, record: MarketerPerformance) => (
+        <div>
+          {record.satisfaction !== undefined ? (
+            <Tag color="gold"><StarFilled /> {record.satisfaction} / 10</Tag>
+          ) : null}
+          {record.responseTime !== undefined ? (
+            <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+              ⚡ {record.responseTime} mins avg
+            </Text>
+          ) : null}
+        </div>
+      ),
+    },
+    {
+      title: 'Revenue / Target',
+      key: 'revenue',
+      width: 170,
+      render: (_: any, record: MarketerPerformance) => {
+        if (record.revenueMinor === undefined && record.targetMinor === undefined) return <Text type="secondary">-</Text>;
+        const revGhs = (record.revenueMinor ?? 0) / 100;
+        const targetGhs = (record.targetMinor ?? 0) / 100;
+        const pct = targetGhs > 0 ? Math.min(100, Math.round((revGhs / targetGhs) * 100)) : 0;
+        return (
+          <div>
+            <Text strong style={{ fontSize: 12 }}>GHS {revGhs.toLocaleString()}</Text>
+            {targetGhs > 0 && (
+              <Progress percent={pct} size="small" strokeColor={pct >= 100 ? '#52c41a' : '#1890ff'} />
+            )}
+          </div>
+        );
+      },
     },
     {
       title: 'Actions',
@@ -652,6 +702,33 @@ export const DirectorOverviewPage: React.FC = () => {
                   style={{ width: '100%' }}
                 />
               </Descriptions.Item>
+              {selectedMarketer.satisfaction !== undefined && (
+                <Descriptions.Item label="Satisfaction Score">
+                  <Tag color="gold"><StarFilled /> {selectedMarketer.satisfaction} / 10</Tag>
+                </Descriptions.Item>
+              )}
+              {selectedMarketer.responseTime !== undefined && (
+                <Descriptions.Item label="Avg Response Time">
+                  ⚡ {selectedMarketer.responseTime} minutes
+                </Descriptions.Item>
+              )}
+              {selectedMarketer.revenueMinor !== undefined && (
+                <Descriptions.Item label="Revenue Generated">
+                  <Text strong color="green">GHS {(selectedMarketer.revenueMinor / 100).toLocaleString()}</Text>
+                </Descriptions.Item>
+              )}
+              {selectedMarketer.targetMinor !== undefined && (
+                <Descriptions.Item label="Target">
+                  GHS {(selectedMarketer.targetMinor / 100).toLocaleString()}
+                </Descriptions.Item>
+              )}
+              {selectedMarketer.growthPercent !== undefined && (
+                <Descriptions.Item label="MoM Growth">
+                  <Tag color={selectedMarketer.growthPercent >= 0 ? 'green' : 'volcano'}>
+                    {selectedMarketer.growthPercent >= 0 ? `+${selectedMarketer.growthPercent}%` : `${selectedMarketer.growthPercent}%`}
+                  </Tag>
+                </Descriptions.Item>
+              )}
               <Descriptions.Item label="Status Breakdown">
                 <Space wrap>
                   <Tag color="blue">{selectedMarketer.new} New</Tag>

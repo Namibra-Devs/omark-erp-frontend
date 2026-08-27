@@ -90,7 +90,8 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { roleLabels } from '@/constants/enums';
 import type { User, Role } from '@/types';
-import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, getUserFullName, getUserPhone } from '@/api/users';
+import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone } from '@/api/users';
+import { useBranchesQuery, useDepartmentsQuery } from '@/api/branches';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -216,8 +217,11 @@ export const UsersPage: React.FC = () => {
 
   // ── API hooks ────────────────────────────────────────────────────────────
   const { data: usersResponse, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
+  const { data: branches = [] } = useBranchesQuery();
+  const { data: departments = [] } = useDepartmentsQuery();
   const createUser = useCreateUserMutation();
   const updateUser = useUpdateUserMutation();
+  const updateUserAssignment = useUpdateUserAssignmentMutation();
   const deleteUser = useDeleteUserMutation();
 
   // Extract users array safely. UserEntity.phoneNumber is optional (backend may
@@ -278,7 +282,7 @@ export const UsersPage: React.FC = () => {
   // Add User
   const handleAddUser = async (values: any) => {
     try {
-      await createUser.mutateAsync({
+      const newUserObj = await createUser.mutateAsync({
         firstName: values.firstName,
         lastName: values.lastName,
         email: values.email,
@@ -286,11 +290,23 @@ export const UsersPage: React.FC = () => {
         role: values.role,
         password: values.password,
       });
+
+      if (newUserObj?.id && (values.branchId || values.departmentId)) {
+        await updateUserAssignment.mutateAsync({
+          userId: newUserObj.id,
+          payload: {
+            branchId: values.branchId,
+            departmentId: values.departmentId,
+          },
+        });
+      }
+
       setAddModal(false);
       addForm.resetFields();
-      message.success(`Staff member ${values.firstName} ${values.lastName} added successfully!`);
+      message.success(`Staff member ${values.firstName} ${values.lastName} added and assigned successfully!`);
     } catch (err: any) {
-      const errMsg = err?.response?.data?.error?.message ||
+      const errMsg = err?.error?.message ||
+                     err?.response?.data?.error?.message ||
                      err?.response?.data?.message ||
                      err?.message ||
                      'Failed to add staff member';
@@ -313,12 +329,24 @@ export const UsersPage: React.FC = () => {
           isActive: values.isActive !== undefined ? values.isActive : selectedUser.isActive,
         },
       });
+
+      if (values.branchId || values.departmentId) {
+        await updateUserAssignment.mutateAsync({
+          userId: selectedUser.id,
+          payload: {
+            branchId: values.branchId,
+            departmentId: values.departmentId,
+          },
+        });
+      }
+
       setEditModal(false);
       setSelectedUser(null);
       form.resetFields();
       message.success('Staff member updated successfully!');
     } catch (err: any) {
-      const errMsg = err?.response?.data?.error?.message ||
+      const errMsg = err?.error?.message ||
+                     err?.response?.data?.error?.message ||
                      err?.response?.data?.message ||
                      err?.message ||
                      'Failed to update staff member';
@@ -539,7 +567,7 @@ export const UsersPage: React.FC = () => {
           <Tooltip title="Edit">
             <Button 
               icon={<EditOutlined />} 
-              onClick={() => {
+              onClick={async () => {
                 setSelectedUser(record);
                 setEditModal(true);
                 form.setFieldsValue({
@@ -550,6 +578,18 @@ export const UsersPage: React.FC = () => {
                   role: record.role,
                   isActive: record.isActive,
                 });
+                try {
+                  const res = await (await import('@/api/client')).default.get(`/users/${record.id}/assignment`);
+                  const assignmentData = (await import('@/api/client')).unwrapData(res) as { branchId?: string; departmentId?: string } | undefined;
+                  if (assignmentData) {
+                    form.setFieldsValue({
+                      branchId: assignmentData.branchId,
+                      departmentId: assignmentData.departmentId,
+                    });
+                  }
+                } catch {
+                  // Fallback if no assignment set yet
+                }
               }}
             />
           </Tooltip>
@@ -1002,6 +1042,33 @@ export const UsersPage: React.FC = () => {
             <PhoneInput />
           </Form.Item>
 
+          <Row gutter={[8, 0]}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="branchId"
+                label="Branch Assignment"
+                rules={[{ required: true, message: 'Branch assignment is required' }]}
+              >
+                <Select
+                  placeholder="Select branch"
+                  options={branches.map((b: any) => ({ value: b.id, label: `${b.name} (${b.branchCode})` }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="departmentId"
+                label="Department Assignment"
+                rules={[{ required: true, message: 'Department assignment is required' }]}
+              >
+                <Select
+                  placeholder="Select department"
+                  options={departments.map((d) => ({ value: d.id, label: d.name }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
           <Form.Item
             name="role"
             label="Role"
@@ -1107,6 +1174,33 @@ export const UsersPage: React.FC = () => {
           >
             <PhoneInput />
           </Form.Item>
+
+          <Row gutter={[8, 0]}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="branchId"
+                label="Branch Assignment"
+                rules={[{ required: true, message: 'Branch assignment is required' }]}
+              >
+                <Select
+                  placeholder="Select branch"
+                  options={branches.map((b: any) => ({ value: b.id, label: `${b.name} (${b.branchCode})` }))}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="departmentId"
+                label="Department Assignment"
+                rules={[{ required: true, message: 'Department assignment is required' }]}
+              >
+                <Select
+                  placeholder="Select department"
+                  options={departments.map((d) => ({ value: d.id, label: d.name }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <Form.Item
             name="role"

@@ -64,7 +64,8 @@ export const PropertiesPage: React.FC = () => {
       setModalOpen(false);
       form.resetFields();
     } catch (error: any) {
-      message.error(error?.response?.data?.message || error?.message || 'Failed to add property');
+      const msg = error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to add property';
+      message.error(msg);
     }
   };
 
@@ -89,7 +90,8 @@ export const PropertiesPage: React.FC = () => {
       setEditingProperty(null);
       form.resetFields();
     } catch (error: any) {
-      message.error(error?.response?.data?.message || error?.message || 'Failed to update property');
+      const msg = error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to update property';
+      message.error(msg);
     }
   };
 
@@ -98,7 +100,8 @@ export const PropertiesPage: React.FC = () => {
       await deleteProperty.mutateAsync(id);
       message.success('Property deleted successfully!');
     } catch (error: any) {
-      message.error(error?.response?.data?.message || error?.message || 'Failed to delete property');
+      const msg = error?.error?.message || error?.response?.data?.message || error?.message || 'Failed to delete property';
+      message.error(msg);
     }
   };
 

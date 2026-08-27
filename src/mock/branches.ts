@@ -224,6 +224,20 @@ export const mockBranchDepartments: BranchDepartment[] = [
   { id: 'dept-admin', name: 'Administration' },
 ];
 
+// One color per department, shared across every branch/head-office screen
+// so the same department reads consistently everywhere it appears —
+// item tags, breakdown tables, charts.
+export const DEPARTMENT_COLOR: Record<string, string> = {
+  'dept-marketing': 'blue',
+  'dept-customer-service': 'cyan',
+  'dept-secretariat': 'purple',
+  'dept-finance': 'green',
+  'dept-admin': 'orange',
+};
+
+export const departmentName = (departmentId: string): string =>
+  mockBranchDepartments.find((d) => d.id === departmentId)?.name ?? departmentId;
+
 export const mockBranchMetrics: Record<string, BranchMetrics> = {
   'branch-accra-hq': {
     branchId: 'branch-accra-hq',

@@ -1,87 +1,95 @@
 // src/pages/portal/PortalDashboardPage.tsx
-// ⚠️ PROTOTYPE — see src/mock/customerPortalCache.ts. Property/payment
-// figures are a snapshot cached the last time staff viewed this record.
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Alert, Button, Card, Col, Progress, Row, Statistic, Tag, Typography } from 'antd';
+import { Button, Card, Col, Progress, Row, Spin, Statistic, Tag, Typography } from 'antd';
 import { CalendarOutlined, DollarOutlined, HomeOutlined, MessageOutlined } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
-import { useCustomerPortalAuth } from '@/contexts/CustomerPortalAuthContext';
-import { getComplaintsForCustomer } from '@/mock/complaints';
-import dayjs from 'dayjs';
+import { usePortalMeQuery } from '@/api/portal';
 
 const { Title, Text } = Typography;
 
 export const PortalDashboardPage: React.FC = () => {
   const navigate = useNavigate();
-  const { customer } = useCustomerPortalAuth();
+  const { data: portalData, isLoading } = usePortalMeQuery();
 
-  if (!customer) return null;
+  if (isLoading) {
+    return (
+      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
+        <Spin size="large" tip="Loading customer portal..." />
+      </div>
+    );
+  }
 
-  const plan = customer.paymentPlan;
-  const openComplaints = getComplaintsForCustomer(customer.id).filter((c) => c.status !== 'resolved').length;
-  const cachedAgo = dayjs(customer.cachedAt).format('MMM D, YYYY');
+  const customer = portalData?.customer;
+  const property = portalData?.property;
+  const plan = portalData?.paymentPlan;
 
   return (
     <div>
-      <Title level={3}>Welcome back, {customer.firstName}</Title>
-      <Alert
-        type="info"
-        showIcon
-        style={{ marginBottom: 24 }}
-        message="This is a preview of the customer portal"
-        description={`Figures below are a snapshot from our records as of ${cachedAgo}. Payments and property changes made after that won't show here yet.`}
-      />
+      <Title level={3} style={{ fontSize: 'clamp(18px, 4vw, 24px)', marginBottom: 16 }}>
+        Welcome back, {customer?.firstName || 'Valued Customer'}
+      </Title>
 
-      <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
+      <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+        <Col xs={12} sm={12} lg={6}>
+          <Card size="small" bodyStyle={{ padding: 12 }}>
             <Statistic
               title="Property"
-              value={customer.property?.houseNumber ?? 'Not on file'}
+              value={property?.houseNumber ?? 'Not assigned'}
               prefix={<HomeOutlined />}
-              valueStyle={{ fontSize: 18, color: tokens.primary }}
+              valueStyle={{ fontSize: 16, color: tokens.primary }}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
+        <Col xs={12} sm={12} lg={6}>
+          <Card size="small" bodyStyle={{ padding: 12 }}>
             <Statistic
-              title="Balance Remaining"
+              title="Balance Due"
               value={plan ? plan.balanceMinor / 100 : 0}
               prefix="GHS"
               precision={2}
-              valueStyle={{ color: plan && plan.balanceMinor > 0 ? '#ff4d4f' : '#52c41a' }}
+              valueStyle={{ fontSize: 16, color: plan && plan.balanceMinor > 0 ? '#ff4d4f' : '#52c41a' }}
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="Payment Plan Progress" value={plan?.progressPercent ?? 0} suffix="%" prefix={<DollarOutlined />} />
+        <Col xs={12} sm={12} lg={6}>
+          <Card size="small" bodyStyle={{ padding: 12 }}>
+            <Statistic
+              title="Plan Progress"
+              value={plan?.progressPercent ?? 0}
+              suffix="%"
+              prefix={<DollarOutlined />}
+              valueStyle={{ fontSize: 16 }}
+            />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card>
-            <Statistic title="Open Complaints" value={openComplaints} prefix={<MessageOutlined />} valueStyle={{ color: openComplaints > 0 ? '#faad14' : '#52c41a' }} />
+        <Col xs={12} sm={12} lg={6}>
+          <Card size="small" bodyStyle={{ padding: 12 }}>
+            <Statistic
+              title="Support"
+              value="Active"
+              prefix={<MessageOutlined />}
+              valueStyle={{ fontSize: 16, color: '#52c41a' }}
+            />
           </Card>
         </Col>
       </Row>
 
-      <Row gutter={16}>
+      <Row gutter={[16, 16]}>
         <Col xs={24} lg={12}>
           <Card
             title={<span><HomeOutlined style={{ marginRight: 8 }} />My Property</span>}
             extra={<Button type="link" onClick={() => navigate('/portal/property')}>View details</Button>}
-            style={{ marginBottom: 24 }}
+            style={{ marginBottom: 16 }}
           >
-            {customer.property ? (
+            {property ? (
               <>
-                <Text strong style={{ fontSize: 16 }}>{customer.property.houseNumber}</Text>
+                <Text strong style={{ fontSize: 16 }}>{property.houseNumber}</Text>
                 <br />
-                <Text type="secondary">Offer No. {customer.property.offerNumber}</Text>
+                <Text type="secondary">Offer No. {property.offerNumber}</Text>
                 <br />
                 <Tag color={tokens.primary} style={{ marginTop: 8 }}>
-                  GHS {(customer.property.priceMinor / 100).toLocaleString()}
+                  GHS {(property.priceMinor / 100).toLocaleString()}
                 </Tag>
               </>
             ) : (
@@ -89,16 +97,17 @@ export const PortalDashboardPage: React.FC = () => {
             )}
           </Card>
         </Col>
+
         <Col xs={24} lg={12}>
           <Card
             title={<span><DollarOutlined style={{ marginRight: 8 }} />Payment Plan</span>}
             extra={<Button type="link" onClick={() => navigate('/portal/payments')}>View payments</Button>}
-            style={{ marginBottom: 24 }}
+            style={{ marginBottom: 16 }}
           >
             {plan ? (
               <>
                 <Progress percent={plan.progressPercent} strokeColor={tokens.primary} />
-                <Row gutter={16} style={{ marginTop: 12 }}>
+                <Row gutter={12} style={{ marginTop: 12 }}>
                   <Col span={12}><Text type="secondary">Monthly</Text><br /><Text strong>GHS {(plan.monthlyAmountMinor / 100).toLocaleString()}</Text></Col>
                   <Col span={12}><Text type="secondary">Total</Text><br /><Text strong>GHS {(plan.totalAmountMinor / 100).toLocaleString()}</Text></Col>
                 </Row>
@@ -111,14 +120,19 @@ export const PortalDashboardPage: React.FC = () => {
       </Row>
 
       <Card>
-        <Row align="middle" justify="space-between">
-          <Col>
+        <Row gutter={[12, 12]} align="middle" justify="space-between">
+          <Col xs={24} sm={16}>
             <Text strong><CalendarOutlined /> Have an issue or question?</Text>
             <br />
-            <Text type="secondary">Log a complaint and our team will follow up.</Text>
+            <Text type="secondary" style={{ fontSize: 13 }}>Log a complaint and our customer support team will follow up.</Text>
           </Col>
-          <Col>
-            <Button type="primary" style={{ backgroundColor: tokens.primary }} onClick={() => navigate('/portal/complaints')}>
+          <Col xs={24} sm={8} style={{ textAlign: 'right' }}>
+            <Button
+              type="primary"
+              block
+              style={{ backgroundColor: tokens.primary, height: 38, borderRadius: 8 }}
+              onClick={() => navigate('/portal/complaints')}
+            >
               Log a Complaint
             </Button>
           </Col>

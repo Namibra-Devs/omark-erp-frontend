@@ -196,14 +196,8 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
           </Form.Item>
 
           <Divider orientation="left" orientationMargin={0}>
-            <Space size={6}>
-              <Text style={{ fontSize: 13 }}>Branch Assignment</Text>
-              <Tag color="gold" style={{ fontSize: 10 }}>Preview</Tag>
-            </Space>
+            <Text style={{ fontSize: 13 }}>Branch & Department Assignment</Text>
           </Divider>
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 12 }}>
-            Not sent to the server yet — saved locally until the backend supports branches.
-          </Text>
 
           <Form.Item name="branchId" label="Branch">
             <Select placeholder="Select branch" allowClear>

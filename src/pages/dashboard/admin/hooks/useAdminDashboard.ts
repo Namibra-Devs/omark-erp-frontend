@@ -22,6 +22,7 @@ import { setStaffAssignment, useStaffAssignment } from '@/mock/staffAssignments'
 import { setPhoto } from '@/mock/photos';
 import { useMockActivityFeed } from './useMockActivityFeed';
 import { useAuth } from '@/contexts/AuthContext';
+import { useActivityLogQuery } from '@/api/activityLog';
 
 // There is no activity-log endpoint anywhere in this API — "recent
 // activity" spanning prospects/appointments/properties/customers/deeds is
@@ -272,6 +273,9 @@ export const useAdminDashboard = () => {
   // for any of it, so it's assembled client-side from localStorage and
   // merged in here. Scoped to this admin's own branch if they're assigned
   // one; unassigned (Head Office) admins see everything, company-wide.
+  // ── Aggregated Activity Log Feed API ────────────────────────────────────
+  const { data: apiActivityFeed = [] } = useActivityLogQuery(20, currentUser?.role === 'admin');
+
   const { logs: mockActivityLogs, stats: mockActivityStats } = useMockActivityFeed(myAssignment.branchId);
 
   const activityLogs: ActivityLog[] = useMemo(() => {
@@ -282,10 +286,20 @@ export const useAdminDashboard = () => {
       properties: propertiesData?.items ?? [],
       deeds: deedsData?.items ?? [],
     });
-    return [...localActivityLogs, ...live, ...mockActivityLogs]
+
+    const mappedApiFeed: ActivityLog[] = apiActivityFeed.map((item) => ({
+      id: item.refId ? `api-log-${item.refId}` : `api-log-${item.at}-${item.summary}`,
+      user: item.performedBy ?? 'System',
+      action: item.type ? item.type.toUpperCase() : 'ACTIVITY',
+      details: item.summary,
+      timestamp: item.at ? item.at.replace('T', ' ').slice(0, 19) : '',
+      type: item.type === 'payment' || item.type === 'deed' ? 'success' : item.type === 'error' ? 'error' : 'info',
+    }));
+
+    return [...localActivityLogs, ...mappedApiFeed, ...live, ...mockActivityLogs]
       .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
       .slice(0, 30);
-  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs, mockActivityLogs]);
+  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs, mockActivityLogs, apiActivityFeed]);
 
   const newActivityCount = useMemo(
     () => activityLogs.filter((a) => a.timestamp > lastSeenActivityAt).length,

@@ -22,6 +22,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePendingNotificationsCountQuery } from '@/api/notifications';
+import { useUnseenCountsQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useComplaints } from '@/mock/complaints';
@@ -46,61 +47,61 @@ export const NavMenu: React.FC = () => {
   const location = useLocation();
   const { user, hasRole } = useAuth();
 
+  // ── Real Staff Nav-Badge Unseen Counts API ─────────────────────────────────
+  const { data: apiUnseenCounts } = useUnseenCountsQuery(user?.id, !!user?.id);
+
   // GET /notifications is only accessible to admin/secretary/accounts on
   // the backend — every other role 403s, so notifications are hidden from
   // the nav entirely for them rather than showing a broken link.
   const canSeeNotifications = hasRole(['admin', 'secretary', 'accounts']);
 
   // ── Pending Notifications Count Query ─────────────────────────────────────
-  // Refetches every 30s on its own (see usePendingNotificationsCountQuery),
-  // and TanStack Query refetches on window focus by default, so navigating
-  // back to the tab / route keeps this reasonably fresh without extra effects.
   const {
     data: pendingCount = 0,
     isLoading: countLoading,
   } = usePendingNotificationsCountQuery(canSeeNotifications);
 
-  // ── Cross-nav badge counters (prototype where noted) ──────────────────────
-  // "New complaints" — staff side. See src/mock/complaints.ts + seenTracker.ts.
+  // ── Cross-nav badge counters ──────────────────────────────────────────────
   const canSeeComplaints = hasRole(['secretary', 'customer_service', 'admin']);
   const complaints = useComplaints();
-  const { count: newComplaintsCount } = useUnseenCount(
+  const { count: fallbackComplaintsCount } = useUnseenCount(
     'complaints-staff',
     canSeeComplaints ? user?.id : undefined,
     complaints.map((c) => c.createdAt)
   );
 
-  // Persistent "needs action" counts (not a seen/unseen badge — these stay
-  // until actually resolved, like an approval queue or payroll run list).
   const canSeeHeadOffice = hasRole(['admin']);
   const canSeePayroll = hasRole(['accounts']);
   const { stats: mockStats } = useMockActivityFeed();
-  const pendingApprovalsCount = canSeeHeadOffice ? mockStats.pendingApprovalsCount : 0;
-  const pendingPayrollCount = canSeePayroll ? mockStats.pendingPayrollCount : 0;
 
-  // "New prospects assigned to me" — real data (Prospect.assignedUserId).
   const canSeeMyProspects = hasRole(['marketing_staff', 'marketing_director', 'admin']);
   const { data: myProspectsData } = useProspectsQuery(
     { assignedUserId: user?.id, pageSize: 100 },
-    canSeeMyProspects && !!user?.id
+    canSeeMyProspects && !apiUnseenCounts && !!user?.id
   );
-  const { count: newProspectsCount } = useUnseenCount(
+  const { count: fallbackProspectsCount } = useUnseenCount(
     'prospects',
     canSeeMyProspects ? user?.id : undefined,
     (myProspectsData?.items ?? []).map((p) => p.createdAt)
   );
 
-  // "New appointments" — real data, customer_service/admin only.
   const canSeeAppointmentsBadge = hasRole(['customer_service', 'admin']);
   const { data: appointmentsData } = useAppointmentsQuery(
     { pageSize: 100 },
-    canSeeAppointmentsBadge
+    canSeeAppointmentsBadge && !apiUnseenCounts
   );
-  const { count: newAppointmentsCount } = useUnseenCount(
+  const { count: fallbackAppointmentsCount } = useUnseenCount(
     'appointments',
     canSeeAppointmentsBadge ? user?.id : undefined,
     (appointmentsData?.items ?? []).map((a) => a.createdAt)
   );
+
+  // Use real backend unseen-counts if available, falling back to local trackers
+  const newComplaintsCount = apiUnseenCounts?.complaints ?? (canSeeComplaints ? fallbackComplaintsCount : 0);
+  const pendingApprovalsCount = apiUnseenCounts?.approvals ?? (canSeeHeadOffice ? mockStats.pendingApprovalsCount : 0);
+  const pendingPayrollCount = apiUnseenCounts?.payroll ?? (canSeePayroll ? mockStats.pendingPayrollCount : 0);
+  const newProspectsCount = apiUnseenCounts?.prospects ?? (canSeeMyProspects ? fallbackProspectsCount : 0);
+  const newAppointmentsCount = apiUnseenCounts?.appointments ?? (canSeeAppointmentsBadge ? fallbackAppointmentsCount : 0);
 
   // Get the current selected key based on path
   const getSelectedKey = () => {

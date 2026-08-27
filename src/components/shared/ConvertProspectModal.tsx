@@ -67,7 +67,8 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
         createPlan,
       });
 
-      message.success(`${prospect.firstName} ${prospect.lastName} is now a customer!`);
+      const codeInfo = result.code ? ` (Sales Code: ${result.code})` : '';
+      message.success(`${prospect.firstName} ${prospect.lastName} is now a customer!${codeInfo}`);
       handleClose();
       onConverted?.(result.id);
       navigate(`/customers/${result.id}`);

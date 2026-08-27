@@ -93,8 +93,17 @@ export interface Customer {
   address: string;
   type: CustomerType;
   propertyId: string;
+  code?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface UnseenCounts {
+  prospects: number;
+  appointments: number;
+  complaints: number;
+  payroll: number;
+  approvals: number;
 }
 
 export interface Property {

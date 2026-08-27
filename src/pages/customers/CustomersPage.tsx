@@ -486,6 +486,14 @@ const handleAddCustomer = async (values: any) => {
   // Table Columns
   const columns = [
     {
+      title: 'Sales Code',
+      key: 'code',
+      width: 160,
+      render: (_: any, record: Customer) => (
+        record.code ? <Tag color="geekblue">{record.code}</Tag> : <Text type="secondary">N/A</Text>
+      ),
+    },
+    {
       title: 'Customer',
       key: 'customer',
       width: 220,
