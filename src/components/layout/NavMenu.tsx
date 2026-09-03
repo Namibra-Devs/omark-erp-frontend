@@ -19,6 +19,7 @@ import {
   ApartmentOutlined,
   MessageOutlined,
   IdcardOutlined,
+  ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { usePendingNotificationsCountQuery } from '@/api/notifications';
@@ -26,6 +27,7 @@ import { useUnseenCountsQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useComplaints } from '@/mock/complaints';
+import { useCheckIns } from '@/mock/checkIns';
 import { useUnseenCount } from '@/mock/seenTracker';
 import { useMockActivityFeed } from '@/pages/dashboard/admin/hooks/useMockActivityFeed';
 
@@ -49,6 +51,7 @@ export const NavMenu: React.FC = () => {
 
   // ── Real Staff Nav-Badge Unseen Counts API ─────────────────────────────────
   const { data: apiUnseenCounts } = useUnseenCountsQuery(user?.id, !!user?.id);
+  const { records: checkInRecords } = useCheckIns(user?.branchId);
 
   // GET /notifications is only accessible to admin/secretary/accounts on
   // the backend — every other role 403s, so notifications are hidden from
@@ -71,7 +74,7 @@ export const NavMenu: React.FC = () => {
   );
 
   const canSeeHeadOffice = hasRole(['admin']);
-  const canSeePayroll = hasRole(['accounts']);
+  const canSeePayroll = hasRole(['accounts', 'admin', 'branch_manager']);
   const { stats: mockStats } = useMockActivityFeed();
 
   const canSeeMyProspects = hasRole(['marketing_staff', 'marketing_director', 'admin']);
@@ -96,18 +99,27 @@ export const NavMenu: React.FC = () => {
     (appointmentsData?.items ?? []).map((a) => a.createdAt)
   );
 
+  const canSeeCheckIns = hasRole(['customer_service', 'admin', 'secretary', 'branch_manager']);
+  const { count: fallbackCheckInsCount } = useUnseenCount(
+    'check-ins',
+    canSeeCheckIns ? user?.id : undefined,
+    checkInRecords.map((c) => c.createdAt)
+  );
+
   // Use real backend unseen-counts if available, falling back to local trackers
   const newComplaintsCount = apiUnseenCounts?.complaints ?? (canSeeComplaints ? fallbackComplaintsCount : 0);
   const pendingApprovalsCount = apiUnseenCounts?.approvals ?? (canSeeHeadOffice ? mockStats.pendingApprovalsCount : 0);
-  const pendingPayrollCount = apiUnseenCounts?.payroll ?? (canSeePayroll ? mockStats.pendingPayrollCount : 0);
+  const pendingPayrollCount = canSeePayroll ? mockStats.pendingPayrollCount : 0;
   const newProspectsCount = apiUnseenCounts?.prospects ?? (canSeeMyProspects ? fallbackProspectsCount : 0);
   const newAppointmentsCount = apiUnseenCounts?.appointments ?? (canSeeAppointmentsBadge ? fallbackAppointmentsCount : 0);
+  const newCheckInsCount = apiUnseenCounts?.checkIns ?? (canSeeCheckIns ? fallbackCheckInsCount : 0);
 
   // Get the current selected key based on path
   const getSelectedKey = () => {
     const path = location.pathname;
     if (path.startsWith('/marketing/overview')) return '/marketing/overview';
     if (path.startsWith('/marketing/prospects')) return '/marketing/prospects';
+    if (path.startsWith('/cs/check-ins')) return '/cs/check-ins';
     if (path.startsWith('/cs/prospects')) return '/cs/prospects';
     if (path.startsWith('/cs/appointments')) return '/cs/appointments';
     if (path.startsWith('/admin/properties')) return '/admin/properties';
@@ -124,8 +136,11 @@ export const NavMenu: React.FC = () => {
     if (path.startsWith('/admin/deed-policy')) return '/admin/deed-policy';
     if (path.startsWith('/admin/dashboard')) return '/admin/dashboard';
     if (path.startsWith('/admin/users')) return '/admin/users';
+    if (path.startsWith('/profile')) return '/profile';
+    if (path.startsWith('/expenses') || path.startsWith('/accounts/expenses')) return '/accounts/expenses';
     if (path.startsWith('/accounts/dashboard')) return '/accounts/dashboard';
     if (path.startsWith('/accounts/payroll')) return '/accounts/payroll';
+    if (path.startsWith('/attendance') || path.startsWith('/head-office/attendance')) return '/attendance';
     if (path.startsWith('/dashboard')) return '/dashboard';
     return path;
   };
@@ -135,12 +150,17 @@ export const NavMenu: React.FC = () => {
     const items = [];
 
     // Dashboard section — each role gets its own distinct dashboard now
-    // (accounts used to silently reuse Secretary's page).
     if (hasRole(['admin'])) {
       items.push({
         key: '/admin/dashboard',
         icon: <DashboardOutlined />,
         label: 'Dashboard',
+      });
+      // Admin access to Accounts Dashboard
+      items.push({
+        key: '/accounts/dashboard',
+        icon: <DollarOutlined />,
+        label: 'Accounts Dashboard',
       });
     } else if (hasRole(['secretary'])) {
       items.push({
@@ -154,10 +174,26 @@ export const NavMenu: React.FC = () => {
         icon: <DashboardOutlined />,
         label: 'Dashboard',
       });
+    } else if (hasRole(['branch_manager'])) {
+      const branchRoute = user?.branchId ? `/branches/${user.branchId}` : '/branches';
+      items.push({
+        key: branchRoute,
+        icon: <DashboardOutlined />,
+        label: 'Branch Dashboard',
+      });
+    }
+
+    // ── EXPENSES (Critical feature moved to Sidebar) ──────────────────────────
+    if (hasRole(['accounts', 'admin', 'branch_manager'])) {
+      items.push({
+        key: '/accounts/expenses',
+        icon: <DollarOutlined />,
+        label: 'Expenses',
+      });
     }
 
     // Bonuses & Salaries (prototype — see src/mock/payroll.ts)
-    if (hasRole(['accounts'])) {
+    if (hasRole(['accounts', 'admin', 'branch_manager'])) {
       items.push({
         key: '/accounts/payroll',
         icon: <IdcardOutlined />,
@@ -165,8 +201,15 @@ export const NavMenu: React.FC = () => {
       });
     }
 
+    // ── Staff Attendance & Time Tracking (Available to all staff members) ─────
+    items.push({
+      key: '/attendance',
+      icon: <ClockCircleOutlined />,
+      label: 'Attendance & Shifts',
+    });
+
     // Marketing section
-    if (hasRole(['marketing_director', 'admin'])) {
+    if (hasRole(['marketing_director', 'admin', 'branch_manager'])) {
       items.push({
         key: '/marketing/overview',
         icon: <BarChartOutlined />,
@@ -174,7 +217,7 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    if (hasRole(['marketing_staff', 'marketing_director', 'admin'])) {
+    if (hasRole(['marketing_staff', 'marketing_director', 'admin', 'branch_manager'])) {
       items.push({
         key: '/marketing/prospects',
         icon: <UserOutlined />,
@@ -182,8 +225,16 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    // Customer Service section
-    if (hasRole(['customer_service', 'admin'])) {
+    // Customer Service & Front Desk section
+    if (hasRole(['customer_service', 'admin', 'secretary', 'branch_manager'])) {
+      items.push({
+        key: '/cs/check-ins',
+        icon: <IdcardOutlined />,
+        label: <span>Client Check-Ins<NavBadge count={newCheckInsCount} title={`${newCheckInsCount} new check-in(s)`} /></span>,
+      });
+    }
+
+    if (hasRole(['customer_service', 'admin', 'branch_manager'])) {
       items.push({
         key: '/cs/prospects',
         icon: <TeamOutlined />,
@@ -226,10 +277,16 @@ export const NavMenu: React.FC = () => {
         icon: <ApartmentOutlined />,
         label: 'Branches',
       });
+    } else if (hasRole(['branch_manager'])) {
+      items.push({
+        key: '/branches',
+        icon: <ApartmentOutlined />,
+        label: 'Branches',
+      });
     }
 
     // Customers section
-    if (hasRole(['secretary', 'accounts', 'admin'])) {
+    if (hasRole(['secretary', 'accounts', 'admin', 'branch_manager'])) {
       items.push({
         key: '/customers',
         icon: <TeamOutlined />,
@@ -238,7 +295,7 @@ export const NavMenu: React.FC = () => {
     }
 
     // Payment Plans
-    if (hasRole(['secretary', 'accounts', 'admin'])) {
+    if (hasRole(['secretary', 'accounts', 'admin', 'branch_manager'])) {
       items.push({
         key: '/payment-plans',
         icon: <DollarOutlined />,
@@ -247,7 +304,7 @@ export const NavMenu: React.FC = () => {
     }
 
     // Deeds
-    if (hasRole(['secretary', 'admin'])) {
+    if (hasRole(['secretary', 'admin', 'branch_manager'])) {
       items.push({
         key: '/deeds',
         icon: <CopyOutlined />,
@@ -265,7 +322,7 @@ export const NavMenu: React.FC = () => {
     }
 
     // Complaints (prototype — see src/mock/complaints.ts, fed by the Customer Portal)
-    if (canSeeComplaints) {
+    if (canSeeComplaints || hasRole(['branch_manager'])) {
       items.push({
         key: '/admin/complaints',
         icon: <MessageOutlined />,
@@ -299,6 +356,22 @@ export const NavMenu: React.FC = () => {
       });
     }
 
+    // ── User Management & Staff Profiles ─────────────────────────────────────
+    if (hasRole(['admin', 'branch_manager'])) {
+      items.push({
+        key: '/admin/users',
+        icon: <TeamOutlined />,
+        label: 'Staff & Users',
+      });
+    }
+
+    // ── My Profile ──────────────────────────────────────────────────────────
+    items.push({
+      key: '/profile',
+      icon: <UserOutlined />,
+      label: 'My Profile',
+    });
+
     return items;
   }, [
     hasRole,
@@ -309,6 +382,7 @@ export const NavMenu: React.FC = () => {
     pendingPayrollCount,
     newProspectsCount,
     newAppointmentsCount,
+    newCheckInsCount,
   ]);
 
   // If no user, don't render menu

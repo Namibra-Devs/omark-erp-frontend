@@ -9,7 +9,7 @@
 // different tab/page), not just on next page load.
 import { useEffect, useState } from 'react';
 import { getAllExpenses } from '@/mock/expenses';
-import { getAllBranchPayroll } from '@/mock/payroll';
+import { loadStoredPayroll } from '@/api/payroll';
 import { getAllComplaints } from '@/mock/complaints';
 import { getAllApprovalOverrides } from '@/mock/approvalStore';
 import { mockBranches, getBranchDocuments, getBranchExpenseEntries } from '@/mock/branches';
@@ -49,18 +49,19 @@ const buildMockActivityLogs = (branchId?: string): ActivityLog[] => {
     });
   });
 
-  getAllBranchPayroll()
+  loadStoredPayroll()
     .filter((p) => !branchId || p.branchId === branchId)
     .forEach((p) => {
     const branch = mockBranches.find((b) => b.id === p.branchId);
-    const bonusNote = p.bonusMinor > 0 ? ` incl. GHS ${(p.bonusMinor / 100).toLocaleString()} bonus` : '';
+    const bonusNote = (p.bonusMinor || 0) > 0 ? ` incl. GHS ${((p.bonusMinor || 0) / 100).toLocaleString()} bonus` : '';
+    const netGHS = ((p.netSalaryMinor || (p as any).netPayMinor || 0) / 100).toLocaleString();
     logs.push({
       id: `mock-payroll-${p.id}-${p.status}`,
       user: 'Accounts',
-      action: p.status === 'paid' ? 'Payroll paid' : p.status === 'processed' ? 'Payroll processed' : 'Payroll entry added',
-      details: `${p.staffName} (${branch?.name ?? p.branchId}) — GHS ${(p.netPayMinor / 100).toLocaleString()} net${bonusNote} (${p.code}) · Preview, local only`,
-      timestamp: asTimestamp(p.updatedAt),
-      type: p.status === 'paid' ? 'success' : 'info',
+      action: p.status === 'paid' ? 'Payroll paid' : p.status === 'approved' ? 'Payroll approved' : 'Payroll awaiting approval',
+      details: `${p.staffName || 'Staff Member'} (${branch?.name ?? p.branchId ?? 'Head Office'}) — GHS ${netGHS} net${bonusNote} (${p.code || 'PAYR'}) · Preview, local only`,
+      timestamp: asTimestamp(p.updatedAt || p.createdAt),
+      type: p.status === 'paid' ? 'success' : p.status === 'approved' ? 'info' : 'warning',
     });
   });
 
@@ -113,7 +114,7 @@ export interface MockActivityStats {
 
 const buildMockStats = (branchId?: string): MockActivityStats => {
   const expenses = getAllExpenses().filter((e) => !branchId || e.branchId === branchId);
-  const payroll = getAllBranchPayroll().filter((p) => !branchId || p.branchId === branchId);
+  const payroll = loadStoredPayroll().filter((p) => !branchId || p.branchId === branchId);
   // No branch attribution on complaints — only counted in the unscoped view.
   const complaints = branchId ? [] : getAllComplaints();
   const branchesInScope = branchId ? mockBranches.filter((b) => b.id === branchId) : mockBranches;
@@ -132,7 +133,7 @@ const buildMockStats = (branchId?: string): MockActivityStats => {
     totalExpensesMinor: expenses.reduce((sum, e) => sum + e.amountMinor, 0),
     internalExpensesMinor: expenses.filter((e) => e.type === 'internal').reduce((sum, e) => sum + e.amountMinor, 0),
     externalExpensesMinor: expenses.filter((e) => e.type === 'external').reduce((sum, e) => sum + e.amountMinor, 0),
-    totalBonusesMinor: payroll.reduce((sum, p) => sum + p.bonusMinor, 0),
+    totalBonusesMinor: payroll.reduce((sum, p) => sum + (p.bonusMinor || 0), 0),
     pendingPayrollCount: payroll.filter((p) => p.status === 'pending').length,
     openComplaintsCount: complaints.filter((c) => c.status !== 'resolved').length,
     pendingApprovalsCount,

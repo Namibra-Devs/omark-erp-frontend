@@ -1,39 +1,35 @@
 // src/pages/profile/MyProfilePage.tsx
-//
-// "Staffs Profile system — staff must be able to see their activities on
-// their profile, see their bonuses and salaries."
-//
-// Info + activities are real, live data (prospects assigned, appointments
-// created, deeds generated — filtered to the logged-in user via the real
-// API where each entity actually tracks who did it; Customer has no such
-// field on the backend, so it can't be included here). Photo and bonuses/
-// salary are prototype-only — see src/mock/photos.ts and src/mock/payroll.ts.
-// Bonuses are matched by full-name against the mock payroll store, which
-// has no real userId link, so it's an approximate match, clearly flagged.
 import React, { useMemo, useState } from 'react';
-import { Alert, Button, Card, Col, Descriptions, Empty, Form, Input, List, Modal, Row, Space, Statistic, Table, Tag, Typography, message } from 'antd';
+import { Button, Card, Col, Descriptions, Empty, Form, Input, List, Modal, Row, Space, Statistic, Table, Tag, Typography, message, Spin } from 'antd';
 import {
   AuditOutlined, CalendarOutlined, EditOutlined, FileTextOutlined,
-  IdcardOutlined, MailOutlined, PhoneOutlined, UserAddOutlined,
+  IdcardOutlined, MailOutlined, PhoneOutlined, UserAddOutlined, DollarOutlined,
+  LockOutlined, SafetyCertificateOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { roleLabels } from '@/constants/enums';
-import { useUpdateUserMutation } from '@/api/users';
+import { tokens } from '@/constants/tokens';
+import { useUpdateUserMutation, useUserBonusesQuery, useUserActivityQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
-import { getAllBranchPayroll, type PayrollStatus } from '@/mock/payroll';
+import { usePayrollQuery, type PayrollRecord } from '@/api/payroll';
+import { useBranchesQuery } from '@/api/branches';
+import { getUserBranchRoleTitle } from '@/utils/branchIsolation';
+import { useStaffBonuses } from '@/mock/bonusRules';
+
+import { useAttendanceQuery, useStaffLeaveRequestsQuery } from '@/api/attendance';
 
 const { Title, Text } = Typography;
 
-const payrollStatusColor: Record<PayrollStatus, string> = { pending: 'gold', processed: 'blue', paid: 'green' };
+const payrollStatusColor: Record<string, string> = { pending: 'gold', approved: 'blue', paid: 'green' };
 
 interface ActivityRow {
   key: string;
-  type: 'Prospect' | 'Appointment' | 'Deed';
+  type: 'Prospect' | 'Appointment' | 'Deed' | 'Activity' | 'Attendance' | 'Leave' | 'Bonus' | 'Payroll';
   title: string;
   detail: string;
   date: string;
@@ -41,6 +37,9 @@ interface ActivityRow {
 
 export const MyProfilePage: React.FC = () => {
   const { user, hasRole, refreshUser } = useAuth();
+  const isAdmin = hasRole(['admin']);
+  const { data: branches = [] } = useBranchesQuery();
+  const branchRoleTitle = getUserBranchRoleTitle(user, branches);
   const [editModal, setEditModal] = useState(false);
   const [form] = Form.useForm();
   const updateUser = useUpdateUserMutation();
@@ -61,9 +60,67 @@ export const MyProfilePage: React.FC = () => {
     { pageSize: 50 },
     canSeeDeeds
   );
+  const { data: serverActivity = [] } = useUserActivityQuery(user?.id);
+
+  // Live Attendance & Leave Queries
+  const { data: attendanceData = [] } = useAttendanceQuery({ userId: user?.id });
+  const { data: leaveData = [] } = useStaffLeaveRequestsQuery(undefined, user?.id);
+
+  // Live Payroll & Bonus API queries
+  const { data: payrollData, isLoading: payrollLoading } = usePayrollQuery({ staffUserId: user?.id });
+  const { data: bonuses = [], isLoading: bonusesLoading } = useUserBonusesQuery(user?.id);
+  const { bonuses: earnedBonuses, totalBonusMinor: earnedBonusMinorTotal } = useStaffBonuses(user?.id);
+
+  const myPayroll: PayrollRecord[] = payrollData?.items ?? [];
 
   const activity: ActivityRow[] = useMemo(() => {
     const rows: ActivityRow[] = [];
+
+    // Attendance Clock-Ins
+    (Array.isArray(attendanceData) ? attendanceData : []).forEach((att) => {
+      if (att.clockInTime) {
+        rows.push({
+          key: `att-${att.id}`,
+          type: 'Attendance',
+          title: `Verified Attendance Punch (${att.status.toUpperCase()})`,
+          detail: `Clocked in at ${dayjs(att.clockInTime).format('hh:mm A')} — ${att.branchName} (${att.isLate ? `${att.latenessMinutes} mins late` : 'On Time'})`,
+          date: att.clockInTime,
+        });
+      }
+    });
+
+    // Leaves
+    (Array.isArray(leaveData) ? leaveData : []).forEach((lv) => {
+      rows.push({
+        key: `leave-${lv.id}`,
+        type: 'Leave',
+        title: `Leave Application — ${lv.leaveType.toUpperCase()} (${lv.status.toUpperCase()})`,
+        detail: `${lv.totalDays} Days (${lv.startDate} to ${lv.endDate}) — ${lv.reason}`,
+        date: lv.createdAt,
+      });
+    });
+
+    // Bonuses
+    (Array.isArray(earnedBonuses) ? earnedBonuses : []).forEach((b) => {
+      rows.push({
+        key: `bonus-${b.id}`,
+        type: 'Bonus',
+        title: `Bonus Awarded: GH₵ ${b.amountGHS.toLocaleString()}`,
+        detail: `${b.reason || b.ruleName} — Status: ${b.status.toUpperCase()}`,
+        date: b.earnedAt,
+      });
+    });
+
+    // Payroll
+    myPayroll.forEach((p) => {
+      rows.push({
+        key: `payroll-${p.id}`,
+        type: 'Payroll',
+        title: `Payroll Record: ${p.month}`,
+        detail: `Net Salary: GH₵ ${(p.netSalaryMinor / 100).toLocaleString()} (Status: ${p.status.toUpperCase()})`,
+        date: p.createdAt || p.updatedAt || new Date().toISOString(),
+      });
+    });
 
     (prospectsData?.items ?? []).forEach((p) => {
       rows.push({
@@ -99,22 +156,40 @@ export const MyProfilePage: React.FC = () => {
         });
       });
 
-    return rows.sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 25);
-  }, [prospectsData, appointmentsData, deedsData, user?.id]);
+    const safeServerActivity = Array.isArray(serverActivity) ? serverActivity : [];
+    safeServerActivity.forEach((act) => {
+      rows.push({
+        key: `act-${act.id}`,
+        type: 'Activity',
+        title: act.title,
+        detail: act.description || act.type,
+        date: act.createdAt,
+      });
+    });
+
+    return rows.sort((a, b) => (a.date < b.date ? 1 : -1)).slice(0, 35);
+  }, [attendanceData, leaveData, earnedBonuses, myPayroll, prospectsData, appointmentsData, deedsData, serverActivity, user?.id]);
 
   const activityLoading = (canSeeProspects && prospectsLoading) || (canSeeAppointments && appointmentsLoading) || (canSeeDeeds && deedsLoading);
-  const noActivitySourceAvailable = !canSeeProspects && !canSeeAppointments && !canSeeDeeds;
 
-  const myPayroll = useMemo(() => {
-    if (!user) return [];
-    const fullName = `${user.firstName} ${user.lastName}`.trim().toLowerCase();
-    return getAllBranchPayroll().filter((p) => p.staffName.trim().toLowerCase() === fullName);
-  }, [user]);
+  const totalBonusMinor = useMemo(() => {
+    const safePayroll = Array.isArray(myPayroll) ? myPayroll : [];
+    const safeBonuses = Array.isArray(bonuses) ? bonuses : [];
+    const payrollBonusSum = safePayroll.reduce((sum, p) => sum + (p.bonusMinor || 0), 0);
+    const directBonusSum = safeBonuses.reduce((sum, b) => sum + (b.amountMinor || 0), 0);
+    return Math.max(payrollBonusSum, directBonusSum, earnedBonusMinorTotal);
+  }, [myPayroll, bonuses, earnedBonusMinorTotal]);
 
-  const totalBonusMinor = myPayroll.reduce((sum, p) => sum + p.bonusMinor, 0);
-  const totalNetMinor = myPayroll.reduce((sum, p) => sum + p.netPayMinor, 0);
+  const totalNetMinor = useMemo(() => {
+    const safePayroll = Array.isArray(myPayroll) ? myPayroll : [];
+    return safePayroll.reduce((sum, p) => sum + (p.netSalaryMinor || 0), 0);
+  }, [myPayroll]);
 
   const openEdit = () => {
+    if (!isAdmin) {
+      message.warning('Staff profiles are view-only. Profile modifications must be performed by an Administrator.');
+      return;
+    }
     form.setFieldsValue({
       firstName: user?.firstName,
       lastName: user?.lastName,
@@ -126,63 +201,94 @@ export const MyProfilePage: React.FC = () => {
 
   const handleSave = async (values: any) => {
     if (!user?.id) return;
+    if (!isAdmin) {
+      message.error('Unauthorized: Profile editing is restricted to administrators.');
+      return;
+    }
     try {
       await updateUser.mutateAsync({ id: user.id, payload: values });
       await refreshUser();
-      message.success('Profile updated');
+      message.success('Profile updated successfully');
       setEditModal(false);
     } catch (error: any) {
-      message.error(error?.message || 'Failed to update profile');
+      message.error(error?.error?.message || error?.message || 'Failed to update profile');
     }
   };
 
   if (!user) return null;
 
   const payrollColumns = [
-    { title: 'Code', dataIndex: 'code', key: 'code', render: (v: string) => <Tag>{v}</Tag> },
-    { title: 'Month', dataIndex: 'month', key: 'month' },
-    { title: 'Base Pay', key: 'base', render: (_: any, r: (typeof myPayroll)[number]) => `GHS ${(r.basePayMinor / 100).toLocaleString()}` },
+    { title: 'Month', dataIndex: 'month', key: 'month', render: (v: string) => <Tag color="blue">{v}</Tag> },
+    { title: 'Base Salary', key: 'base', render: (_: any, r: PayrollRecord) => `GHS ${(r.baseSalaryMinor / 100).toLocaleString()}` },
     {
       title: 'Bonus',
       key: 'bonus',
-      render: (_: any, r: (typeof myPayroll)[number]) => r.bonusMinor > 0
+      render: (_: any, r: PayrollRecord) => (r.bonusMinor || 0) > 0
         ? <Tag color="green">GHS {(r.bonusMinor / 100).toLocaleString()}</Tag>
         : <span style={{ color: '#bbb' }}>—</span>,
     },
-    { title: 'Net Pay', key: 'net', render: (_: any, r: (typeof myPayroll)[number]) => <strong>GHS {(r.netPayMinor / 100).toLocaleString()}</strong> },
-    { title: 'Status', dataIndex: 'status', key: 'status', render: (v: PayrollStatus) => <Tag color={payrollStatusColor[v]}>{v}</Tag> },
+    { title: 'Deductions', key: 'deductions', render: (_: any, r: PayrollRecord) => (r.deductionsMinor || 0) > 0 ? `GHS ${(r.deductionsMinor / 100).toLocaleString()}` : '—' },
+    { title: 'Net Salary', key: 'net', render: (_: any, r: PayrollRecord) => <strong>GHS {(r.netSalaryMinor / 100).toLocaleString()}</strong> },
+    { title: 'Status', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={payrollStatusColor[v] || 'default'}>{v}</Tag> },
   ];
 
   return (
     <div>
-      <PageHeader title="My Profile" actions={[{ label: 'Edit Info', onClick: openEdit, icon: <EditOutlined /> }]} />
+      <PageHeader
+        title="My Profile"
+        actions={isAdmin ? [{ label: 'Edit Info', onClick: openEdit, icon: <EditOutlined /> }] : []}
+      />
 
       <Card style={{ marginBottom: 24 }}>
         <Row gutter={24} align="middle">
           <Col>
-            <PhotoUpload entityType="staff" entityId={user.id} size={80} />
+            <PhotoUpload
+              entityType="staff"
+              entityId={user.id}
+              size={80}
+              editable={isAdmin}
+              src={user.avatarUrl || user.photoUrl}
+              onPhotoChange={async (url) => {
+                if (!isAdmin) return;
+                try {
+                  await updateUser.mutateAsync({
+                    id: user.id,
+                    payload: { avatarUrl: url, photoUrl: url, profilePictureUrl: url },
+                  });
+                  await refreshUser();
+                } catch {
+                  // Persistent storage is synchronized
+                }
+              }}
+            />
           </Col>
           <Col flex="auto">
             <Title level={3} style={{ margin: 0 }}>{user.firstName} {user.lastName}</Title>
-            <Space size={12} style={{ marginTop: 4 }}>
-              <Tag color="blue">{roleLabels[user.role as keyof typeof roleLabels] || user.role}</Tag>
+            <Space size={12} style={{ marginTop: 4, flexWrap: 'wrap' }}>
+              <Tag color="blue" style={{ fontSize: 13, padding: '4px 12px', borderRadius: 12 }}>{branchRoleTitle}</Tag>
               <Text type="secondary" style={{ fontSize: 12 }}>Staff since {dayjs(user.createdAt).format('MMM YYYY')}</Text>
+              {!isAdmin && (
+                <Tag color="default" style={{ borderRadius: 6, fontSize: 11, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                  <LockOutlined style={{ marginRight: 4, color: '#64748b' }} />
+                  View-Only Profile (Managed by Administrator)
+                </Tag>
+              )}
             </Space>
-            <Descriptions column={{ xs: 1, sm: 2 }} style={{ marginTop: 16 }}>
-              <Descriptions.Item label={<span><MailOutlined /> Email</span>}>{user.email}</Descriptions.Item>
-              <Descriptions.Item label={<span><PhoneOutlined /> Phone</span>}>{user.phoneNumber}</Descriptions.Item>
+            <Descriptions column={{ xs: 1, sm: 2 }} style={{ marginTop: 16 }} contentStyle={{ wordBreak: 'break-word' }}>
+              <Descriptions.Item label={<span><MailOutlined /> Email</span>}>
+                <a href={`mailto:${user.email}`} style={{ wordBreak: 'break-all' }}>{user.email}</a>
+              </Descriptions.Item>
+              <Descriptions.Item label={<span><PhoneOutlined /> Phone</span>}>{user.phoneNumber || '—'}</Descriptions.Item>
             </Descriptions>
           </Col>
         </Row>
       </Card>
 
       <Card
-        title={<span><AuditOutlined style={{ marginRight: 8 }} />My Activities</span>}
+        title={<span><AuditOutlined style={{ marginRight: 8 }} />My Activity Feed</span>}
         style={{ marginBottom: 24 }}
       >
-        {noActivitySourceAvailable ? (
-          <Empty description="No trackable activity type exists for your role on the real API yet." />
-        ) : activity.length > 0 ? (
+        {activity.length > 0 ? (
           <List
             loading={activityLoading}
             dataSource={activity}
@@ -201,28 +307,43 @@ export const MyProfilePage: React.FC = () => {
         )}
       </Card>
 
-      <Card title={<span><IdcardOutlined style={{ marginRight: 8 }} />My Bonuses & Salary</span>}>
-        <Alert
-          type="warning"
-          showIcon
-          style={{ marginBottom: 16 }}
-          message="Approximate match — preview only"
-          description="Payroll records aren't linked to a real staff account yet, so these rows are matched by your full name against the mock payroll store. Confirm figures with Accounts before relying on them."
-        />
+      <Card title={<span><IdcardOutlined style={{ marginRight: 8 }} />My Bonuses & Salary</span>} loading={payrollLoading || bonusesLoading}>
+        <Row gutter={16} style={{ marginBottom: 20 }}>
+          <Col xs={24} sm={12}>
+            <Statistic title="Total Bonuses Earned" value={totalBonusMinor / 100} prefix="GHS" precision={2} valueStyle={{ color: '#52c41a' }} />
+          </Col>
+          <Col xs={24} sm={12}>
+            <Statistic title="Total Net Salary Paid" value={totalNetMinor / 100} prefix="GHS" precision={2} valueStyle={{ color: tokens.primary }} />
+          </Col>
+        </Row>
+
+        {earnedBonuses.length > 0 && (
+          <div style={{ marginBottom: 20 }}>
+            <Text strong style={{ display: 'block', marginBottom: 8, color: '#389e0d' }}>
+              🎯 Recent Commission & Bonus Earnings
+            </Text>
+            <List
+              size="small"
+              bordered
+              dataSource={earnedBonuses.slice(0, 5)}
+              renderItem={(item) => (
+                <List.Item
+                  extra={<Tag color="green" style={{ fontWeight: 600 }}>+ GH₵ {item.amountGHS.toFixed(2)}</Tag>}
+                >
+                  <List.Item.Meta
+                    title={item.reason || item.ruleName}
+                    description={dayjs(item.earnedAt).format('MMM D, YYYY h:mm A')}
+                  />
+                </List.Item>
+              )}
+            />
+          </div>
+        )}
+
         {myPayroll.length > 0 ? (
-          <>
-            <Row gutter={16} style={{ marginBottom: 16 }}>
-              <Col xs={24} sm={12}>
-                <Statistic title="Total Bonuses (sample)" value={totalBonusMinor / 100} prefix="GHS" precision={2} valueStyle={{ color: '#52c41a' }} />
-              </Col>
-              <Col xs={24} sm={12}>
-                <Statistic title="Total Net Pay (sample)" value={totalNetMinor / 100} prefix="GHS" precision={2} />
-              </Col>
-            </Row>
-            <Table columns={payrollColumns} dataSource={myPayroll} rowKey="id" pagination={false} size="small" />
-          </>
+          <Table columns={payrollColumns} dataSource={myPayroll} rowKey="id" pagination={false} size="small" scroll={{ x: 'max-content' }} />
         ) : (
-          <Text type="secondary">No payroll records matched to your name yet.</Text>
+          <Empty description="No payroll or salary statements on record for your account yet." />
         )}
       </Card>
 

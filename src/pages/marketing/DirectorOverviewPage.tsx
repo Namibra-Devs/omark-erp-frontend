@@ -25,6 +25,8 @@ import {
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPerformance } from '@/api/dashboard';
 import { tokens } from '@/constants/tokens';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -49,9 +51,13 @@ const { Title, Text } = Typography;
 
 const COLORS = ['#1890ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2'];
 
+import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
+import { SettingOutlined } from '@ant-design/icons';
+
 export const DirectorOverviewPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, hasRole } = useAuth();
   const navigate = useNavigate();
+  const [bonusModalOpen, setBonusModalOpen] = useState(false);
   const { data, isLoading, isFetching, isError, error, refetch } = useMarketingDashboardQuery();
 
   // GET /dashboard/analytics — admin / accounts / marketing_director only,
@@ -62,11 +68,9 @@ export const DirectorOverviewPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedMarketer, setSelectedMarketer] = useState<MarketerPerformance | null>(null);
   const [viewProfileDrawer, setViewProfileDrawer] = useState(false);
+  const { data: branches = [] } = useBranchesQuery();
 
-  // ── Extract Data from API ──────────────────────────────────────────────────
-  // The API docs never published a schema for /dashboard/marketing, so only
-
-  const marketers: MarketerPerformance[] = useMemo(
+  const rawMarketers: MarketerPerformance[] = useMemo(
     () =>
       (data?.marketers ?? []).map((m: Partial<MarketerPerformance> & { id?: string; userId?: string; name: string }) => {
         const id = m.userId || m.id || '';
@@ -78,6 +82,7 @@ export const DirectorOverviewPage: React.FC = () => {
         return {
           id,
           userId: id,
+          assignedUserId: id,
           name: m.name,
           avatar: m.avatar,
           email: m.email,
@@ -102,6 +107,10 @@ export const DirectorOverviewPage: React.FC = () => {
       }),
     [data]
   );
+
+  const marketers = useMemo(() => {
+    return filterEntitiesByBranch(rawMarketers, user, branches);
+  }, [rawMarketers, user, branches]);
 
   const marketerCountForAvg = Math.max(marketers.length, 1);
 
@@ -307,6 +316,13 @@ export const DirectorOverviewPage: React.FC = () => {
       <PageHeader
         title="Marketing Director Overview"
         actions={[
+          ...(hasRole(['admin', 'marketing_director'])
+            ? [{
+                label: 'Bonus Rules',
+                onClick: () => setBonusModalOpen(true),
+                icon: <SettingOutlined />,
+              }]
+            : []),
           {
             label: 'Refresh',
             onClick: handleRefresh,
@@ -755,6 +771,11 @@ export const DirectorOverviewPage: React.FC = () => {
           </div>
         )}
       </Drawer>
+
+      <BonusRulesModal
+        open={bonusModalOpen}
+        onClose={() => setBonusModalOpen(false)}
+      />
     </div>
   );
 };

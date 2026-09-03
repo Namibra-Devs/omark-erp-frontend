@@ -41,6 +41,8 @@ import {
   ExclamationCircleOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { tokens } from '@/constants/tokens';
@@ -129,6 +131,12 @@ export const AppointmentsPage: React.FC = () => {
     status: statusFilter !== 'all' ? statusFilter as AppointmentStatus : undefined,
   });
 
+  const { data: branches = [] } = useBranchesQuery();
+  const rawAppointments = appointmentsData?.items ?? [];
+  const appointmentsList = React.useMemo(() => {
+    return filterEntitiesByBranch(rawAppointments, user, branches);
+  }, [rawAppointments, user, branches]);
+
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 100 });
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
 
@@ -141,10 +149,12 @@ export const AppointmentsPage: React.FC = () => {
   const createAppointment = useCreateAppointmentMutation();
   const updateAppointment = useUpdateAppointmentMutation();
 
-  // Combine prospects and customers safely for select dropdown
+  // Combine prospects and customers safely for select dropdown with branch isolation
   const allEntities = React.useMemo(() => {
-    const prospects = prospectsData?.items ?? [];
-    const customers = customersData?.items ?? [];
+    const rawProspects = prospectsData?.items ?? [];
+    const rawCustomers = customersData?.items ?? [];
+    const prospects = filterEntitiesByBranch(rawProspects, user, branches);
+    const customers = filterEntitiesByBranch(rawCustomers, user, branches);
 
     return [
       ...prospects.map((p) => ({
@@ -160,7 +170,7 @@ export const AppointmentsPage: React.FC = () => {
         type: 'customer' as const,
       })),
     ];
-  }, [prospectsData, customersData]);
+  }, [prospectsData, customersData, user, branches]);
 
   // Get entity details
   const getEntityDetails = (appointment: ApiAppointment) => {
@@ -182,7 +192,7 @@ export const AppointmentsPage: React.FC = () => {
         reason: values.feedback || undefined,
       };
 
-      await createAppointment.mutateAsync(appointmentData);
+      await createAppointment.mutateAsync(tagPayloadWithBranch(appointmentData, user));
       message.success('Appointment created successfully!');
       setIsModalOpen(false);
       form.resetFields();
@@ -230,8 +240,8 @@ export const AppointmentsPage: React.FC = () => {
 
   // Safely extract raw appointments
   const appointments: ApiAppointment[] = React.useMemo(() => {
-    return appointmentsData?.items ?? [];
-  }, [appointmentsData]);
+    return appointmentsList;
+  }, [appointmentsList]);
 
   // Map raw appointments to contain display-only date/time properties
   const mappedAppointments = React.useMemo(() => {
@@ -769,6 +779,11 @@ export const AppointmentsPage: React.FC = () => {
       <PageHeader
         title="Appointments"
         actions={[
+          {
+            label: 'Client Check-Ins',
+            onClick: () => navigate('/cs/check-ins'),
+            icon: <IdcardOutlined />,
+          },
           {
             label: 'Add Appointment',
             onClick: () => setIsModalOpen(true),

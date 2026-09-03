@@ -1,10 +1,11 @@
 // src/pages/notifications/NotificationsPage.tsx
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Tooltip,
   Statistic, Divider,
-  Alert, Drawer, Descriptions, Radio, Spin
+  Alert, Drawer, Descriptions, Radio, Spin, Badge, Tabs
 } from 'antd';
 import {
   EyeOutlined,
@@ -32,6 +33,9 @@ import {
   NotificationOutlined,
   BellOutlined,
   SendOutlined,
+  AlertOutlined,
+  DollarOutlined,
+  SafetyCertificateOutlined,
 } from '@ant-design/icons';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
@@ -47,6 +51,13 @@ import {
 } from '@/api/notifications';
 import { useCustomersQuery } from '@/api/customers';
 import type { Customer } from '@/types';
+import {
+  getStoredNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  clearAllNotifications,
+  type SystemNotification,
+} from '@/utils/activityNotificationEngine';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -54,12 +65,37 @@ import advancedFormat from 'dayjs/plugin/advancedFormat';
 dayjs.extend(relativeTime);
 dayjs.extend(advancedFormat);
 
+import { useAuth } from '@/contexts/AuthContext';
+
 const { Option } = Select;
 const { TextArea } = Input;
 const { Text, Title } = Typography;
 
 export const NotificationsPage: React.FC = () => {
-  // States
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const [activeMainTab, setActiveMainTab] = useState<string>('system');
+
+  // System Notifications state
+  const [systemNotifications, setSystemNotifications] = useState<SystemNotification[]>(() =>
+    getStoredNotifications(user?.id, user?.role)
+  );
+  const [sysCategory, setSysCategory] = useState<string>('all');
+  const [sysSearch, setSysSearch] = useState<string>('');
+
+  // Sync real-time notifications
+  React.useEffect(() => {
+    const refresh = () => setSystemNotifications(getStoredNotifications(user?.id, user?.role));
+    refresh();
+    window.addEventListener('omark-notifications-changed', refresh);
+    window.addEventListener('storage', refresh);
+    return () => {
+      window.removeEventListener('omark-notifications-changed', refresh);
+      window.removeEventListener('storage', refresh);
+    };
+  }, [user?.id, user?.role]);
+
+  // SMS Log States
   const [searchText, setSearchText] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | NotificationType>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | NotificationStatus>('all');
@@ -113,7 +149,26 @@ export const NotificationsPage: React.FC = () => {
     return customerMap[customerId]?.phoneNumber || '';
   };
 
-  // ── Filter Notifications ──────────────────────────────────────────────────
+  // Filter System Notifications
+  const filteredSystemNotifications = systemNotifications.filter((n) => {
+    const matchesCategory =
+      sysCategory === 'all' ||
+      (sysCategory === 'attendance' && n.category === 'attendance') ||
+      (sysCategory === 'payroll' && n.category === 'payroll') ||
+      (sysCategory === 'payment' && (n.category === 'payment' || n.category === 'deed')) ||
+      (sysCategory === 'security' && n.category === 'security');
+
+    const matchesSearch =
+      !sysSearch ||
+      n.title.toLowerCase().includes(sysSearch.toLowerCase()) ||
+      n.message.toLowerCase().includes(sysSearch.toLowerCase()) ||
+      (n.actor?.name && n.actor.name.toLowerCase().includes(sysSearch.toLowerCase())) ||
+      (n.branchName && n.branchName.toLowerCase().includes(sysSearch.toLowerCase()));
+
+    return matchesCategory && matchesSearch;
+  });
+
+  // ── Filter SMS Notifications ──────────────────────────────────────────────
   const filteredNotifications = notifications.filter(notification => {
     const customerName = getCustomerName(notification.customerId).toLowerCase();
     const matchesSearch = customerName.includes(searchText.toLowerCase()) ||
@@ -133,6 +188,15 @@ export const NotificationsPage: React.FC = () => {
     failed: notifications.filter(n => n.status === 'failed').length,
     dueSoon: notifications.filter(n => n.type === 'contribution_due_soon').length,
     overdue: notifications.filter(n => n.type === 'contribution_overdue').length,
+  };
+
+  const sysStats = {
+    total: systemNotifications.length,
+    unread: systemNotifications.filter((n) => !n.read).length,
+    attendance: systemNotifications.filter((n) => n.category === 'attendance').length,
+    payroll: systemNotifications.filter((n) => n.category === 'payroll').length,
+    payments: systemNotifications.filter((n) => n.category === 'payment' || n.category === 'deed').length,
+    security: systemNotifications.filter((n) => n.category === 'security').length,
   };
 
   // ── Handlers ──────────────────────────────────────────────────────────────
@@ -552,158 +616,470 @@ export const NotificationsPage: React.FC = () => {
     );
   };
 
+  const sysColumns = [
+    {
+      title: 'Event',
+      key: 'event',
+      width: 280,
+      render: (_: any, r: SystemNotification) => (
+        <Space direction="vertical" size={2}>
+          <Space>
+            <Tag
+              color={
+                r.category === 'attendance'
+                  ? 'cyan'
+                  : r.category === 'payroll'
+                  ? 'green'
+                  : r.category === 'payment' || r.category === 'deed'
+                  ? 'purple'
+                  : 'orange'
+              }
+              style={{ borderRadius: 6, fontWeight: 600, textTransform: 'uppercase', fontSize: 10 }}
+            >
+              {r.category}
+            </Tag>
+            <Tag
+              color={r.type === 'error' ? 'error' : r.type === 'warning' ? 'warning' : r.type === 'success' ? 'success' : 'processing'}
+              style={{ borderRadius: 6, fontSize: 10 }}
+            >
+              {r.type.toUpperCase()}
+            </Tag>
+            {!r.read && <Badge status="processing" />}
+          </Space>
+          <Text strong style={{ fontSize: 13, color: '#0f172a', display: 'block', marginTop: 4 }}>
+            {r.title}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Details & Context',
+      key: 'message',
+      render: (_: any, r: SystemNotification) => (
+        <div>
+          <Text style={{ fontSize: 13, color: '#334155' }}>{r.message}</Text>
+          {r.branchName && (
+            <div style={{ marginTop: 4 }}>
+              <Tag color="blue" style={{ fontSize: 11, borderRadius: 6 }}>
+                📍 {r.branchName}
+              </Tag>
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Initiated By',
+      key: 'actor',
+      width: 180,
+      render: (_: any, r: SystemNotification) => (
+        <Space>
+          <Avatar size="small" style={{ backgroundColor: '#2E5E8C' }}>
+            {r.actor?.name?.[0]?.toUpperCase() || 'S'}
+          </Avatar>
+          <div>
+            <Text strong style={{ fontSize: 12 }}>
+              {r.actor?.name || 'System Auto-Engine'}
+            </Text>
+            {r.actor?.role && (
+              <div>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  {r.actor.role.replace(/_/g, ' ')}
+                </Text>
+              </div>
+            )}
+          </div>
+        </Space>
+      ),
+    },
+    {
+      title: 'Time',
+      key: 'timestamp',
+      width: 160,
+      render: (_: any, r: SystemNotification) => (
+        <Tooltip title={dayjs(r.timestamp).format('MMMM DD, YYYY HH:mm:ss')}>
+          <div>
+            <Text style={{ fontSize: 12, fontWeight: 500 }}>{dayjs(r.timestamp).fromNow()}</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {dayjs(r.timestamp).format('MMM DD, HH:mm')}
+            </Text>
+          </div>
+        </Tooltip>
+      ),
+      sorter: (a: SystemNotification, b: SystemNotification) => dayjs(a.timestamp).unix() - dayjs(b.timestamp).unix(),
+      defaultSortOrder: 'descend' as const,
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 140,
+      fixed: 'right' as const,
+      render: (_: any, r: SystemNotification) => (
+        <Space>
+          {r.link && (
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              onClick={() => {
+                markNotificationAsRead(r.id);
+                setSystemNotifications(getStoredNotifications());
+                navigate(r.link!);
+              }}
+            >
+              Open Module
+            </Button>
+          )}
+          {!r.read && (
+            <Button
+              size="small"
+              onClick={() => {
+                markNotificationAsRead(r.id);
+                setSystemNotifications(getStoredNotifications());
+              }}
+            >
+              Mark Read
+            </Button>
+          )}
+        </Space>
+      ),
+    },
+  ];
+
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
-      <PageHeader
-        title="SMS Notification Log"
-        actions={[
-          {
-            label: 'Send Test SMS',
-            onClick: () => setTestSMSModal(true),
-            icon: <PhoneOutlined />,
-          },
-          {
-            label: 'Export',
-            onClick: () => setExportModal(true),
-            icon: <ExportOutlined />,
-          },
-          {
-            label: 'Refresh',
-            onClick: () => refetchNotifications(),
-            icon: <ReloadOutlined />,
-          },
-        ]}
-      />
-
-      {/* Stats Cards */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Total Notifications"
-              value={stats.total}
-              prefix={<NotificationOutlined />}
-              valueStyle={{ color: tokens.primary }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Sent"
-              value={stats.sent}
-              prefix={<CheckCircleOutlined />}
-              valueStyle={{ color: '#52c41a' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Pending"
-              value={stats.pending}
-              prefix={<ClockCircleOutlined />}
-              valueStyle={{ color: '#faad14' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Failed"
-              value={stats.failed}
-              prefix={<CloseCircleOutlined />}
-              valueStyle={{ color: '#ff4d4f' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Due Soon"
-              value={stats.dueSoon}
-              prefix={<BellOutlined />}
-              valueStyle={{ color: '#1890ff' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} md={4}>
-          <Card size="small">
-            <Statistic
-              title="Overdue"
-              value={stats.overdue}
-              prefix={<WarningOutlined />}
-              valueStyle={{ color: '#ff4d4f' }}
-            />
-          </Card>
-        </Col>
-      </Row>
-
-      {/* Filters */}
-      <Card style={{ marginBottom: 16 }}>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={8}>
-            <Input
-              placeholder="Search by customer, phone, or message"
-              prefix={<SearchOutlined />}
-              value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
-              allowClear
-              size="middle"
-            />
-          </Col>
-          <Col xs={12} md={5}>
-            <Select
-              style={{ width: '100%' }}
-              placeholder="Filter by type"
-              value={typeFilter}
-              onChange={setTypeFilter}
-              size="middle"
-            >
-              <Option value="all">All Types</Option>
-              <Option value="contribution_due_soon">Due Soon</Option>
-              <Option value="contribution_overdue">Overdue</Option>
-            </Select>
-          </Col>
-          <Col xs={12} md={5}>
-            <Select
-              style={{ width: '100%' }}
-              placeholder="Filter by status"
-              value={statusFilter}
-              onChange={setStatusFilter}
-              size="middle"
-            >
-              <Option value="all">All Statuses</Option>
-              <Option value="sent">Sent</Option>
-              <Option value="pending">Pending</Option>
-              <Option value="failed">Failed</Option>
-            </Select>
-          </Col>
-          <Col xs={24} md={6}>
-            <Text type="secondary">
-              Total: {filteredNotifications.length} notifications
-            </Text>
-          </Col>
-        </Row>
-      </Card>
-
-      {/* Table */}
-      <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
-        <Table
-          columns={columns}
-          dataSource={filteredNotifications}
-          rowKey="id"
-          loading={notificationsLoading}
-          size="middle"
-          scroll={{ x: 1200 }}
-          pagination={{
-            pageSize: 10,
-            showSizeChanger: true,
-            showTotal: (total) => `Total ${total} notifications`,
-            responsive: true,
-          }}
+      <div style={{ marginBottom: 16 }}>
+        <Tabs
+          activeKey={activeMainTab}
+          onChange={setActiveMainTab}
+          type="card"
+          size="large"
+          items={[
+            {
+              key: 'system',
+              label: (
+                <Space>
+                  <BellOutlined />
+                  <span>Live System Activity & Notifications</span>
+                  {sysStats.unread > 0 && <Badge count={sysStats.unread} style={{ backgroundColor: '#ff4d4f' }} />}
+                </Space>
+              ),
+            },
+            {
+              key: 'sms',
+              label: (
+                <Space>
+                  <PhoneOutlined />
+                  <span>Customer SMS Delivery Logs</span>
+                  <Badge count={stats.pending} style={{ backgroundColor: '#faad14' }} />
+                </Space>
+              ),
+            },
+          ]}
         />
       </div>
+
+      {activeMainTab === 'system' ? (
+        <>
+          <PageHeader
+            title="Unified Activity & Notifications Center"
+            actions={[
+              {
+                label: 'Mark All Read',
+                onClick: () => {
+                  markAllNotificationsAsRead();
+                  setSystemNotifications(getStoredNotifications());
+                  message.success('All notifications marked as read');
+                },
+                icon: <CheckCircleOutlined />,
+              },
+              {
+                label: 'Clear History',
+                onClick: () => {
+                  clearAllNotifications();
+                  setSystemNotifications(getStoredNotifications());
+                  message.info('Notification history cleared');
+                },
+                icon: <CloseCircleOutlined />,
+              },
+              {
+                label: 'Refresh',
+                onClick: () => setSystemNotifications(getStoredNotifications()),
+                icon: <ReloadOutlined />,
+              },
+            ]}
+          />
+
+          {/* Stats Cards for System Notifications */}
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Total Events"
+                  value={sysStats.total}
+                  prefix={<BellOutlined />}
+                  valueStyle={{ color: tokens.primary }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Unread Alerts"
+                  value={sysStats.unread}
+                  prefix={<AlertOutlined />}
+                  valueStyle={{ color: sysStats.unread > 0 ? '#ff4d4f' : '#52c41a' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Attendance & Shifts"
+                  value={sysStats.attendance}
+                  prefix={<ClockCircleOutlined />}
+                  valueStyle={{ color: '#0284c7' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Payroll & Bonuses"
+                  value={sysStats.payroll}
+                  prefix={<DollarOutlined />}
+                  valueStyle={{ color: '#52c41a' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Sales & Deeds"
+                  value={sysStats.payments}
+                  prefix={<FileTextOutlined />}
+                  valueStyle={{ color: '#722ed1' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Security Sentinel"
+                  value={sysStats.security}
+                  prefix={<SafetyCertificateOutlined />}
+                  valueStyle={{ color: '#faad14' }}
+                />
+              </Card>
+            </Col>
+          </Row>
+
+          {/* Filters */}
+          <Card style={{ marginBottom: 16 }}>
+            <Row gutter={[16, 16]} align="middle">
+              <Col xs={24} md={10}>
+                <Input
+                  placeholder="Search events by title, staff, branch, or message..."
+                  prefix={<SearchOutlined />}
+                  value={sysSearch}
+                  onChange={(e) => setSysSearch(e.target.value)}
+                  allowClear
+                  size="middle"
+                />
+              </Col>
+              <Col xs={24} md={14}>
+                <Space wrap>
+                  <Tag.CheckableTag checked={sysCategory === 'all'} onChange={() => setSysCategory('all')}>
+                    All ({systemNotifications.length})
+                  </Tag.CheckableTag>
+                  <Tag.CheckableTag checked={sysCategory === 'attendance'} onChange={() => setSysCategory('attendance')}>
+                    🕒 Attendance ({sysStats.attendance})
+                  </Tag.CheckableTag>
+                  <Tag.CheckableTag checked={sysCategory === 'payroll'} onChange={() => setSysCategory('payroll')}>
+                    💰 Payroll & Bonuses ({sysStats.payroll})
+                  </Tag.CheckableTag>
+                  <Tag.CheckableTag checked={sysCategory === 'payment'} onChange={() => setSysCategory('payment')}>
+                    📄 Sales & Deeds ({sysStats.payments})
+                  </Tag.CheckableTag>
+                  <Tag.CheckableTag checked={sysCategory === 'security'} onChange={() => setSysCategory('security')}>
+                    🛡️ Security Sentinel ({sysStats.security})
+                  </Tag.CheckableTag>
+                </Space>
+              </Col>
+            </Row>
+          </Card>
+
+          {/* System Notifications Table */}
+          <div style={{ overflowX: 'auto', maxWidth: '100%', marginBottom: 32 }}>
+            <Table
+              columns={sysColumns}
+              dataSource={filteredSystemNotifications}
+              rowKey="id"
+              size="middle"
+              scroll={{ x: 1000 }}
+              pagination={{
+                pageSize: 15,
+                showSizeChanger: true,
+                showTotal: (total) => `Total ${total} events & notifications`,
+              }}
+            />
+          </div>
+        </>
+      ) : (
+        <>
+          <PageHeader
+            title="SMS Notification Log"
+            actions={[
+              {
+                label: 'Send Test SMS',
+                onClick: () => setTestSMSModal(true),
+                icon: <PhoneOutlined />,
+              },
+              {
+                label: 'Export',
+                onClick: () => setExportModal(true),
+                icon: <ExportOutlined />,
+              },
+              {
+                label: 'Refresh',
+                onClick: () => refetchNotifications(),
+                icon: <ReloadOutlined />,
+              },
+            ]}
+          />
+
+          {/* Stats Cards */}
+          <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Total Notifications"
+                  value={stats.total}
+                  prefix={<NotificationOutlined />}
+                  valueStyle={{ color: tokens.primary }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Sent"
+                  value={stats.sent}
+                  prefix={<CheckCircleOutlined />}
+                  valueStyle={{ color: '#52c41a' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Pending"
+                  value={stats.pending}
+                  prefix={<ClockCircleOutlined />}
+                  valueStyle={{ color: '#faad14' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Failed"
+                  value={stats.failed}
+                  prefix={<CloseCircleOutlined />}
+                  valueStyle={{ color: '#ff4d4f' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Due Soon"
+                  value={stats.dueSoon}
+                  prefix={<BellOutlined />}
+                  valueStyle={{ color: '#1890ff' }}
+                />
+              </Card>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Card size="small">
+                <Statistic
+                  title="Overdue"
+                  value={stats.overdue}
+                  prefix={<WarningOutlined />}
+                  valueStyle={{ color: '#ff4d4f' }}
+                />
+              </Card>
+            </Col>
+          </Row>
+
+          {/* Filters */}
+          <Card style={{ marginBottom: 16 }}>
+            <Row gutter={[16, 16]}>
+              <Col xs={24} md={8}>
+                <Input
+                  placeholder="Search by customer, phone, or message"
+                  prefix={<SearchOutlined />}
+                  value={searchText}
+                  onChange={(e) => setSearchText(e.target.value)}
+                  allowClear
+                  size="middle"
+                />
+              </Col>
+              <Col xs={12} md={5}>
+                <Select
+                  style={{ width: '100%' }}
+                  placeholder="Filter by type"
+                  value={typeFilter}
+                  onChange={setTypeFilter}
+                  size="middle"
+                >
+                  <Option value="all">All Types</Option>
+                  <Option value="contribution_due_soon">Due Soon</Option>
+                  <Option value="contribution_overdue">Overdue</Option>
+                </Select>
+              </Col>
+              <Col xs={12} md={5}>
+                <Select
+                  style={{ width: '100%' }}
+                  placeholder="Filter by status"
+                  value={statusFilter}
+                  onChange={setStatusFilter}
+                  size="middle"
+                >
+                  <Option value="all">All Statuses</Option>
+                  <Option value="sent">Sent</Option>
+                  <Option value="pending">Pending</Option>
+                  <Option value="failed">Failed</Option>
+                </Select>
+              </Col>
+              <Col xs={24} md={6}>
+                <Text type="secondary">
+                  Total: {filteredNotifications.length} notifications
+                </Text>
+              </Col>
+            </Row>
+          </Card>
+
+          {/* Table */}
+          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+            <Table
+              columns={columns}
+              dataSource={filteredNotifications}
+              rowKey="id"
+              loading={notificationsLoading}
+              size="middle"
+              scroll={{ x: 1200 }}
+              pagination={{
+                pageSize: 10,
+                showSizeChanger: true,
+                showTotal: (total) => `Total ${total} notifications`,
+                responsive: true,
+              }}
+            />
+          </div>
+        </>
+      )}
 
       {/* Send Test SMS Modal */}
       <Modal

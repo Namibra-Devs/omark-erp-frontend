@@ -1,5 +1,5 @@
 // src/pages/marketing/ProspectsPage.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin, Popconfirm, Tooltip, Alert } from 'antd';
 import { PlusOutlined, EyeOutlined, SearchOutlined, EditOutlined, DeleteOutlined, DollarOutlined, CloseOutlined } from '@ant-design/icons';
@@ -12,6 +12,8 @@ import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
 import { useUsersQuery } from '@/api/users';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { markSeen } from '@/mock/seenTracker';
 import { PendingPhotoUpload, PhotoUpload } from '@/components/shared/PhotoUpload';
 import { setPhoto } from '@/mock/photos';
@@ -20,14 +22,23 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { Text } = Typography;
 
+import dayjs from 'dayjs';
+import { DatePicker } from 'antd';
+import { SettingOutlined, TrophyOutlined, CalendarOutlined } from '@ant-design/icons';
+import { awardBonusForEvent, useStaffBonuses } from '@/mock/bonusRules';
+import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
+
 export const ProspectsPage: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { user, hasRole } = useAuth();
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [bonusModalOpen, setBonusModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'weekly' | 'monthly' | 'yearly' | 'custom'>('all');
+  const [customDateRange, setCustomDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [editModal, setEditModal] = useState(false);
@@ -35,6 +46,8 @@ export const ProspectsPage: React.FC = () => {
   const [convertModal, setConvertModal] = useState(false);
   const [prospectToConvert, setProspectToConvert] = useState<Prospect | null>(null);
   const [editForm] = Form.useForm();
+
+  const { totalBonusGHS: userBonusTotal } = useStaffBonuses(user?.id);
 
   // Drill-down from the Director Overview's per-marketer table ("View
   // Prospects") lands here with these params — apply them as a filter
@@ -65,7 +78,7 @@ export const ProspectsPage: React.FC = () => {
   // doesn't strand the user on a page that no longer exists.
   useEffect(() => {
     setPage(1);
-  }, [searchText, statusFilter, assignedUserIdFilter]);
+  }, [searchText, statusFilter, assignedUserIdFilter, dateFilter, customDateRange]);
 
   // Opening this page clears the "new prospects" nav badge (see NavMenu.tsx).
   useEffect(() => {
@@ -83,29 +96,74 @@ export const ProspectsPage: React.FC = () => {
   const { data: marketingStaffData } = useUsersQuery(isAdmin ? { role: 'marketing_staff' } : undefined);
   const marketingStaff = isAdmin ? (marketingStaffData?.items ?? []) : [];
 
-  const prospectList: Prospect[] = prospectsData?.items ?? [];
+  const { data: branches = [] } = useBranchesQuery();
+  const rawProspectList: Prospect[] = prospectsData?.items ?? [];
+  const prospectList: Prospect[] = filterEntitiesByBranch(rawProspectList, user, branches);
+
+  // Date-wise filtering (Daily, Weekly, Monthly, Yearly, Custom)
+  const filteredByDateList = useMemo(() => {
+    if (dateFilter === 'all') return prospectList;
+    const now = dayjs();
+    return prospectList.filter((p) => {
+      if (!p.createdAt) return true;
+      const created = dayjs(p.createdAt);
+      if (dateFilter === 'today') {
+        return created.isSame(now, 'day');
+      }
+      if (dateFilter === 'weekly') {
+        return created.isSame(now, 'week');
+      }
+      if (dateFilter === 'monthly') {
+        return created.isSame(now, 'month');
+      }
+      if (dateFilter === 'yearly') {
+        return created.isSame(now, 'year');
+      }
+      if (dateFilter === 'custom' && customDateRange && customDateRange[0] && customDateRange[1]) {
+        return (
+          (created.isAfter(customDateRange[0].startOf('day')) || created.isSame(customDateRange[0].startOf('day'))) &&
+          (created.isBefore(customDateRange[1].endOf('day')) || created.isSame(customDateRange[1].endOf('day')))
+        );
+      }
+      return true;
+    });
+  }, [prospectList, dateFilter, customDateRange]);
 
   const handleAddProspect = async (values: any) => {
     try {
       // `photo` isn't a real prospect field — POST /prospects would reject
       // it, so pull it out before spreading the rest into the payload.
       const { photo, ...prospectValues } = values;
-      const newProspect = await createProspectMutation.mutateAsync({
-        ...prospectValues,
-        source: 'marketing',
-        // Admins explicitly choose the marketer via the form below. Anyone
-        // else creating their own prospect self-assigns — leaving this as
-        // the logged-in user's id, as before.
-        assignedUserId: isAdmin ? values.assignedUserId : user?.id,
-      });
+      const newProspect = await createProspectMutation.mutateAsync(
+        tagPayloadWithBranch(
+          {
+            ...prospectValues,
+            source: 'marketing',
+            assignedUserId: isAdmin ? values.assignedUserId : user?.id,
+          },
+          user
+        )
+      );
       // Photo upload has no real endpoint (see src/mock/photos.ts) —
       // applied locally once we have the prospect's real id back.
       if (photo && (newProspect as any)?.id) {
         setPhoto('prospect', (newProspect as any).id, photo);
       }
+
+      // Automatically award bonus for prospect addition
+      const bonusAward = awardBonusForEvent('prospect_added', user, {
+        prospectName: `${values.firstName} ${values.lastName}`,
+        prospectId: (newProspect as any)?.id,
+      });
+
       setIsModalOpen(false);
       form.resetFields();
-      message.success('Prospect added successfully!');
+
+      if (bonusAward) {
+        message.success(`Prospect added successfully! 🎉 You earned a GH₵${bonusAward.amountGHS.toFixed(2)} bonus!`);
+      } else {
+        message.success('Prospect added successfully!');
+      }
     } catch (err: any) {
       console.error('Failed to add prospect:', err);
       message.error(err.error?.message || 'Failed to add prospect. Please try again.');
@@ -270,6 +328,19 @@ export const ProspectsPage: React.FC = () => {
       <PageHeader
         title="Marketing Prospects"
         actions={[
+          ...(hasRole(['admin'])
+            ? [{
+                label: 'Bonus Rules',
+                onClick: () => setBonusModalOpen(true),
+                icon: <SettingOutlined />,
+              }]
+            : userBonusTotal > 0
+            ? [{
+                label: `Earned Bonus: GH₵${userBonusTotal.toFixed(2)}`,
+                onClick: () => navigate('/profile'),
+                icon: <TrophyOutlined style={{ color: '#faad14' }} />,
+              }]
+            : []),
           // POST /prospects is only granted to admin/marketing_staff/customer_service
           // on the backend — marketing_director can view this page but can't create,
           // so the button is hidden rather than showing an action that always 403s.
@@ -297,12 +368,12 @@ export const ProspectsPage: React.FC = () => {
         />
       )}
 
-      {/* Filters */}
+      {/* Filters (Search, Status, and Date-wise: Daily, Weekly, Monthly, Yearly, Custom) */}
       <Card style={{ marginBottom: 16 }}>
-        <Row gutter={[8, 8]}>
-          <Col xs={24} sm={12} md={8}>
+        <Row gutter={[12, 12]} align="middle">
+          <Col xs={24} sm={12} md={6}>
             <Input
-              placeholder="Search..."
+              placeholder="Search prospects..."
               prefix={<SearchOutlined />}
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
@@ -310,7 +381,7 @@ export const ProspectsPage: React.FC = () => {
               size="middle"
             />
           </Col>
-          <Col xs={24} sm={12} md={8}>
+          <Col xs={24} sm={12} md={5}>
             <Select
               style={{ width: '100%' }}
               placeholder="Filter by status"
@@ -329,9 +400,39 @@ export const ProspectsPage: React.FC = () => {
               <Option value="purchased">Purchased</Option>
             </Select>
           </Col>
-          <Col xs={24} sm={24} md={8}>
-            <Text type="secondary" style={{ display: 'block', textAlign: 'right' }}>
-              Total: {prospectsData?.total ?? 0} prospects
+          <Col xs={24} sm={12} md={5}>
+            <Select
+              style={{ width: '100%' }}
+              placeholder="Date Filter"
+              value={dateFilter}
+              onChange={(val) => {
+                setDateFilter(val);
+                if (val !== 'custom') setCustomDateRange(null);
+              }}
+              size="middle"
+              prefix={<CalendarOutlined style={{ color: '#8c8c8c' }} />}
+            >
+              <Option value="all">📅 All Time</Option>
+              <Option value="today">☀️ Daily (Today)</Option>
+              <Option value="weekly">📆 Weekly (This Week)</Option>
+              <Option value="monthly">🗓️ Monthly (This Month)</Option>
+              <Option value="yearly">📊 Yearly (This Year)</Option>
+              <Option value="custom">🎯 Custom Date Range</Option>
+            </Select>
+          </Col>
+          {dateFilter === 'custom' && (
+            <Col xs={24} sm={12} md={5}>
+              <DatePicker.RangePicker
+                style={{ width: '100%' }}
+                value={customDateRange}
+                onChange={(dates: any) => setCustomDateRange(dates)}
+                format="YYYY-MM-DD"
+              />
+            </Col>
+          )}
+          <Col xs={24} sm={24} md={dateFilter === 'custom' ? 3 : 8}>
+            <Text type="secondary" style={{ display: 'block', textAlign: 'right', fontWeight: 500 }}>
+              Showing {filteredByDateList.length} of {prospectList.length} prospects
             </Text>
           </Col>
         </Row>
@@ -341,7 +442,7 @@ export const ProspectsPage: React.FC = () => {
       <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
         <Table
           columns={columns}
-          dataSource={prospectList}
+          dataSource={filteredByDateList}
           rowKey="id"
           loading={isLoading}
           size="middle"
@@ -349,7 +450,7 @@ export const ProspectsPage: React.FC = () => {
           pagination={{
             current: page,
             pageSize,
-            total: prospectsData?.total ?? 0,
+            total: filteredByDateList.length,
             showSizeChanger: true,
             showTotal: (total) => `Total ${total} prospects`,
             responsive: true,
@@ -364,6 +465,12 @@ export const ProspectsPage: React.FC = () => {
           })}
         />
       </div>
+
+      {/* Bonus Rules Configuration Modal (Admin only) */}
+      <BonusRulesModal
+        open={bonusModalOpen}
+        onClose={() => setBonusModalOpen(false)}
+      />
 
       {/* Add Prospect Modal */}
       <Modal

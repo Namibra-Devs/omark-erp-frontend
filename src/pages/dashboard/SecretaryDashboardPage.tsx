@@ -14,6 +14,7 @@ import {
   PhoneOutlined,
   MailOutlined,
   UserOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
@@ -21,6 +22,8 @@ import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation
 import { usePaymentPlansQuery } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
 import { usePropertiesQuery } from '@/api/properties';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { roleLabels, progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
@@ -34,6 +37,7 @@ const { Option } = Select;
 export const SecretaryDashboardPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const { data: branches = [] } = useBranchesQuery();
   
   // ── API Queries ────────────────────────────────────────────────────────────
   const { 
@@ -73,10 +77,14 @@ export const SecretaryDashboardPage: React.FC = () => {
   const [paymentForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
 
-  // ── Data Extraction ──────────────────────────────────────────────────────
-  const customers = customersData?.items ?? [];
-  const paymentPlans = paymentPlansData?.items ?? [];
-  const properties = propertiesData?.items ?? [];
+  // ── Data Extraction with Branch Isolation ─────────────────────────────────────
+  const rawCustomers = customersData?.items ?? [];
+  const rawPaymentPlans = paymentPlansData?.items ?? [];
+  const rawProperties = propertiesData?.items ?? [];
+
+  const customers = filterEntitiesByBranch(rawCustomers, user, branches);
+  const paymentPlans = filterEntitiesByBranch(rawPaymentPlans, user, branches);
+  const properties = filterEntitiesByBranch(rawProperties, user, branches);
 
   // The defaulter/due-soon rows only carry a customerId, not a planId — look
   // up the matching plan so we can record a payment against the *existing*
@@ -85,20 +93,36 @@ export const SecretaryDashboardPage: React.FC = () => {
   const selectedPlan = paymentPlans.find((p: any) => p.customerId === selectedCustomer?.customerId);
   const recordPayment = useRecordPaymentMutation(selectedPlan?.id ?? '');
 
-  // ── Dashboard Data ──────────────────────────────────────────────────────
+  // ── Dashboard Data (Branch-Isolated) ──────────────────────────────────
+  const rawDefaulters = dashboardData?.defaulters ?? [];
+  const rawDueSoon = dashboardData?.dueSoon ?? [];
+  const defaulters = filterEntitiesByBranch(rawDefaulters, user, branches);
+  const dueSoon = filterEntitiesByBranch(rawDueSoon, user, branches);
+
+  const activePlansCount = paymentPlans.length;
+  const calculatedMonthlyRevenue = paymentPlans.reduce(
+    (sum: number, p: any) => sum + (p.monthlyInstallmentMinor || Math.round((p.totalAmountMinor || 1200000) / (p.numMonths || 12))),
+    0
+  );
+
+  const redCount = paymentPlans.filter((p: any) => p.progressBand === 'red' || (p.balanceMinor && p.balanceMinor > 2000000)).length;
+  const yellowCount = paymentPlans.filter((p: any) => p.progressBand === 'yellow' || (p.balanceMinor && p.balanceMinor > 1000000 && p.balanceMinor <= 2000000)).length;
+  const lightGreenCount = paymentPlans.filter((p: any) => p.progressBand === 'light_green' || (p.balanceMinor && p.balanceMinor > 500000 && p.balanceMinor <= 1000000)).length;
+  const greenCount = paymentPlans.filter((p: any) => p.progressBand === 'green' || p.balanceMinor === 0).length;
+
   const dashboard = {
-    totalCustomers: dashboardData?.totalCustomers ?? 0,
-    activePlans: dashboardData?.activePlans ?? 0,
-    totalDeeds: dashboardData?.totalDeeds ?? 0,
-    monthlyRevenue: dashboardData?.monthlyRevenue ?? 0,
+    totalCustomers: customers.length,
+    activePlans: activePlansCount,
+    totalDeeds: properties.filter((p: any) => p.deedGenerated || p.status === 'sold').length,
+    monthlyRevenue: calculatedMonthlyRevenue > 0 ? calculatedMonthlyRevenue : (dashboardData?.monthlyRevenue ?? 0),
     byBand: {
-      red: dashboardData?.byBand?.red ?? 0,
-      yellow: dashboardData?.byBand?.yellow ?? 0,
-      light_green: dashboardData?.byBand?.light_green ?? 0,
-      green: dashboardData?.byBand?.green ?? 0,
+      red: redCount,
+      yellow: yellowCount,
+      light_green: lightGreenCount,
+      green: greenCount,
     },
-    defaulters: dashboardData?.defaulters ?? [],
-    dueSoon: dashboardData?.dueSoon ?? [],
+    defaulters,
+    dueSoon,
   };
 
   const bandConfig = [
@@ -330,7 +354,13 @@ export const SecretaryDashboardPage: React.FC = () => {
           <Title level={2}>Secretary Dashboard</Title>
           <Text type="secondary">Welcome back, {user?.firstName}! Here's your overview</Text>
         </div>
-        <Space>
+        <Space wrap>
+          <Button 
+            icon={<IdcardOutlined />} 
+            onClick={() => navigate('/cs/check-ins')}
+          >
+            Client Check-Ins
+          </Button>
           <Button 
             icon={<PlusOutlined />} 
             type="primary"

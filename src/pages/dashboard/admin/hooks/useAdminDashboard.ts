@@ -7,6 +7,7 @@ import {
   useUsersQuery, 
   useUpdateUserMutation, 
   useCreateUserMutation,
+  useUpdateUserAssignmentMutation,
   useDeleteUserMutation,
   usersKeys, 
   type UserEntity 
@@ -24,12 +25,11 @@ import { useMockActivityFeed } from './useMockActivityFeed';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActivityLogQuery } from '@/api/activityLog';
 
+import { getStoredActivities } from '@/utils/activityNotificationEngine';
+
 // There is no activity-log endpoint anywhere in this API — "recent
-// activity" spanning prospects/appointments/properties/customers/deeds is
-// built here by fetching the latest page of each real entity list and
-// merging them into one timeline, sorted by their actual createdAt. This
-// is genuinely live data, just assembled client-side instead of coming
-// from a single backend feed.
+// activity" spanning attendance/payroll/prospects/appointments/properties/customers/deeds is
+// built here by fetching real entity streams and merging them into one timeline, sorted by their actual timestamp.
 type LiveActivityEntry = ActivityLog & { _sortKey: string };
 
 const buildLiveActivityLog = (params: {
@@ -40,13 +40,21 @@ const buildLiveActivityLog = (params: {
   deeds: Array<{ id: string; generatedAt: string; createdAt?: string }>;
 }): ActivityLog[] => {
   const formatTs = (iso: string) => iso ? iso.replace('T', ' ').slice(0, 19) : '';
-  // A record modified more than a minute after it was created is treated as
-  // a genuine update (status change, edit, etc.) rather than noise from the
-  // create request itself settling.
   const wasUpdatedSinceCreation = (createdAt: string, updatedAt?: string) =>
     !!updatedAt && Math.abs(new Date(updatedAt).getTime() - new Date(createdAt).getTime()) > 60_000;
 
+  const storedActivities = getStoredActivities().map((sa): LiveActivityEntry => ({
+    id: sa.id,
+    user: sa.user || 'System',
+    action: sa.action,
+    details: sa.details,
+    timestamp: formatTs(sa.timestamp),
+    type: sa.type,
+    _sortKey: sa.timestamp,
+  }));
+
   const entries: LiveActivityEntry[] = [
+    ...storedActivities,
     ...params.prospects.map((p): LiveActivityEntry => ({
       id: `prospect-${p.id}`,
       user: 'System',
@@ -56,8 +64,7 @@ const buildLiveActivityLog = (params: {
       type: 'info',
       _sortKey: p.createdAt,
     })),
-    // Status changes, edits, etc. — the API only exposes `updatedAt`, not
-    // what changed, so this is reported generically as "now: <status>".
+    // Status changes, edits, etc.
     ...params.prospects
       .filter((p) => wasUpdatedSinceCreation(p.createdAt, p.updatedAt))
       .map((p): LiveActivityEntry => ({
@@ -121,6 +128,7 @@ const buildLiveActivityLog = (params: {
   return entries
     .filter((e) => e._sortKey)
     .sort((a, b) => (a._sortKey < b._sortKey ? 1 : -1))
+    .slice(0, 40)
     .map(({ _sortKey, ...rest }) => rest);
 };
 
@@ -211,6 +219,7 @@ export const useAdminDashboard = () => {
   // ── Mutations ───────────────────────────────────────────────────────────
   const createUserMutation = useCreateUserMutation();
   const updateUserMutation = useUpdateUserMutation();
+  const updateUserAssignmentMutation = useUpdateUserAssignmentMutation();
   const deleteUserMutation = useDeleteUserMutation();
 
   // ── Local UI state ─────────────────────────────────────────────────────
@@ -412,12 +421,20 @@ export const useAdminDashboard = () => {
     };
 
     createUserMutation.mutate(payload, {
-      onSuccess: (response) => {
+      onSuccess: async (response) => {
         console.log('✅ Registration successful:', response);
         if (response?.id) {
           setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
           if (branchId || departmentId) {
             setStaffAssignment(response.id, { branchId, departmentId });
+            try {
+              await updateUserAssignmentMutation.mutateAsync({
+                userId: response.id,
+                payload: { branchId, departmentId },
+              });
+            } catch (assignErr) {
+              console.error('Failed to update user assignment on server:', assignErr);
+            }
           }
           if (photo) {
             setPhoto('staff', response.id, photo);
@@ -443,6 +460,7 @@ export const useAdminDashboard = () => {
           queryClient.invalidateQueries({ queryKey: usersKeys.list() });
           queryClient.invalidateQueries({ queryKey: ['users'] });
           queryClient.invalidateQueries({ queryKey: ['users', 'list'] });
+          queryClient.invalidateQueries({ queryKey: usersKeys.assignment(response.id) });
         }, 500);
       },
       onError: (err: any) => {
@@ -460,7 +478,7 @@ export const useAdminDashboard = () => {
     });
   };
 
-  const editUser = (id: string, userData: Partial<User>) => {
+  const editUser = (id: string, userData: any) => {
     const [firstName, ...rest] = (userData.name ?? '').split(' ');
 
     const payload: any = {};
@@ -469,18 +487,34 @@ export const useAdminDashboard = () => {
       payload.firstName = firstName;
       payload.lastName = rest.join(' ');
     }
+    if (userData.firstName) payload.firstName = userData.firstName;
+    if (userData.lastName) payload.lastName = userData.lastName;
     if (userData.email) payload.email = userData.email;
-    if (userData.phone) payload.phoneNumber = userData.phone;
+    if (userData.phone || userData.phoneNumber) payload.phoneNumber = userData.phone || userData.phoneNumber;
     if (userData.role) payload.role = userData.role;
     if (userData.status) payload.isActive = userData.status === 'active';
-    // NOTE: `department` is intentionally NOT sent — PATCH /users/{id} doesn't
-    // accept it; the backend has no department concept. It's kept on the
-    // local `User` display type only.
 
     updateUserMutation.mutate(
       { id, payload },
       {
-        onSuccess: () => {
+        onSuccess: async () => {
+          if (userData.branchId !== undefined || userData.departmentId !== undefined) {
+            setStaffAssignment(id, {
+              branchId: userData.branchId,
+              departmentId: userData.departmentId,
+            });
+            try {
+              await updateUserAssignmentMutation.mutateAsync({
+                userId: id,
+                payload: {
+                  branchId: userData.branchId,
+                  departmentId: userData.departmentId,
+                },
+              });
+            } catch (assignErr) {
+              console.error('Failed to update assignment on edit:', assignErr);
+            }
+          }
           setLocalActivityLogs(prev => [
             makeLog('User Updated', `Updated user: ${userData.name ?? 'Unknown'}`, 'info'),
             ...prev,
@@ -489,6 +523,7 @@ export const useAdminDashboard = () => {
           refetchUsers();
           queryClient.invalidateQueries({ queryKey: usersKeys.lists() });
           queryClient.invalidateQueries({ queryKey: usersKeys.detail(id) });
+          queryClient.invalidateQueries({ queryKey: usersKeys.assignment(id) });
         },
         onError: (err: any) => {
           console.error('❌ Update error:', err);

@@ -175,6 +175,7 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
           >
             <Select placeholder="Select role">
               <Option value="admin">Administrator</Option>
+              <Option value="branch_manager">Branch Manager</Option>
               <Option value="marketing_director">Marketing Director</Option>
               <Option value="marketing_staff">Marketing Staff</Option>
               <Option value="customer_service">Customer Service</Option>

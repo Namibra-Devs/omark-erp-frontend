@@ -1,7 +1,7 @@
 // src/components/layout/TopHeader.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Layout, Space, Typography, Tag, Dropdown, Badge, Button, message, List, Spin, Empty, Drawer } from 'antd';
+import { Layout, Space, Typography, Tag, Dropdown, Badge, Button, message, List, Spin, Empty, Drawer, Tabs, Tooltip } from 'antd';
 import {
   UserOutlined,
   LogoutOutlined,
@@ -11,13 +11,26 @@ import {
   CloseOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
-  CloseCircleOutlined
+  CloseCircleOutlined,
+  WarningOutlined,
+  DollarOutlined,
+  SafetyCertificateOutlined,
+  FileTextOutlined,
+  CheckOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
-import { roleLabels } from '@/constants/enums';
+import { useBranchesQuery } from '@/api/branches';
+import { getUserBranchRoleTitle } from '@/utils/branchIsolation';
 import { useUserQuery } from '@/api/users';
-import { useNotificationsQuery, usePendingNotificationsCountQuery, type NotificationLog } from '@/api/notifications';
+import { useNotificationsQuery, type NotificationLog } from '@/api/notifications';
+import { StaffClockWidget } from '@/components/attendance/StaffClockWidget';
+import {
+  getStoredNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  type SystemNotification,
+} from '@/utils/activityNotificationEngine';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -30,34 +43,38 @@ export const TopHeader: React.FC = () => {
   const navigate = useNavigate();
   const { user, logout, hasRole } = useAuth();
   const [notificationDrawer, setNotificationDrawer] = useState(false);
+  const [activeCategory, setActiveCategory] = useState<string>('all');
+  const canSeeSmsLogs = hasRole(['admin', 'secretary', 'accounts']);
 
-  // GET /notifications is only accessible to admin/secretary/accounts on
-  // the backend — every other role 403s, so the bell/drawer are hidden
-  // entirely for them rather than showing a broken control.
-  const canSeeNotifications = hasRole(['admin', 'secretary', 'accounts']);
+  const { data: userData, isLoading: userLoading } = useUserQuery(user?.id || '');
+  const { data: branches = [] } = useBranchesQuery();
 
-  // ── API Queries ────────────────────────────────────────────────────────────
-  const {
-    data: userData,
-    isLoading: userLoading,
-  } = useUserQuery(user?.id || '');
+  const currentUser = userData || user;
+  const branchRoleTitle = getUserBranchRoleTitle(currentUser, branches);
 
-  // The drawer lists recent notifications regardless of status (sent,
-  // pending, failed) — not just pending ones — so it's an actual activity
-  // list rather than a narrow to-do queue.
+  const [systemNotifications, setSystemNotifications] = useState<SystemNotification[]>(() =>
+    getStoredNotifications(user?.id, user?.role)
+  );
+
   const {
     data: notificationsData,
     isLoading: notificationsLoading,
-    refetch: refetchNotifications
-  } = useNotificationsQuery({ pageSize: 10 }, canSeeNotifications);
+    refetch: refetchNotifications,
+  } = useNotificationsQuery({ pageSize: 10 }, canSeeSmsLogs);
 
-  // Sourced from the paginated total (not the 10 items on this page), so it
-  // doesn't undercount once there are more than 10 pending notifications.
-  const { data: pendingCount = 0 } = usePendingNotificationsCountQuery(canSeeNotifications);
-
-  // ── Data Extraction ──────────────────────────────────────────────────────
-  const currentUser = userData || user;
-  const notifications = notificationsData?.items ?? [];
+  // Sync real-time notifications
+  useEffect(() => {
+    const refreshNotifications = () => {
+      setSystemNotifications(getStoredNotifications(currentUser?.id, currentUser?.role));
+    };
+    refreshNotifications();
+    window.addEventListener('omark-notifications-changed', refreshNotifications);
+    window.addEventListener('storage', refreshNotifications);
+    return () => {
+      window.removeEventListener('omark-notifications-changed', refreshNotifications);
+      window.removeEventListener('storage', refreshNotifications);
+    };
+  }, [currentUser?.id, currentUser?.role]);
 
   const handleLogout = () => {
     logout();
@@ -97,89 +114,140 @@ export const TopHeader: React.FC = () => {
     },
   ];
 
-  // ── Notification Items ────────────────────────────────────────────────────
-  const getNotificationIcon = (type: string) => {
-    switch (type) {
-      case 'contribution_due_soon':
-        return <ClockCircleOutlined style={{ color: '#1890ff' }} />;
-      case 'contribution_overdue':
-        return <CloseCircleOutlined style={{ color: '#ff4d4f' }} />;
-      default:
-        return <BellOutlined style={{ color: '#faad14' }} />;
+  // ── Filtered Notifications ────────────────────────────────────────────────
+  const filteredNotifications = systemNotifications.filter((n) => {
+    if (activeCategory === 'all') return true;
+    if (activeCategory === 'attendance') return n.category === 'attendance';
+    if (activeCategory === 'payroll') return n.category === 'payroll';
+    if (activeCategory === 'payment') return n.category === 'payment' || n.category === 'deed';
+    if (activeCategory === 'security') return n.category === 'security';
+    return true;
+  });
+
+  const unreadCount = systemNotifications.filter((n) => !n.read).length;
+
+  const getCategoryIcon = (category: string, type: string) => {
+    if (category === 'attendance') return <ClockCircleOutlined style={{ color: '#0284c7', fontSize: 18 }} />;
+    if (category === 'payroll') return <DollarOutlined style={{ color: '#52c41a', fontSize: 18 }} />;
+    if (category === 'payment') return <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 18 }} />;
+    if (category === 'deed') return <FileTextOutlined style={{ color: '#722ed1', fontSize: 18 }} />;
+    if (category === 'security') return <SafetyCertificateOutlined style={{ color: '#faad14', fontSize: 18 }} />;
+    if (type === 'error') return <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 18 }} />;
+    if (type === 'warning') return <WarningOutlined style={{ color: '#faad14', fontSize: 18 }} />;
+    return <BellOutlined style={{ color: '#2E5E8C', fontSize: 18 }} />;
+  };
+
+  const handleNotificationClick = (n: SystemNotification) => {
+    markNotificationAsRead(n.id);
+    setSystemNotifications(getStoredNotifications());
+    if (n.link) {
+      setNotificationDrawer(false);
+      navigate(n.link);
     }
   };
 
-  const getNotificationStatusColor = (status: string) => {
-    switch (status) {
-      case 'sent': return 'green';
-      case 'failed': return 'red';
-      case 'pending': return 'blue';
-      default: return 'default';
-    }
+  const handleMarkAllRead = () => {
+    markAllNotificationsAsRead();
+    setSystemNotifications(getStoredNotifications());
+    message.success('All notifications marked as read');
   };
 
   const renderNotificationDrawer = () => (
     <Drawer
       title={
-        <Space>
-          <BellOutlined />
-          <span>Notifications</span>
-          <Badge count={pendingCount} style={{ marginLeft: 8 }} />
-        </Space>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+          <Space>
+            <BellOutlined style={{ color: '#2E5E8C' }} />
+            <span style={{ fontWeight: 700 }}>Notifications & Live Updates</span>
+            {unreadCount > 0 && <Badge count={unreadCount} style={{ backgroundColor: '#ff4d4f' }} />}
+          </Space>
+          {unreadCount > 0 && (
+            <Button size="small" type="link" icon={<CheckOutlined />} onClick={handleMarkAllRead}>
+              Mark all read
+            </Button>
+          )}
+        </div>
       }
       placement="right"
       open={notificationDrawer}
       onClose={() => setNotificationDrawer(false)}
-      width={400}
+      width={440}
       bodyStyle={{ padding: 0 }}
     >
-      {notificationsLoading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '40px' }}>
-          <Spin />
-        </div>
-      ) : notifications.length > 0 ? (
+      <div style={{ padding: '8px 16px', background: '#fafafa', borderBottom: '1px solid #f0f0f0' }}>
+        <Tabs
+          activeKey={activeCategory}
+          onChange={setActiveCategory}
+          size="small"
+          items={[
+            { key: 'all', label: `All (${systemNotifications.length})` },
+            { key: 'attendance', label: 'Attendance' },
+            { key: 'payroll', label: 'Payroll & Bonuses' },
+            { key: 'payment', label: 'Sales & Deeds' },
+            { key: 'security', label: 'Security Sentinel' },
+          ]}
+        />
+      </div>
+
+      {filteredNotifications.length > 0 ? (
         <List
-          dataSource={notifications}
-          renderItem={(item: NotificationLog) => (
+          dataSource={filteredNotifications}
+          renderItem={(item: SystemNotification) => (
             <List.Item
               style={{
-                padding: '12px 16px',
+                padding: '14px 18px',
                 borderBottom: '1px solid #f0f0f0',
                 cursor: 'pointer',
+                background: item.read ? '#fff' : '#f0f9ff',
                 transition: 'background 0.2s',
               }}
+              onClick={() => handleNotificationClick(item)}
               onMouseEnter={(e) => {
-                e.currentTarget.style.background = '#f5f5f5';
+                e.currentTarget.style.background = '#e6f4ff';
               }}
               onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'transparent';
+                e.currentTarget.style.background = item.read ? '#fff' : '#f0f9ff';
               }}
             >
               <List.Item.Meta
-                avatar={getNotificationIcon(item.type)}
+                avatar={
+                  <div
+                    style={{
+                      width: 36,
+                      height: 36,
+                      borderRadius: 10,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      background: item.type === 'error' ? '#fff1f0' : item.type === 'warning' ? '#fffbe6' : '#e6f7ff',
+                    }}
+                  >
+                    {getCategoryIcon(item.category, item.type)}
+                  </div>
+                }
                 title={
-                  <Space>
-                    <Text strong>{item.type?.replace(/_/g, ' ').toUpperCase() || 'Notification'}</Text>
-                    <Tag color={getNotificationStatusColor(item.status)}>
-                      {item.status?.toUpperCase() || 'PENDING'}
-                    </Tag>
-                  </Space>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Text strong style={{ fontSize: 13, color: '#1e293b' }}>
+                      {item.title}
+                    </Text>
+                    {!item.read && <Badge status="processing" />}
+                  </div>
                 }
                 description={
-                  <div>
-                    <Text style={{ fontSize: 13 }}>{item.messageBody}</Text>
-                    <br />
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      {dayjs(item.createdAt).fromNow()}
+                  <div style={{ marginTop: 2 }}>
+                    <Text style={{ fontSize: 12, color: '#475569', display: 'block', lineHeight: 1.4 }}>
+                      {item.message}
                     </Text>
-                    {item.sentAt && (
-                      <>
-                        <br />
-                        <Text type="secondary" style={{ fontSize: 11 }}>
-                          Sent: {dayjs(item.sentAt).format('MMM DD, HH:mm')}
-                        </Text>
-                      </>
-                    )}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        {item.timestamp ? dayjs(item.timestamp).fromNow() : 'Recently'}
+                      </Text>
+                      {item.branchName && (
+                        <Tag color="cyan" style={{ fontSize: 10, margin: 0, padding: '0 6px', borderRadius: 8 }}>
+                          {item.branchName}
+                        </Tag>
+                      )}
+                    </div>
                   </div>
                 }
               />
@@ -187,21 +255,23 @@ export const TopHeader: React.FC = () => {
           )}
         />
       ) : (
-        <div style={{ padding: '40px 20px', textAlign: 'center' }}>
-          <BellOutlined style={{ fontSize: 48, color: '#d9d9d9' }} />
-          <p style={{ marginTop: 16, color: '#999' }}>No notifications</p>
+        <div style={{ padding: '60px 20px', textAlign: 'center' }}>
+          <BellOutlined style={{ fontSize: 44, color: '#cbd5e1' }} />
+          <p style={{ marginTop: 12, color: '#94a3b8', fontSize: 13 }}>No notifications in this category</p>
         </div>
       )}
-      <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0' }}>
+
+      <div style={{ padding: '12px 16px', borderTop: '1px solid #f0f0f0', background: '#fff' }}>
         <Button
-          type="link"
+          type="primary"
+          ghost
           block
           onClick={() => {
             setNotificationDrawer(false);
             navigate('/notifications');
           }}
         >
-          View All Notifications
+          View Full Notifications Center
         </Button>
       </div>
     </Drawer>
@@ -258,28 +328,35 @@ export const TopHeader: React.FC = () => {
         {/* Right side - User info and actions */}
         {user && (
           <Space size="middle">
+            {/* Live Staff Attendance Punch Pill */}
+            <StaffClockWidget />
+
             {/* Notifications Bell */}
-            {canSeeNotifications && (
-              <Badge count={pendingCount} offset={[-4, 4]}>
-                <BellOutlined
-                  style={{ fontSize: 20, cursor: 'pointer' }}
-                  onClick={() => {
-                    setNotificationDrawer(true);
-                    refetchNotifications();
-                  }}
-                />
-              </Badge>
-            )}
+            <Badge count={unreadCount} offset={[-4, 4]}>
+              <BellOutlined
+                style={{ fontSize: 20, cursor: 'pointer', color: unreadCount > 0 ? '#1e293b' : '#64748b' }}
+                onClick={() => {
+                  setNotificationDrawer(true);
+                  if (canSeeSmsLogs) refetchNotifications();
+                }}
+              />
+            </Badge>
 
             {/* Role Tag */}
-            <Tag color="blue" style={{ margin: 0, padding: '2px 12px' }}>
-              {roleLabels[user.role as keyof typeof roleLabels] || user.role}
+            <Tag color="blue" style={{ margin: 0, padding: '4px 12px', borderRadius: 12, fontWeight: 500 }}>
+              {branchRoleTitle}
             </Tag>
             
             {/* User Dropdown */}
             <Dropdown menu={{ items: userMenuItems }} placement="bottomRight" trigger={['click']}>
               <Space style={{ cursor: 'pointer', padding: '4px 8px', borderRadius: 4 }}>
-                <PhotoUpload entityType="staff" entityId={user.id} size={32} editable={false} />
+                <PhotoUpload
+                  entityType="staff"
+                  entityId={currentUser?.id || user.id}
+                  size={36}
+                  src={currentUser?.avatarUrl || currentUser?.photoUrl || user.avatarUrl || user.photoUrl}
+                  editable={false}
+                />
                 <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
                   <Text strong style={{ fontSize: 14 }}>
                     {user.firstName} {user.lastName}

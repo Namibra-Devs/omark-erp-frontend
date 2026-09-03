@@ -4,6 +4,9 @@ import { Button, Card, Input, Select, Space, Table, Tag, Typography, Modal, Form
 import { MessageOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { useAuth } from '@/contexts/AuthContext';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import { useComplaintsQuery, useUpdateComplaintMutation, type ComplaintEntity } from '@/api/complaints';
 
 const { Text, Paragraph } = Typography;
@@ -12,11 +15,14 @@ const { TextArea } = Input;
 const statusColor: Record<string, string> = { open: 'gold', in_progress: 'blue', resolved: 'green' };
 
 export const ComplaintsPage: React.FC = () => {
+  const { user } = useAuth();
+  const { data: branches = [] } = useBranchesQuery();
   const [statusFilter, setStatusFilter] = useState<'open' | 'in_progress' | 'resolved' | undefined>(undefined);
   const { data: complaintsData, isLoading } = useComplaintsQuery(statusFilter ? { status: statusFilter } : undefined);
   const updateComplaint = useUpdateComplaintMutation();
 
-  const complaints: ComplaintEntity[] = complaintsData?.items ?? [];
+  const rawComplaints: ComplaintEntity[] = complaintsData?.items ?? [];
+  const complaints: ComplaintEntity[] = filterEntitiesByBranch(rawComplaints, user, branches);
   const [active, setActive] = useState<ComplaintEntity | null>(null);
   const [form] = Form.useForm();
 

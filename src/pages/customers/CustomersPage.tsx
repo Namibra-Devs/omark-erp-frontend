@@ -68,6 +68,8 @@ import {
   ApartmentOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
@@ -134,14 +136,17 @@ export const CustomersPage: React.FC = () => {
   const deleteCustomer = useDeleteCustomerMutation();
   const createPaymentPlan = useCreatePaymentPlanMutation();
 
-  // Extract data from responses (query hooks return { items, total, page, pageSize } directly)
-  const customers: Customer[] = customersResponse?.items ?? [];
+  // Extract data from responses with branch isolation
+  const { data: branches = [] } = useBranchesQuery();
+  const rawCustomers: Customer[] = customersResponse?.items ?? [];
+  const rawPaymentPlans: PaymentPlan[] = paymentPlansResponse?.items ?? [];
+
+  const customers: Customer[] = filterEntitiesByBranch(rawCustomers, user, branches);
+  const paymentPlans: PaymentPlan[] = filterEntitiesByBranch(rawPaymentPlans, user, branches);
 
   const customersMeta = React.useMemo(() => ({
-    total: customersResponse?.total ?? 0,
-  }), [customersResponse]);
-
-  const paymentPlans: PaymentPlan[] = paymentPlansResponse?.items ?? [];
+    total: customers.length,
+  }), [customers]);
 
   const properties = propertiesResponse?.items ?? [];
 
@@ -287,7 +292,7 @@ const handleAddCustomer = async (values: any) => {
 
     console.log('📤 Creating customer with payload:', customerData);
 
-    const newCustomer = await createCustomer.mutateAsync(customerData);
+    const newCustomer = await createCustomer.mutateAsync(tagPayloadWithBranch(customerData, user));
     // Photo upload has no real endpoint (see src/mock/photos.ts) — applied
     // locally once we have the customer's real id back from the server.
     if (values.photo && newCustomer?.id) {

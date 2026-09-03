@@ -92,6 +92,7 @@ import { roleLabels } from '@/constants/enums';
 import type { User, Role } from '@/types';
 import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone } from '@/api/users';
 import { useBranchesQuery, useDepartmentsQuery } from '@/api/branches';
+import { setStaffAssignment } from '@/mock/staffAssignments';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -235,6 +236,7 @@ export const UsersPage: React.FC = () => {
   // Role configuration
   const roleConfig: Record<Role, { color: string; icon: any; label: string }> = {
     admin: { color: 'red', icon: <CrownOutlined />, label: 'Administrator' },
+    branch_manager: { color: 'geekblue', icon: <ShopOutlined />, label: 'Branch Manager' },
     marketing_staff: { color: 'blue', icon: <UserOutlined />, label: 'Marketing Staff' },
     marketing_director: { color: 'purple', icon: <StarIcon />, label: 'Marketing Director' },
     customer_service: { color: 'green', icon: <CustomerServiceOutlined />, label: 'Customer Service' },
@@ -292,13 +294,21 @@ export const UsersPage: React.FC = () => {
       });
 
       if (newUserObj?.id && (values.branchId || values.departmentId)) {
-        await updateUserAssignment.mutateAsync({
-          userId: newUserObj.id,
-          payload: {
-            branchId: values.branchId,
-            departmentId: values.departmentId,
-          },
+        setStaffAssignment(newUserObj.id, {
+          branchId: values.branchId,
+          departmentId: values.departmentId,
         });
+        try {
+          await updateUserAssignment.mutateAsync({
+            userId: newUserObj.id,
+            payload: {
+              branchId: values.branchId,
+              departmentId: values.departmentId,
+            },
+          });
+        } catch (assignErr) {
+          console.error('Server assignment error:', assignErr);
+        }
       }
 
       setAddModal(false);
@@ -331,13 +341,21 @@ export const UsersPage: React.FC = () => {
       });
 
       if (values.branchId || values.departmentId) {
-        await updateUserAssignment.mutateAsync({
-          userId: selectedUser.id,
-          payload: {
-            branchId: values.branchId,
-            departmentId: values.departmentId,
-          },
+        setStaffAssignment(selectedUser.id, {
+          branchId: values.branchId,
+          departmentId: values.departmentId,
         });
+        try {
+          await updateUserAssignment.mutateAsync({
+            userId: selectedUser.id,
+            payload: {
+              branchId: values.branchId,
+              departmentId: values.departmentId,
+            },
+          });
+        } catch (assignErr) {
+          console.error('Server assignment error:', assignErr);
+        }
       }
 
       setEditModal(false);
@@ -469,16 +487,18 @@ export const UsersPage: React.FC = () => {
   // Table Columns
   const columns = [
     {
-      title: 'User',
+      title: 'Staff Member',
       key: 'user',
-      width: 220,
+      width: 240,
+      align: 'left' as const,
       render: (_: any, record: User) => (
-        <Space>
-          <Avatar icon={<UserOutlined />} style={{ backgroundColor: tokens.primary }} />
-          <div>
-            <Text strong>{record.firstName} {record.lastName}</Text>
-            <br />
-            <Text type="secondary" style={{ fontSize: 12 }}>
+        <Space size={10} style={{ display: 'flex', alignItems: 'center' }}>
+          <PhotoUpload entityType="staff" entityId={record.id} size={36} editable={false} />
+          <div style={{ minWidth: 0 }}>
+            <Text strong style={{ display: 'block', fontSize: 13, lineHeight: 1.3 }}>
+              {record.firstName} {record.lastName}
+            </Text>
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', color: '#64748b' }}>
               <MailOutlined /> {record.email}
             </Text>
           </div>
@@ -489,9 +509,10 @@ export const UsersPage: React.FC = () => {
       title: 'Phone',
       dataIndex: 'phoneNumber',
       key: 'phoneNumber',
-      width: 150,
+      width: 140,
+      align: 'left' as const,
       render: (phone: string) => (
-        <a href={`tel:${phone}`}>
+        <a href={`tel:${phone}`} style={{ fontSize: 12 }}>
           <PhoneOutlined /> {phone}
         </a>
       ),
@@ -501,8 +522,9 @@ export const UsersPage: React.FC = () => {
       dataIndex: 'role',
       key: 'role',
       width: 160,
+      align: 'left' as const,
       render: (role: Role) => (
-        <Tag color={getRoleColor(role)} icon={getRoleIcon(role)}>
+        <Tag color={getRoleColor(role)} icon={getRoleIcon(role)} style={{ borderRadius: 12, padding: '2px 10px', fontSize: 11 }}>
           {getRoleDisplay(role)}
         </Tag>
       ),
@@ -520,28 +542,30 @@ export const UsersPage: React.FC = () => {
       title: 'Status',
       dataIndex: 'isActive',
       key: 'isActive',
-      width: 120,
+      width: 110,
+      align: 'center' as const,
       render: (isActive: boolean) => (
         <Badge 
           status={isActive ? 'success' : 'error'} 
-          text={isActive ? 'Active' : 'Inactive'}
+          text={
+            <Text style={{ fontSize: 12, fontWeight: 600, color: isActive ? '#52c41a' : '#ff4d4f' }}>
+              {isActive ? 'ACTIVE' : 'INACTIVE'}
+            </Text>
+          }
         />
       ),
     },
     {
-      title: 'Joined',
+      title: 'Joined Date',
       dataIndex: 'createdAt',
       key: 'createdAt',
-      width: 140,
+      width: 130,
+      align: 'center' as const,
       render: (date: string) => (
         <Tooltip title={dayjs(date).format('MMMM DD, YYYY HH:mm')}>
-          <div>
-            <CalendarOutlined /> {dayjs(date).format('MMM DD, YYYY')}
-            <br />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {dayjs(date).fromNow()}
-            </Text>
-          </div>
+          <Text style={{ fontSize: 12, color: '#475569' }}>
+            {dayjs(date).format('MMM DD, YYYY')}
+          </Text>
         </Tooltip>
       ),
       sorter: (a: User, b: User) => dayjs(a.createdAt).unix() - dayjs(b.createdAt).unix(),
@@ -549,24 +573,27 @@ export const UsersPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 200,
+      width: 180,
+      align: 'center' as const,
       fixed: 'right' as const,
       render: (_: any, record: User) => (
-        <Space>
-          <Tooltip title="View Details">
+        <Space size={4}>
+          <Tooltip title="View Full Staff Profile">
             <Button 
               type="primary"
               ghost
-              icon={<EyeOutlined />} 
-              onClick={() => {
-                setSelectedUser(record);
-                setViewDrawerOpen(true);
-              }}
-            />
+              icon={<IdcardOutlined />} 
+              size="small"
+              onClick={() => navigate(`/admin/users/${record.id}`)}
+            >
+              Profile
+            </Button>
           </Tooltip>
-          <Tooltip title="Edit">
+          <Tooltip title="Edit Staff Member">
             <Button 
+              type="text"
               icon={<EditOutlined />} 
+              size="small"
               onClick={async () => {
                 setSelectedUser(record);
                 setEditModal(true);
@@ -595,7 +622,9 @@ export const UsersPage: React.FC = () => {
           </Tooltip>
           <Tooltip title={record.isActive ? 'Deactivate' : 'Activate'}>
             <Button 
-              icon={record.isActive ? <LockOutlined /> : <UnlockOutlined />}
+              type="text"
+              icon={record.isActive ? <LockOutlined style={{ color: '#faad14' }} /> : <UnlockOutlined style={{ color: '#52c41a' }} />}
+              size="small"
               onClick={() => handleToggleStatus(record.id)}
             />
           </Tooltip>
@@ -924,6 +953,7 @@ export const UsersPage: React.FC = () => {
             >
               <Option value="all">All Roles</Option>
               <Option value="admin">Administrator</Option>
+              <Option value="branch_manager">Branch Manager</Option>
               <Option value="marketing_staff">Marketing Staff</Option>
               <Option value="marketing_director">Marketing Director</Option>
               <Option value="customer_service">Customer Service</Option>
@@ -1076,6 +1106,7 @@ export const UsersPage: React.FC = () => {
           >
             <Select placeholder="Select role">
               <Option value="admin">Administrator</Option>
+              <Option value="branch_manager">Branch Manager</Option>
               <Option value="marketing_staff">Marketing Staff</Option>
               <Option value="marketing_director">Marketing Director</Option>
               <Option value="customer_service">Customer Service</Option>
@@ -1209,6 +1240,7 @@ export const UsersPage: React.FC = () => {
           >
             <Select placeholder="Select role">
               <Option value="admin">Administrator</Option>
+              <Option value="branch_manager">Branch Manager</Option>
               <Option value="marketing_staff">Marketing Staff</Option>
               <Option value="marketing_director">Marketing Director</Option>
               <Option value="customer_service">Customer Service</Option>

@@ -25,7 +25,7 @@ import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/mock/branches';
-import { useUserAssignmentQuery } from '@/api/users';
+import { useUserAssignmentQuery, useUpdateUserMutation } from '@/api/users';
 import { useDepartmentsQuery } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import type { User } from '../types';
@@ -33,11 +33,14 @@ import type { User } from '../types';
 const { Text } = Typography;
 const { Option } = Select;
 
-const StaffBranchCell: React.FC<{ userId: string; branches: any[] }> = ({ userId, branches }) => {
+import { getStaffAssignment } from '@/mock/staffAssignments';
+
+const StaffBranchCell: React.FC<{ userId: string; record?: any; branches: any[] }> = ({ userId, record, branches }) => {
   const { data: assignment } = useUserAssignmentQuery(userId);
-  const branchId = assignment?.branchId;
-  const branch = branches.find((b) => b.id === branchId || b.branchCode === branchId);
-  const name = assignment?.branchName || branch?.name;
+  const localAssignment = getStaffAssignment(userId);
+  const branchId = assignment?.branchId || localAssignment?.branchId || record?.branchId || record?.branch;
+  const branch = branches.find((b) => b.id === branchId || b.branchCode === branchId || b.name === branchId);
+  const name = assignment?.branchName || branch?.name || (typeof branchId === 'string' && branchId.length > 0 ? branchId : null);
 
   if (name) {
     return <Tag color={tokens.primary}>{name}</Tag>;
@@ -45,12 +48,13 @@ const StaffBranchCell: React.FC<{ userId: string; branches: any[] }> = ({ userId
   return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
 };
 
-const StaffDepartmentCell: React.FC<{ userId: string }> = ({ userId }) => {
+const StaffDepartmentCell: React.FC<{ userId: string; record?: any }> = ({ userId, record }) => {
   const { data: assignment } = useUserAssignmentQuery(userId);
   const { data: departments = [] } = useDepartmentsQuery();
-  const deptId = assignment?.departmentId;
-  const dept = departments.find((d) => d.id === deptId);
-  const name = assignment?.departmentName || dept?.name;
+  const localAssignment = getStaffAssignment(userId);
+  const deptId = assignment?.departmentId || localAssignment?.departmentId || record?.departmentId || record?.department;
+  const dept = departments.find((d) => d.id === deptId || d.name === deptId) || mockBranchDepartments.find((d) => d.id === deptId || d.name === deptId);
+  const name = assignment?.departmentName || dept?.name || (typeof deptId === 'string' && deptId.length > 0 ? deptId : null);
 
   if (name) {
     return <Tag>{name}</Tag>;
@@ -117,6 +121,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   const getRoleColor = (role: string) => {
     const colors: Record<string, string> = {
       admin: 'red',
+      branch_manager: 'geekblue',
       marketing_director: 'purple',
       marketing_staff: 'blue',
       customer_service: 'cyan',
@@ -273,21 +278,59 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     });
   };
 
+  // Password Reset state
+  const [resetModalUser, setResetModalUser] = useState<User | null>(null);
+  const [newPasswordValue, setNewPasswordValue] = useState('');
+  const [resetLoading, setResetLoading] = useState(false);
+  const updateUserMutation = useUpdateUserMutation();
+
+  const handleOpenResetModal = (user: User) => {
+    setResetModalUser(user);
+    const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+    let autoPass = '';
+    for (let i = 0; i < 12; i++) {
+      autoPass += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    setNewPasswordValue(autoPass);
+  };
+
+  const handleConfirmPasswordReset = async () => {
+    if (!resetModalUser) return;
+    if (!newPasswordValue || newPasswordValue.trim().length < 6) {
+      message.error('Password must be at least 6 characters long');
+      return;
+    }
+    setResetLoading(true);
+    try {
+      await updateUserMutation.mutateAsync({
+        id: resetModalUser.id,
+        payload: { password: newPasswordValue.trim() },
+      });
+      message.success(`Password for ${resetModalUser.firstName || resetModalUser.name || 'User'} reset successfully!`);
+      setResetModalUser(null);
+    } catch (err: any) {
+      message.error(err?.error?.message || err?.message || 'Failed to reset password');
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   const columns = [
     {
-      title: 'Staff',
+      title: 'Staff Member',
       key: 'user',
-      width: 220,
+      width: 240,
+      align: 'left' as const,
       render: (_: any, record: User) => {
         const fullName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || record.email;
         return (
-          <Space>
-            <PhotoUpload entityType="staff" entityId={record.id} size={32} editable={false} />
+          <Space size={10} style={{ display: 'flex', alignItems: 'center' }}>
+            <PhotoUpload entityType="staff" entityId={record.id} size={36} editable={false} />
             <div style={{ minWidth: 0 }}>
-              <Text strong style={{ display: 'block', fontSize: 13 }}>
+              <Text strong style={{ display: 'block', fontSize: 13, lineHeight: 1.3 }}>
                 {fullName}
               </Text>
-              <Text type="secondary" style={{ fontSize: 11 }}>
+              <Text type="secondary" style={{ fontSize: 11, display: 'block', color: '#64748b' }}>
                 {record.email}
               </Text>
             </div>
@@ -299,9 +342,10 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       title: 'Role',
       dataIndex: 'role',
       key: 'role',
-      width: 140,
+      width: 160,
+      align: 'left' as const,
       render: (role: string) => (
-        <Tag color={getRoleColor(role)} style={{ borderRadius: 12, padding: '2px 12px' }}>
+        <Tag color={getRoleColor(role)} style={{ borderRadius: 12, padding: '2px 10px', fontSize: 11, fontWeight: 500 }}>
           {roleLabels[role as keyof typeof roleLabels] || role}
         </Tag>
       ),
@@ -310,27 +354,30 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       title: 'Branch',
       key: 'branch',
       width: 150,
+      align: 'left' as const,
       render: (_: any, record: User) => (
-        <StaffBranchCell userId={record.id} branches={branches} />
+        <StaffBranchCell userId={record.id} record={record} branches={branches} />
       ),
     },
     {
       title: 'Department',
       key: 'department',
       width: 160,
+      align: 'left' as const,
       render: (_: any, record: User) => (
-        <StaffDepartmentCell userId={record.id} />
+        <StaffDepartmentCell userId={record.id} record={record} />
       ),
     },
     {
       title: 'Login Password',
       key: 'createdPassword',
-      width: 200,
+      width: 170,
+      align: 'left' as const,
       render: (_: any, record: User) => {
         if (!record.createdPassword) {
           return (
-            <Tooltip title="Only shown once, right after an account is created in this session — the server never returns passwords again.">
-              <Text type="secondary" style={{ fontSize: 12 }}>Not available</Text>
+            <Tooltip title="Only shown once, right after an account is created in this session — the server never returns passwords again. Use Reset Password button to set a new one.">
+              <Text type="secondary" style={{ fontSize: 12 }}>Protected</Text>
             </Tooltip>
           );
         }
@@ -338,7 +385,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         return (
           <Space size={4}>
             <Text code style={{ fontSize: 12 }}>
-              {revealed ? record.createdPassword : '•'.repeat(10)}
+              {revealed ? record.createdPassword : '•'.repeat(8)}
             </Text>
             <Tooltip title={revealed ? 'Hide' : 'Reveal'}>
               <Button
@@ -363,14 +410,15 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     {
       title: 'Status',
       key: 'status',
-      width: 120,
+      width: 110,
+      align: 'center' as const,
       render: (_: any, record: User) => {
         const isUserActive = (record as any).isActive ?? record.status === 'active';
         return (
           <Badge 
             status={isUserActive ? 'success' : 'error'}
             text={
-              <Text style={{ fontSize: 12, fontWeight: 500 }}>
+              <Text style={{ fontSize: 12, fontWeight: 600, color: isUserActive ? '#52c41a' : '#ff4d4f' }}>
                 {isUserActive ? 'ACTIVE' : 'INACTIVE'}
               </Text>
             }
@@ -379,32 +427,48 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       },
     },
     {
-      title: 'Joined',
+      title: 'Joined Date',
       dataIndex: 'joined',
       key: 'joined',
-      width: 120,
+      width: 130,
+      align: 'center' as const,
       sorter: (a: User, b: User) => new Date(a.joined || 0).getTime() - new Date(b.joined || 0).getTime(),
-      render: (date: string) => date ? new Date(date).toLocaleDateString() : 'N/A',
+      render: (date: string) => date ? (
+        <Text style={{ fontSize: 12, color: '#475569' }}>
+          {new Date(date).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+        </Text>
+      ) : '—',
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 280,
+      width: 160,
+      align: 'center' as const,
+      fixed: 'right' as const,
       render: (_: any, record: User) => {
         const isUserActive = (record as any).isActive ?? record.status === 'active';
-        const displayName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim();
         return (
-          <Space size="small">
-            <Tooltip title="Edit User">
+          <Space size={2}>
+            <Tooltip title="Edit Staff Details">
               <Button 
                 type="text" 
                 icon={<EditOutlined />} 
                 onClick={() => onEditUser(record)}
                 size="small"
+                style={{ color: '#475569' }}
+              />
+            </Tooltip>
+            <Tooltip title="Reset Password">
+              <Button 
+                type="text" 
+                icon={<LockOutlined />} 
+                onClick={() => handleOpenResetModal(record)}
+                size="small"
+                style={{ color: '#1890ff' }}
               />
             </Tooltip>
             {isUserActive ? (
-              <Tooltip title="Deactivate User">
+              <Tooltip title="Deactivate Account">
                 <Button 
                   type="text" 
                   icon={<StopOutlined />} 
@@ -414,7 +478,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                 />
               </Tooltip>
             ) : (
-              <Tooltip title="Activate User">
+              <Tooltip title="Activate Account">
                 <Button 
                   type="text" 
                   icon={<CheckCircleOutlined />} 
@@ -424,7 +488,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
                 />
               </Tooltip>
             )}
-            <Tooltip title="Delete User (Permanent)">
+            <Tooltip title="Delete Permanently">
               <Button 
                 type="text" 
                 danger 
@@ -501,6 +565,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         >
           <Option value="all">All Roles</Option>
           <Option value="admin">👑 Admin</Option>
+          <Option value="branch_manager">🏛️ Branch Manager</Option>
           <Option value="marketing_director">📊 Marketing Director</Option>
           <Option value="marketing_staff">📝 Marketing Staff</Option>
           <Option value="customer_service">💬 Customer Service</Option>
@@ -537,11 +602,12 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         rowKey="id"
         loading={loading}
         size="middle"
+        scroll={{ x: 1200 }}
         pagination={{
-          pageSize: 5,
+          pageSize: 10,
           showSizeChanger: true,
-          showTotal: (total) => `Total ${total} users`,
-          pageSizeOptions: ['5', '10', '20', '50'],
+          showTotal: (total) => `Total ${total} staff members`,
+          pageSizeOptions: ['10', '20', '50'],
         }}
         locale={{
           emptyText: (
@@ -564,12 +630,83 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         }
       />
 
+      {/* Password Reset Modal */}
+      <Modal
+        title={
+          <Space>
+            <LockOutlined style={{ color: '#1890ff' }} />
+            <span>Reset User Password</span>
+          </Space>
+        }
+        open={Boolean(resetModalUser)}
+        onCancel={() => setResetModalUser(null)}
+        onOk={handleConfirmPasswordReset}
+        okText="Set New Password"
+        confirmLoading={resetLoading}
+        destroyOnClose
+      >
+        {resetModalUser && (
+          <div style={{ padding: '12px 0' }}>
+            <p>
+              Set a new password for <strong>{resetModalUser.firstName || resetModalUser.name}</strong> ({resetModalUser.email}):
+            </p>
+            <div style={{ marginBottom: 16 }}>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+                New Password:
+              </Text>
+              <Input
+                value={newPasswordValue}
+                onChange={(e) => setNewPasswordValue(e.target.value)}
+                placeholder="Enter new password"
+                addonAfter={
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => {
+                      const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*';
+                      let autoPass = '';
+                      for (let i = 0; i < 12; i++) {
+                        autoPass += chars.charAt(Math.floor(Math.random() * chars.length));
+                      }
+                      setNewPasswordValue(autoPass);
+                    }}
+                  >
+                    Generate
+                  </Button>
+                }
+              />
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              💡 Share this new password with the staff member. They will use it on their next login.
+            </Text>
+          </div>
+        )}
+      </Modal>
+
       <style>{`
+        .ant-table-wrapper .ant-table-thead > tr > th {
+          background-color: #f8fafc !important;
+          color: #475569 !important;
+          font-weight: 600 !important;
+          font-size: 11px !important;
+          text-transform: uppercase !important;
+          letter-spacing: 0.5px !important;
+          padding: 12px 14px !important;
+          border-bottom: 2px solid #e2e8f0 !important;
+        }
+        .ant-table-wrapper .ant-table-tbody > tr > td {
+          padding: 12px 14px !important;
+          vertical-align: middle !important;
+          border-bottom: 1px solid #f1f5f9 !important;
+        }
+        .ant-table-wrapper .ant-table-tbody > tr:hover > td {
+          background-color: #f8fafc !important;
+        }
         .inactive-row td {
           opacity: 0.6;
         }
         .inactive-row:hover td {
-          opacity: 0.8;
+          opacity: 0.85;
         }
       `}</style>
     </Card>

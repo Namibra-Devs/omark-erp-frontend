@@ -3,6 +3,8 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { useNavigate } from 'react-router-dom';
 import { App } from 'antd'; // Changed from 'message' to 'App'
 import apiClient, { setTokens, clearTokens, getAccessToken, getRefreshToken } from '@/api/client';
+import { getStaffAssignment, setStaffAssignment } from '@/mock/staffAssignments';
+import { getEntityPhoto } from '@/utils/userPhotoStorage';
 import type { User } from '@/types';
 
 interface AuthContextType {
@@ -31,6 +33,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   
   // Use Ant Design's context-safe messaging API
   const { message } = App.useApp();
+
+  // ── Listen for real-time avatar changes globally ─────────────────────────
+  useEffect(() => {
+    const handleAvatarChange = (e: Event) => {
+      const customEvent = e as CustomEvent<{ entityType: string; entityId: string; photoUrl: string | undefined }>;
+      if (customEvent.detail && user && customEvent.detail.entityId === user.id) {
+        setUser((prev) => prev ? { ...prev, avatarUrl: customEvent.detail.photoUrl, photoUrl: customEvent.detail.photoUrl } : null);
+      }
+    };
+    window.addEventListener('omark-avatar-changed', handleAvatarChange);
+    return () => {
+      window.removeEventListener('omark-avatar-changed', handleAvatarChange);
+    };
+  }, [user]);
 
   // ── Login ──────────────────────────────────────────────────────────────────
   const login = useCallback(async (email: string, password: string) => {
@@ -76,21 +92,54 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Store tokens using the client's setTokens function
       setTokens(accessToken, refreshToken || '');
 
+      // Retrieve local or server assignment
+      const localAssign = getStaffAssignment(userData.id);
+      const branchId = userData.branchId || userData.branch || localAssign?.branchId;
+      const departmentId = userData.departmentId || userData.department || localAssign?.departmentId;
+
+      if (branchId || departmentId) {
+        setStaffAssignment(userData.id, { branchId, departmentId });
+      }
+
+      const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
+
       // Build user object safely
       const userObj: User = {
         id: userData.id,
         firstName: userData.firstName || 'User',
         lastName: userData.lastName || '',
+        name: userData.name || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || undefined,
         email: userData.email,
         role: userData.role || 'admin',
         isActive: userData.isActive !== undefined ? userData.isActive : true,
         phoneNumber: userData.phoneNumber || userData.phone || '',
+        branchId,
+        branch: userData.branch || branchId,
+        departmentId,
+        department: userData.department || departmentId,
+        avatarUrl: userData.avatarUrl || userData.photoUrl || storedAvatar,
+        photoUrl: userData.photoUrl || userData.avatarUrl || storedAvatar,
         createdAt: userData.createdAt || new Date().toISOString(),
         updatedAt: userData.updatedAt || new Date().toISOString(),
       };
 
       console.log('✅ User context authenticated successfully:', userObj);
       setUser(userObj);
+
+      // Async fetch server assignment in background if available
+      apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
+        const assign = res.data?.data || res.data;
+        if (assign?.branchId || assign?.departmentId) {
+          setStaffAssignment(userData.id, { branchId: assign.branchId, departmentId: assign.departmentId });
+          setUser((prev) => prev ? {
+            ...prev,
+            branchId: assign.branchId || prev.branchId,
+            branch: assign.branchName || prev.branch,
+            departmentId: assign.departmentId || prev.departmentId,
+            department: assign.departmentName || prev.department,
+          } : null);
+        }
+      }).catch(() => {});
       
       // Navigate based on role
       const role = userObj.role;
@@ -147,18 +196,50 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userData = dataContainer.user || dataContainer;
 
       if (userData && userData.id) {
+        const localAssign = getStaffAssignment(userData.id);
+        const branchId = userData.branchId || userData.branch || localAssign?.branchId;
+        const departmentId = userData.departmentId || userData.department || localAssign?.departmentId;
+
+        if (branchId || departmentId) {
+          setStaffAssignment(userData.id, { branchId, departmentId });
+        }
+
+        const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
+
         const userObj: User = {
           id: userData.id,
           firstName: userData.firstName || 'User',
           lastName: userData.lastName || '',
+          name: userData.name || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || undefined,
           email: userData.email,
           role: userData.role || 'admin',
           isActive: userData.isActive !== undefined ? userData.isActive : true,
           phoneNumber: userData.phoneNumber || userData.phone || '',
+          branchId,
+          branch: userData.branch || branchId,
+          departmentId,
+          department: userData.department || departmentId,
+          avatarUrl: userData.avatarUrl || userData.photoUrl || storedAvatar,
+          photoUrl: userData.photoUrl || userData.avatarUrl || storedAvatar,
           createdAt: userData.createdAt || new Date().toISOString(),
           updatedAt: userData.updatedAt || new Date().toISOString(),
         };
         setUser(userObj);
+
+        // Background server assignment query
+        apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
+          const assign = res.data?.data || res.data;
+          if (assign?.branchId || assign?.departmentId) {
+            setStaffAssignment(userData.id, { branchId: assign.branchId, departmentId: assign.departmentId });
+            setUser((prev) => prev ? {
+              ...prev,
+              branchId: assign.branchId || prev.branchId,
+              branch: assign.branchName || prev.branch,
+              departmentId: assign.departmentId || prev.departmentId,
+              department: assign.departmentName || prev.department,
+            } : null);
+          }
+        }).catch(() => {});
       }
     } catch (error) {
       console.error('Failed to refresh user:', error);

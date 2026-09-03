@@ -2,6 +2,7 @@
 
 export type Role = 
   | 'admin' 
+  | 'branch_manager'
   | 'marketing_staff' 
   | 'marketing_director' 
   | 'customer_service' 
@@ -38,10 +39,20 @@ export interface User {
   id: string;
   firstName: string;
   lastName: string;
+  name?: string;
   email: string;
   phoneNumber: string;
   role: Role;
   isActive: boolean;
+  branchId?: string;
+  branch?: string;
+  departmentId?: string;
+  department?: string;
+  createdPassword?: string;
+  joined?: string;
+  avatarUrl?: string;
+  photoUrl?: string;
+  profilePictureUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -104,6 +115,7 @@ export interface UnseenCounts {
   complaints: number;
   payroll: number;
   approvals: number;
+  checkIns?: number;
 }
 
 export interface Property {

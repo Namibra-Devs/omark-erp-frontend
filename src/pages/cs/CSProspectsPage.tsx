@@ -57,9 +57,12 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PendingPhotoUpload, PhotoUpload } from '@/components/shared/PhotoUpload';
 import { setPhoto } from '@/mock/photos';
+import { awardBonusForEvent } from '@/mock/bonusRules';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { useUsersQuery } from '@/api/users';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { prospectStatusLabels, prospectSourceLabels, interactionChannelLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import type { Prospect, ProspectStatus, ProspectSource } from '@/types';
@@ -132,8 +135,11 @@ export const CSProspectsPage: React.FC = () => {
   const { data: csStaffData } = useUsersQuery(isAdmin ? { role: 'customer_service' } : undefined);
   const csStaff = isAdmin ? (csStaffData?.items ?? []) : [];
 
-  // ── Data Extraction ──────────────────────────────────────────────────────
-  const prospects: Prospect[] = prospectsData?.items ?? [];
+  const { data: branches = [] } = useBranchesQuery();
+
+  // ── Data Extraction with Branch Isolation ─────────────────────────────────────
+  const rawProspects: Prospect[] = prospectsData?.items ?? [];
+  const prospects: Prospect[] = filterEntitiesByBranch(rawProspects, user, branches);
 
   // ── Filter prospects by tab ─────────────────────────────────────────────
   const filteredProspects = prospects.filter(prospect => {
@@ -167,13 +173,25 @@ export const CSProspectsPage: React.FC = () => {
         assignedUserId: isAdmin ? values.assignedUserId : user?.id,
       };
 
-      const newProspect = await createProspect.mutateAsync(payload);
+      const newProspect = await createProspect.mutateAsync(tagPayloadWithBranch(payload, user));
       // Photo upload has no real endpoint (see src/mock/photos.ts) —
       // applied locally once we have the prospect's real id back.
       if (photo && (newProspect as any)?.id) {
         setPhoto('prospect', (newProspect as any).id, photo);
       }
-      message.success('Customer Service prospect added successfully!');
+
+      // Automatically award bonus for prospect addition
+      const bonusAward = awardBonusForEvent('prospect_added', user, {
+        prospectName: `${values.firstName} ${values.lastName}`,
+        prospectId: (newProspect as any)?.id,
+      });
+
+      if (bonusAward) {
+        message.success(`Prospect added successfully! 🎉 You earned a GH₵${bonusAward.amountGHS.toFixed(2)} bonus!`);
+      } else {
+        message.success('Customer Service prospect added successfully!');
+      }
+
       setIsModalOpen(false);
       form.resetFields();
       
@@ -783,6 +801,11 @@ export const CSProspectsPage: React.FC = () => {
       <PageHeader
         title="Customer Service Prospects"
         actions={[
+          {
+            label: 'Client Check-Ins',
+            onClick: () => navigate('/cs/check-ins'),
+            icon: <IdcardOutlined />,
+          },
           {
             label: 'Add Prospect',
             onClick: () => setIsModalOpen(true),

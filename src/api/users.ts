@@ -20,6 +20,9 @@ export interface UserEntity {
   role: Role;
   department?: string;
   isActive: boolean;
+  avatarUrl?: string;
+  photoUrl?: string;
+  profilePictureUrl?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -46,6 +49,9 @@ export interface UpdateUserPayload {
   role?: Role;
   isActive?: boolean;
   password?: string;
+  avatarUrl?: string;
+  photoUrl?: string;
+  profilePictureUrl?: string;
 }
 
 export interface CreateUserPayload {
@@ -113,8 +119,15 @@ export function useUserBonusesQuery(userId: string | undefined) {
   return useQuery({
     queryKey: usersKeys.bonuses(userId ?? ''),
     queryFn: async () => {
-      const res = await apiClient.get<import('@/types').ApiResponse<Array<{ id: string; amountMinor: number; reason: string; createdAt: string }>>>(`/users/${userId}/bonuses`);
-      return unwrapData(res) ?? [];
+      try {
+        const res = await apiClient.get<import('@/types').ApiResponse<Array<{ id: string; amountMinor: number; reason: string; createdAt: string }>>>(`/users/${userId}/bonuses`);
+        const data = unwrapData(res);
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray((data as any).items)) return (data as any).items;
+        return [];
+      } catch {
+        return [];
+      }
     },
     enabled: Boolean(userId),
   });
@@ -124,8 +137,15 @@ export function useUserActivityQuery(userId: string | undefined) {
   return useQuery({
     queryKey: usersKeys.activity(userId ?? ''),
     queryFn: async () => {
-      const res = await apiClient.get<import('@/types').ApiResponse<Array<{ id: string; type: string; title: string; description?: string; createdAt: string }>>>(`/users/${userId}/activity`);
-      return unwrapData(res) ?? [];
+      try {
+        const res = await apiClient.get<import('@/types').ApiResponse<Array<{ id: string; type: string; title: string; description?: string; createdAt: string }>>>(`/users/${userId}/activity`);
+        const data = unwrapData(res);
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray((data as any).items)) return (data as any).items;
+        return [];
+      } catch {
+        return [];
+      }
     },
     enabled: Boolean(userId),
   });
@@ -280,6 +300,7 @@ export const getUserPhone = (user: UserEntity): string => {
 export const getRoleLabel = (role: Role): string => {
   const labels: Record<Role, string> = {
     admin: 'Administrator',
+    branch_manager: 'Branch Manager',
     marketing_director: 'Marketing Director',
     marketing_staff: 'Marketing Staff',
     customer_service: 'Customer Service',
@@ -292,6 +313,7 @@ export const getRoleLabel = (role: Role): string => {
 export const getRoleColor = (role: Role): string => {
   const colors: Record<Role, string> = {
     admin: '#f5222d',
+    branch_manager: '#08979c',
     marketing_director: '#722ed1',
     marketing_staff: '#1890ff',
     customer_service: '#13c2c2',
@@ -304,6 +326,7 @@ export const getRoleColor = (role: Role): string => {
 export const getRoleIcon = (role: Role): string => {
   const icons: Record<Role, string> = {
     admin: '👑',
+    branch_manager: '🏛️',
     marketing_director: '📊',
     marketing_staff: '📝',
     customer_service: '💬',

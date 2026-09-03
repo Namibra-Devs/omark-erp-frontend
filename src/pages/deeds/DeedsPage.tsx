@@ -63,6 +63,8 @@ import {
   CopyOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -125,9 +127,13 @@ export const DeedsPage: React.FC = () => {
   // ── API Mutations ──────────────────────────────────────────────────────────
   const generateDeed = useGenerateDeedMutation();
 
-  // ── Data Mapping ──────────────────────────────────────────────────────────
-  const deeds: Deed[] = deedsData?.items ?? [];
-  const customers: Customer[] = customersData?.items ?? [];
+  // ── Data Mapping with Branch Isolation ────────────────────────────────────
+  const { data: branches = [] } = useBranchesQuery();
+  const rawDeeds: Deed[] = deedsData?.items ?? [];
+  const rawCustomers: Customer[] = customersData?.items ?? [];
+
+  const deeds: Deed[] = filterEntitiesByBranch(rawDeeds, user, branches);
+  const customers: Customer[] = filterEntitiesByBranch(rawCustomers, user, branches);
   const properties = propertiesData?.items ?? [];
 
   // Create maps for quick lookups

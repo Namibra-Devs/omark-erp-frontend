@@ -60,6 +60,8 @@ import {
   BarChartOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { useBranchesQuery } from '@/api/branches';
+import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -126,10 +128,13 @@ export const PaymentPlansPage: React.FC = () => {
   // POST /payment-plans (create) exists, alongside the GET list/detail/installments routes.
   const createPaymentPlan = useCreatePaymentPlanMutation();
 
-  // ── Data Mapping ──────────────────────────────────────────────────────────
-  // hooks return { items, total, page, pageSize } directly under `.data`
-  const paymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
-  const customers: Customer[] = customersData?.items ?? [];
+  // ── Data Mapping with Branch Isolation ────────────────────────────────────
+  const { data: branches = [] } = useBranchesQuery();
+  const rawPaymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
+  const rawCustomers: Customer[] = customersData?.items ?? [];
+
+  const paymentPlans: PaymentPlan[] = filterEntitiesByBranch(rawPaymentPlans, user, branches);
+  const customers: Customer[] = filterEntitiesByBranch(rawCustomers, user, branches);
   const properties = propertiesData?.items ?? [];
 
   // Create maps for quick lookups

@@ -1,8 +1,4 @@
 // src/contexts/CustomerPortalAuthContext.tsx
-// ⚠️ PROTOTYPE — see src/mock/portalAuth.ts. A separate, parallel auth
-// context from AuthContext.tsx: customers are not a recognized principal
-// on the real backend at all, so this session has nothing to do with staff
-// JWTs and cannot call any protected endpoint.
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import { getCachedCustomer, type CachedCustomerRecord } from '@/mock/customerPortalCache';
 import { clearPortalSession, getPortalSessionCustomerId } from '@/mock/portalAuth';
@@ -28,7 +24,8 @@ export const CustomerPortalAuthProvider: React.FC<{ children: React.ReactNode }>
 
   const refresh = useCallback(() => {
     const customerId = getPortalSessionCustomerId();
-    setCustomer(customerId ? getCachedCustomer(customerId) ?? null : null);
+    const cached = customerId ? getCachedCustomer(customerId) ?? null : null;
+    setCustomer(cached);
     setIsLoading(false);
   }, []);
 
@@ -37,11 +34,14 @@ export const CustomerPortalAuthProvider: React.FC<{ children: React.ReactNode }>
   }, [refresh]);
 
   const setSessionCustomerId = (customerId: string) => {
+    localStorage.setItem('portal_customer_id', customerId);
     setCustomer(getCachedCustomer(customerId) ?? null);
   };
 
   const logout = () => {
     clearPortalSession();
+    localStorage.removeItem('portal_token');
+    localStorage.removeItem('portal_customer_id');
     setCustomer(null);
   };
 

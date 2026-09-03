@@ -31,6 +31,7 @@ import { MoneyText } from '@/components/shared/MoneyText';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { useUnmatchedBankEntriesQuery, useImportBankStatementMutation, type BankReconciliationSummary } from '@/api/bankReconciliation';
+import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -77,7 +78,11 @@ export const AccountsDashboardPage: React.FC = () => {
   const [reconciliationResult, setReconciliationResult] = useState<BankReconciliationSummary | null>(null);
 
   const { branches } = useBranchContext();
-  const expenses = expensesData?.items ?? [];
+  const rawExpenses = expensesData?.items ?? [];
+  const rawPaymentPlans = paymentPlansData?.items ?? [];
+
+  const expenses = filterEntitiesByBranch(rawExpenses, user, branches);
+  const paymentPlans = filterEntitiesByBranch(rawPaymentPlans, user, branches);
 
   const internalExpensesMinor = expenses.filter((e) => e.type === 'internal').reduce((sum, e) => sum + e.amountMinor, 0);
   const externalExpensesMinor = expenses.filter((e) => e.type === 'external').reduce((sum, e) => sum + e.amountMinor, 0);
@@ -103,21 +108,36 @@ export const AccountsDashboardPage: React.FC = () => {
     }
   };
 
-  const paymentPlans = paymentPlansData?.items ?? [];
   const selectedPlan = paymentPlans.find((p: any) => p.customerId === selectedCustomer?.customerId);
   const recordPayment = useRecordPaymentMutation(selectedPlan?.id ?? '');
 
+  const rawDefaulters = dashboardData?.defaulters ?? [];
+  const rawDueSoon = dashboardData?.dueSoon ?? [];
+  const defaulters = filterEntitiesByBranch(rawDefaulters, user, branches);
+  const dueSoon = filterEntitiesByBranch(rawDueSoon, user, branches);
+
+  const activePlansCount = paymentPlans.length;
+  const calculatedMonthlyRevenue = paymentPlans.reduce(
+    (sum: number, p: any) => sum + (p.monthlyInstallmentMinor || Math.round((p.totalAmountMinor || 1200000) / (p.numMonths || 12))),
+    0
+  );
+
+  const redCount = paymentPlans.filter((p: any) => p.progressBand === 'red' || (p.balanceMinor && p.balanceMinor > 2000000)).length;
+  const yellowCount = paymentPlans.filter((p: any) => p.progressBand === 'yellow' || (p.balanceMinor && p.balanceMinor > 1000000 && p.balanceMinor <= 2000000)).length;
+  const lightGreenCount = paymentPlans.filter((p: any) => p.progressBand === 'light_green' || (p.balanceMinor && p.balanceMinor > 500000 && p.balanceMinor <= 1000000)).length;
+  const greenCount = paymentPlans.filter((p: any) => p.progressBand === 'green' || p.balanceMinor === 0).length;
+
   const dashboard = {
-    activePlans: dashboardData?.activePlans ?? 0,
-    monthlyRevenue: dashboardData?.monthlyRevenue ?? 0,
+    activePlans: activePlansCount,
+    monthlyRevenue: calculatedMonthlyRevenue > 0 ? calculatedMonthlyRevenue : (dashboardData?.monthlyRevenue ?? 0),
     byBand: {
-      red: dashboardData?.byBand?.red ?? 0,
-      yellow: dashboardData?.byBand?.yellow ?? 0,
-      light_green: dashboardData?.byBand?.light_green ?? 0,
-      green: dashboardData?.byBand?.green ?? 0,
+      red: redCount,
+      yellow: yellowCount,
+      light_green: lightGreenCount,
+      green: greenCount,
     },
-    defaulters: dashboardData?.defaulters ?? [],
-    dueSoon: dashboardData?.dueSoon ?? [],
+    defaulters,
+    dueSoon,
   };
 
   const totalOutstandingMinor = paymentPlans.reduce((sum: number, p: any) => sum + (p.balanceMinor ?? 0), 0);
@@ -264,10 +284,33 @@ export const AccountsDashboardPage: React.FC = () => {
     <div>
       <div style={{ marginBottom: 24, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16 }}>
         <div>
-          <Title level={2}>Finance & Accounts Dashboard</Title>
-          <Text type="secondary">Welcome back, {user?.firstName}! Collections and revenue overview</Text>
+          <Title level={2} style={{ marginBottom: 4 }}>Finance & Accounts Dashboard</Title>
+          <Text type="secondary">Welcome back, {user?.firstName}! Collections, expenses and revenue overview</Text>
         </div>
-        <Button icon={<ReloadOutlined />} onClick={handleRefresh}>Refresh</Button>
+        <Space wrap>
+          <Button 
+            icon={<DollarOutlined />}
+            type="primary"
+            onClick={() => navigate('/accounts/expenses')}
+          >
+            Expenses Hub
+          </Button>
+          <Button 
+            icon={<IdcardOutlined />}
+            onClick={() => navigate('/accounts/payroll')}
+          >
+            Bonuses & Salaries
+          </Button>
+          <Button 
+            icon={<PlusOutlined />}
+            onClick={() => setAddExpenseModal(true)}
+          >
+            Quick Expense
+          </Button>
+          <Button icon={<ReloadOutlined />} onClick={handleRefresh}>
+            Refresh
+          </Button>
+        </Space>
       </div>
 
       {/* ── Stats Cards ──────────────────────────────────────────────────── */}

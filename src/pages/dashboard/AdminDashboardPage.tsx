@@ -10,6 +10,8 @@ import {
   BellOutlined,
   SafetyOutlined,
   BarChartOutlined,
+  TrophyOutlined,
+  SettingOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdminDashboard } from './admin/hooks/useAdminDashboard';
@@ -24,6 +26,7 @@ import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { CrossSystemActivity } from './admin/components/CrossSystemActivity';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { useStaffAssignment } from '@/mock/staffAssignments';
+import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 
 const { Title, Text } = Typography;
 
@@ -48,37 +51,21 @@ const LiveDot: React.FC = () => (
         to   { opacity: 1; transform: translateY(0); }
       }
       @keyframes adp-slideup {
-        from { opacity: 0; transform: translateY(16px); }
+        from { opacity: 0; transform: translateY(12px); }
         to   { opacity: 1; transform: translateY(0); }
       }
-      .adp-header {
-        animation: adp-fadein 0.5s ease both;
+      .adp-header-actions .ant-btn {
+        transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
       }
-      .adp-stats {
-        animation: adp-slideup 0.55s ease 0.1s both;
-      }
-      .adp-actions {
-        animation: adp-slideup 0.55s ease 0.2s both;
-      }
-      .adp-tabs {
-        animation: adp-slideup 0.55s ease 0.3s both;
+      .adp-header-actions .ant-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
       }
       .adp-tab-label {
-        display: flex;
+        display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 2px 0;
-      }
-      .adp-header-actions .ant-btn {
-        border-radius: 8px !important;
         font-weight: 500;
-      }
-      .adp-tabs .ant-tabs-tab {
-        font-weight: 500;
-        font-size: 14px;
-      }
-      .adp-tabs .ant-tabs-tab-active {
-        font-weight: 600;
       }
     `}</style>
     <span
@@ -88,9 +75,8 @@ const LiveDot: React.FC = () => (
         height: 7,
         borderRadius: '50%',
         background: '#52c41a',
-        marginRight: 7,
-        verticalAlign: 'middle',
-        animation: 'adp-pulse 2s ease-in-out infinite',
+        animation: 'adp-pulse 2s infinite',
+        flexShrink: 0,
       }}
     />
   </>
@@ -129,6 +115,7 @@ export const AdminDashboardPage: React.FC = () => {
   const [editUserDrawer, setEditUserDrawer] = useState(false);
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [exportModal, setExportModal] = useState(false);
+  const [bonusRulesModal, setBonusRulesModal] = useState(false);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleExport = (format: 'excel' | 'csv' | 'pdf' | 'json') => {
@@ -298,6 +285,16 @@ export const AdminDashboardPage: React.FC = () => {
               </button>
             </Tooltip>
 
+            <Tooltip title="Configure staff bonus rules and commissions">
+              <Button
+                icon={<TrophyOutlined style={{ color: '#faad14' }} />}
+                onClick={() => setBonusRulesModal(true)}
+                style={{ borderRadius: 8, borderColor: '#faad14', color: '#d48806' }}
+              >
+                Bonus Rules
+              </Button>
+            </Tooltip>
+
             <Tooltip title="Export data">
               <Button
                 icon={<ExportOutlined />}
@@ -380,6 +377,11 @@ export const AdminDashboardPage: React.FC = () => {
         onCancel={() => setExportModal(false)}
         onExport={handleExport}
         loading={loading}
+      />
+
+      <BonusRulesModal
+        open={bonusRulesModal}
+        onClose={() => setBonusRulesModal(false)}
       />
     </div>
   );

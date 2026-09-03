@@ -8,6 +8,7 @@ import type {
 
 export const roleLabels: Record<Role, string> = {
   admin: 'Administrator',
+  branch_manager: 'Branch Manager',
   marketing_staff: 'Marketing Staff',
   marketing_director: 'Marketing Director',
   customer_service: 'Customer Service',

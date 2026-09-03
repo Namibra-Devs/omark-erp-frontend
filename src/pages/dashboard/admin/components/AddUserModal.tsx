@@ -8,7 +8,7 @@ import {
   CheckCircleFilled, ArrowRightOutlined, ArrowLeftOutlined,
   CrownOutlined, CustomerServiceOutlined, AuditOutlined,
   SolutionOutlined, DollarCircleOutlined, BarChartOutlined,
-  BankOutlined,
+  BankOutlined, ShopOutlined,
 } from '@ant-design/icons';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
@@ -28,6 +28,15 @@ const ROLES = [
     bg: '#fff1f0',
     border: '#ffa39e',
     desc: 'Full system access',
+  },
+  {
+    value: 'branch_manager',
+    label: 'Branch Manager',
+    icon: <ShopOutlined />,
+    color: '#08979c',
+    bg: '#e6fffb',
+    border: '#87e8de',
+    desc: 'Oversees branch operations & staff',
   },
   {
     value: 'marketing_director',
@@ -79,6 +88,7 @@ const ROLES = [
 // ── Department auto-fill by role ───────────────────────────────────────────
 const DEPT_BY_ROLE: Record<string, string> = {
   admin: 'Administration',
+  branch_manager: 'Branch Operations',
   secretary: 'Administration',
   marketing_staff: 'Marketing',
   marketing_director: 'Marketing',

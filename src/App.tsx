@@ -10,6 +10,7 @@ import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
 import { PortalProtectedRoute } from '@/components/portal/PortalProtectedRoute';
 import { AppShell } from '@/components/layout/AppShell';
 import { ScrollToTop } from '@/components/layout/ScrollToTop';
+import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { tokens } from '@/constants/tokens';
 
 // Pages
@@ -28,6 +29,7 @@ import { CSProspectsPage } from '@/pages/cs/CSProspectsPage';
 
 // Customer Service Pages
 import { AppointmentsPage } from '@/pages/cs/AppointmentsPage';
+import { CheckInsPage } from '@/pages/cs/CheckInsPage';
 
 // Customer Pages
 import { CustomersPage } from '@/pages/customers/CustomersPage';
@@ -44,10 +46,12 @@ import { NotificationsPage } from '@/pages/notifications/NotificationsPage';
 
 // Admin Pages
 import { UsersPage } from '@/pages/admin/UsersPage';
+import { StaffProfilePage } from '@/pages/admin/StaffProfilePage';
 import { PropertiesPage } from '@/pages/admin/PropertiesPage';
 import { ComplaintsPage } from '@/pages/admin/ComplaintsPage';
 import { DeedPolicyPage } from '@/pages/admin/DeedPolicyPage';
 import { MyProfilePage } from '@/pages/profile/MyProfilePage';
+import { ExpensesPage } from '@/pages/accounts/ExpensesPage';
 
 // Branch Pages (prototype — see src/mock/branches.ts)
 import { BranchesPage } from '@/pages/branches/BranchesPage';
@@ -56,6 +60,7 @@ import { BranchDashboard } from '@/pages/branches/BranchDashboard';
 import { MasterPricingPage } from '@/pages/branches/MasterPricingPage';
 import { ApprovalWorkflowPage } from '@/pages/branches/ApprovalWorkflowPage';
 import { PayrollPage } from '@/pages/branches/PayrollPage';
+import { AttendancePage } from '@/pages/attendance/AttendancePage';
 
 // Public Pages
 import { BookingPage } from '@/pages/public/BookingPage';
@@ -92,6 +97,7 @@ const RoleRedirect: React.FC = () => {
   // Map each role to its default route
   const defaultRoutes: Record<string, string> = {
     admin: '/admin/dashboard',
+    branch_manager: user.branchId ? `/branches/${user.branchId}` : '/branches',
     marketing_staff: '/marketing/prospects',
     marketing_director: '/marketing/overview',
     customer_service: '/cs/prospects',
@@ -165,7 +171,7 @@ const AppRoutes: React.FC = () => {
         <Route
           path="/accounts/dashboard"
           element={
-            <ProtectedRoute allowedRoles={['accounts']}>
+            <ProtectedRoute allowedRoles={['accounts', 'admin']}>
               <AccountsDashboardPage />
             </ProtectedRoute>
           }
@@ -229,8 +235,18 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/cs/appointments" 
           element={
-            <ProtectedRoute allowedRoles={['customer_service', 'admin']}>
+            <ProtectedRoute allowedRoles={['customer_service', 'admin', 'secretary', 'branch_manager']}>
               <AppointmentsPage />
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* Client & Visitor Check-Ins - /cs/check-ins */}
+        <Route 
+          path="/cs/check-ins" 
+          element={
+            <ProtectedRoute allowedRoles={['customer_service', 'secretary', 'admin', 'branch_manager']}>
+              <CheckInsPage />
             </ProtectedRoute>
           } 
         />
@@ -241,7 +257,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/customers" 
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin']}>
+            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin', 'branch_manager']}>
               <CustomersPage />
             </ProtectedRoute>
           } 
@@ -251,7 +267,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/customers/:id" 
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin']}>
+            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin', 'branch_manager']}>
               <CustomerDetailPage />
             </ProtectedRoute>
           } 
@@ -263,7 +279,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/payment-plans" 
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin']}>
+            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin', 'branch_manager']}>
               <PaymentPlansPage />
             </ProtectedRoute>
           } 
@@ -275,7 +291,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/deeds" 
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'admin']}>
+            <ProtectedRoute allowedRoles={['secretary', 'admin', 'branch_manager']}>
               <DeedsPage />
             </ProtectedRoute>
           } 
@@ -287,7 +303,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/notifications" 
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'admin', 'customer_service', 'marketing_staff', 'marketing_director', 'accounts']}>
+            <ProtectedRoute allowedRoles={['secretary', 'admin', 'customer_service', 'marketing_staff', 'marketing_director', 'accounts', 'branch_manager']}>
               <NotificationsPage />
             </ProtectedRoute>
           } 
@@ -299,8 +315,36 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/admin/users" 
           element={
-            <ProtectedRoute allowedRoles={['admin']}>
+            <ProtectedRoute allowedRoles={['admin', 'branch_manager']}>
               <UsersPage />
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* Staff Profile Detail - /admin/users/:id */}
+        <Route 
+          path="/admin/users/:id" 
+          element={
+            <ProtectedRoute allowedRoles={['admin', 'branch_manager', 'secretary', 'accounts', 'customer_service', 'marketing_director', 'marketing_staff']}>
+              <StaffProfilePage />
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* Expenses Management Hub - /expenses and /accounts/expenses */}
+        <Route 
+          path="/expenses" 
+          element={
+            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager']}>
+              <ExpensesPage />
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/accounts/expenses" 
+          element={
+            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager']}>
+              <ExpensesPage />
             </ProtectedRoute>
           } 
         />
@@ -319,7 +363,7 @@ const AppRoutes: React.FC = () => {
         <Route
           path="/admin/complaints"
           element={
-            <ProtectedRoute allowedRoles={['admin', 'secretary', 'customer_service']}>
+            <ProtectedRoute allowedRoles={['admin', 'secretary', 'customer_service', 'branch_manager']}>
               <ComplaintsPage />
             </ProtectedRoute>
           }
@@ -339,7 +383,7 @@ const AppRoutes: React.FC = () => {
         <Route
           path="/head-office"
           element={
-            <ProtectedRoute allowedRoles={['admin']}>
+            <ProtectedRoute allowedRoles={['admin', 'branch_manager']}>
               <HeadOfficeDashboard />
             </ProtectedRoute>
           }
@@ -347,7 +391,7 @@ const AppRoutes: React.FC = () => {
         <Route
           path="/branches"
           element={
-            <ProtectedRoute allowedRoles={['admin']}>
+            <ProtectedRoute allowedRoles={['admin', 'branch_manager']}>
               <BranchesPage />
             </ProtectedRoute>
           }
@@ -355,7 +399,7 @@ const AppRoutes: React.FC = () => {
         <Route
           path="/branches/:branchId"
           element={
-            <ProtectedRoute allowedRoles={['admin']}>
+            <ProtectedRoute allowedRoles={['admin', 'branch_manager']}>
               <BranchDashboard />
             </ProtectedRoute>
           }
@@ -387,8 +431,26 @@ const AppRoutes: React.FC = () => {
         <Route
           path="/accounts/payroll"
           element={
-            <ProtectedRoute allowedRoles={['admin', 'accounts']}>
+            <ProtectedRoute allowedRoles={['admin', 'accounts', 'branch_manager']}>
               <PayrollPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* Staff Attendance & Time Tracking Hub - /attendance, /head-office/attendance */}
+        <Route
+          path="/attendance"
+          element={
+            <ProtectedRoute>
+              <AttendancePage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/head-office/attendance"
+          element={
+            <ProtectedRoute allowedRoles={['admin', 'branch_manager']}>
+              <AttendancePage />
             </ProtectedRoute>
           }
         />
@@ -404,36 +466,38 @@ const AppRoutes: React.FC = () => {
 // Main App Component
 const App: React.FC = () => {
   return (
-    <ConfigProvider
-      theme={{
-        token: {
-          colorPrimary: tokens.primary,
-          borderRadius: 6,
-        },
-        components: {
-          Table: {
-            headerBg: '#fafafa',
+    <ErrorBoundary>
+      <ConfigProvider
+        theme={{
+          token: {
+            colorPrimary: tokens.primary,
+            borderRadius: 6,
           },
-          Card: {
-            borderRadius: 8,
+          components: {
+            Table: {
+              headerBg: '#fafafa',
+            },
+            Card: {
+              borderRadius: 8,
+            },
           },
-        },
-      }}
-    >
-      <AntdApp>
-        <QueryClientProvider client={queryClient}>
-          <BrowserRouter>
-            <AuthProvider>
-              <BranchProvider>
-                <CustomerPortalAuthProvider>
-                  <AppRoutes />
-                </CustomerPortalAuthProvider>
-              </BranchProvider>
-            </AuthProvider>
-          </BrowserRouter>
-        </QueryClientProvider>
-      </AntdApp>
-    </ConfigProvider>
+        }}
+      >
+        <AntdApp>
+          <QueryClientProvider client={queryClient}>
+            <BrowserRouter>
+              <AuthProvider>
+                <BranchProvider>
+                  <CustomerPortalAuthProvider>
+                    <AppRoutes />
+                  </CustomerPortalAuthProvider>
+                </BranchProvider>
+              </AuthProvider>
+            </BrowserRouter>
+          </QueryClientProvider>
+        </AntdApp>
+      </ConfigProvider>
+    </ErrorBoundary>
   );
 };
 
