@@ -72,7 +72,7 @@ import {
   type AttendanceRecord,
   type BranchAttendanceSummary,
 } from '@/api/attendance';
-import { ATTENDANCE_STATUS_META } from '@/mock/staffAttendance';
+import { ATTENDANCE_STATUS_META } from '@/constants/attendance';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;
@@ -840,7 +840,7 @@ export const AttendanceDashboardView: React.FC<AttendanceDashboardViewProps> = (
                 key: 'absences',
                 width: 130,
                 render: (_: any, r: RepeatedOffenderRecord) => (
-                  r.daysAbsent > 0 ? (
+                  (r.daysAbsent ?? 0) > 0 ? (
                     <Tag color="error" style={{ fontWeight: 700 }}>
                       ❌ {r.daysAbsent} Absent {r.daysAbsent === 1 ? 'Day' : 'Days'}
                     </Tag>

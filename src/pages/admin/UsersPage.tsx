@@ -88,11 +88,10 @@ import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
-import { roleLabels } from '@/constants/enums';
 import type { User, Role } from '@/types';
+import apiClient, { unwrapData } from '@/api/client';
 import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone } from '@/api/users';
 import { useBranchesQuery, useDepartmentsQuery } from '@/api/branches';
-import { setStaffAssignment } from '@/mock/staffAssignments';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -104,97 +103,19 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { Text, Title } = Typography;
 
-// Mock Users Data
-const mockUsers: User[] = [
-  {
-    id: '1',
-    firstName: 'John',
-    lastName: 'Admin',
-    email: 'admin@omark.com',
-    phoneNumber: '+233201234567',
-    role: 'admin',
-    isActive: true,
-    createdAt: '2024-01-01T08:00:00Z',
-    updatedAt: '2024-01-20T14:30:00Z',
-  },
-  {
-    id: '2',
-    firstName: 'Sarah',
-    lastName: 'Marketing',
-    email: 'sarah@omark.com',
-    phoneNumber: '+233201234568',
-    role: 'marketing_staff',
-    isActive: true,
-    createdAt: '2024-01-02T09:00:00Z',
-    updatedAt: '2024-01-19T10:00:00Z',
-  },
-  {
-    id: '3',
-    firstName: 'Michael',
-    lastName: 'Director',
-    email: 'michael@omark.com',
-    phoneNumber: '+233201234569',
-    role: 'marketing_director',
-    isActive: true,
-    createdAt: '2024-01-03T10:00:00Z',
-    updatedAt: '2024-01-18T11:30:00Z',
-  },
-  {
-    id: '4',
-    firstName: 'Emma',
-    lastName: 'Service',
-    email: 'emma@omark.com',
-    phoneNumber: '+233201234570',
-    role: 'customer_service',
-    isActive: true,
-    createdAt: '2024-01-04T11:00:00Z',
-    updatedAt: '2024-01-17T09:15:00Z',
-  },
-  {
-    id: '5',
-    firstName: 'David',
-    lastName: 'Secretary',
-    email: 'david@omark.com',
-    phoneNumber: '+233201234571',
-    role: 'secretary',
-    isActive: true,
-    createdAt: '2024-01-05T12:00:00Z',
-    updatedAt: '2024-01-16T16:45:00Z',
-  },
-  {
-    id: '6',
-    firstName: 'Lisa',
-    lastName: 'Accounts',
-    email: 'lisa@omark.com',
-    phoneNumber: '+233201234572',
-    role: 'accounts',
-    isActive: true,
-    createdAt: '2024-01-06T13:00:00Z',
-    updatedAt: '2024-01-15T14:20:00Z',
-  },
-  {
-    id: '7',
-    firstName: 'James',
-    lastName: 'Wilson',
-    email: 'james@omark.com',
-    phoneNumber: '+233201234573',
-    role: 'marketing_staff',
-    isActive: false,
-    createdAt: '2024-01-07T14:00:00Z',
-    updatedAt: '2024-01-14T08:30:00Z',
-  },
-  {
-    id: '8',
-    firstName: 'Mary',
-    lastName: 'Thompson',
-    email: 'mary@omark.com',
-    phoneNumber: '+233201234574',
-    role: 'customer_service',
-    isActive: true,
-    createdAt: '2024-01-08T15:00:00Z',
-    updatedAt: '2024-01-13T10:00:00Z',
-  },
-];
+// Primary Administrator System Default
+const DEFAULT_PRIMARY_ADMIN: User = {
+  id: 'usr-admin-001',
+  firstName: 'Kindo',
+  lastName: 'Original',
+  name: 'Kindo Original',
+  email: 'admin@omark.com',
+  phoneNumber: '+233200000000',
+  role: 'admin',
+  isActive: true,
+  createdAt: '2024-01-01T08:00:00Z',
+  updatedAt: '2024-01-01T08:00:00Z',
+};
 
 export const UsersPage: React.FC = () => {
   const navigate = useNavigate();
@@ -228,10 +149,13 @@ export const UsersPage: React.FC = () => {
   // Extract users array safely. UserEntity.phoneNumber is optional (backend may
   // return phone in a different shape), but the local User type requires a
   // string, so normalize via getUserPhone().
-  const users: User[] = (usersResponse?.items ?? []).map((u) => ({
-    ...u,
-    phoneNumber: getUserPhone(u),
-  }));
+  const rawItems = usersResponse?.items ?? [];
+  const users: User[] = rawItems.length > 0
+    ? rawItems.map((u) => ({
+        ...u,
+        phoneNumber: getUserPhone(u),
+      }))
+    : [DEFAULT_PRIMARY_ADMIN];
 
   // Role configuration
   const roleConfig: Record<Role, { color: string; icon: any; label: string }> = {
@@ -294,10 +218,6 @@ export const UsersPage: React.FC = () => {
       });
 
       if (newUserObj?.id && (values.branchId || values.departmentId)) {
-        setStaffAssignment(newUserObj.id, {
-          branchId: values.branchId,
-          departmentId: values.departmentId,
-        });
         try {
           await updateUserAssignment.mutateAsync({
             userId: newUserObj.id,
@@ -341,10 +261,6 @@ export const UsersPage: React.FC = () => {
       });
 
       if (values.branchId || values.departmentId) {
-        setStaffAssignment(selectedUser.id, {
-          branchId: values.branchId,
-          departmentId: values.departmentId,
-        });
         try {
           await updateUserAssignment.mutateAsync({
             userId: selectedUser.id,
@@ -606,8 +522,8 @@ export const UsersPage: React.FC = () => {
                   isActive: record.isActive,
                 });
                 try {
-                  const res = await (await import('@/api/client')).default.get(`/users/${record.id}/assignment`);
-                  const assignmentData = (await import('@/api/client')).unwrapData(res) as { branchId?: string; departmentId?: string } | undefined;
+                  const res = await apiClient.get(`/users/${record.id}/assignment`);
+                  const assignmentData = unwrapData(res) as { branchId?: string; departmentId?: string } | undefined;
                   if (assignmentData) {
                     form.setFieldsValue({
                       branchId: assignmentData.branchId,

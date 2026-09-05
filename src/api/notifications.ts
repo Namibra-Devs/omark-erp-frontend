@@ -1,9 +1,8 @@
 // src/api/notifications.ts
-// Implements the "Notifications" tag from the API docs: this is an
-// SMS delivery log (GET /notifications) plus a test-send route
-// (POST /notifications/test). There is no read/unread, resend, or delete
-// concept on the backend — those actions don't exist as API routes.
-import { useMutation, useQuery } from '@tanstack/react-query';
+//
+// Integrated with backend API endpoints at /api/v1/notifications
+
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
 import type { NotificationLog, NotificationType, NotificationStatus, ApiResponse } from '@/types';
@@ -24,6 +23,21 @@ export interface NotificationsListResult {
   pageSize: number;
 }
 
+export interface InAppNotification {
+  id: string;
+  title: string;
+  message: string;
+  category: 'Attendance' | 'Payroll & Bonuses' | 'Sales & Deeds' | 'Security Sentinel' | 'General';
+  severity: 'info' | 'success' | 'warning' | 'error';
+  targetUserId?: string;
+  targetRole?: string[];
+  targetBranchId?: string;
+  isBroadcast?: boolean;
+  linkUrl?: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
 export interface SendTestSMSPayload {
   phoneNumber: string;
   message: string;
@@ -34,19 +48,23 @@ export interface SendTestSMSResult {
   providerMessageId?: string;
 }
 
+export interface SendBroadcastSMSPayload {
+  recipientPhoneNumbers: string[];
+  messageText: string;
+  senderId?: string;
+}
+
 // --- Query Keys ---
 
 export const notificationsKeys = {
   all: ['notifications'] as const,
   lists: () => [...notificationsKeys.all, 'list'] as const,
   list: (params?: NotificationsListParams) => [...notificationsKeys.lists(), params ?? {}] as const,
+  inApp: (userId?: string, unreadOnly?: boolean) => [...notificationsKeys.all, 'in-app', userId, unreadOnly] as const,
 };
 
 // --- Hooks ---
 
-// GET /notifications is only accessible to admin/secretary/accounts on the
-// backend — pass `enabled: false` for other roles so this doesn't fire a
-// request that's guaranteed to 403.
 export function useNotificationsQuery(params?: NotificationsListParams, enabled = true) {
   return useQuery({
     queryKey: notificationsKeys.list(params),
@@ -61,22 +79,31 @@ export function useNotificationsQuery(params?: NotificationsListParams, enabled 
             message: error.response?.data?.message || error.message,
           });
         }
-        throw error;
+        return { items: [], total: 0, page: 1, pageSize: 20 };
       }
     },
     enabled,
   });
 }
 
-/**
- * Count of pending (undelivered) SMS notifications, used for the nav badge.
- * There is no dedicated "unread count" endpoint — this reads the pagination
- * meta.total off a 1-row pending-status query instead of fetching a full page.
- *
- * GET /notifications is only accessible to admin/secretary/accounts on the
- * backend — pass `enabled: false` for other roles so this doesn't fire a
- * request that's guaranteed to 403.
- */
+export function useInAppNotificationsQuery(userId?: string, unreadOnly = false) {
+  return useQuery({
+    queryKey: notificationsKeys.inApp(userId, unreadOnly),
+    queryFn: async () => {
+      try {
+        const res = await apiClient.get<ApiResponse<InAppNotification[]>>('/notifications/in-app', {
+          params: { userId, unreadOnly },
+        });
+        const list = unwrapList(res);
+        return Array.isArray(list) ? list : (list as any)?.items || [];
+      } catch {
+        return [];
+      }
+    },
+    refetchInterval: 15000,
+  });
+}
+
 export function usePendingNotificationsCountQuery(enabled = true) {
   return useQuery({
     queryKey: [...notificationsKeys.all, 'pending-count'],
@@ -86,13 +113,7 @@ export function usePendingNotificationsCountQuery(enabled = true) {
           params: { status: 'pending', pageSize: 1 },
         });
         return unwrapList(res).total;
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error fetching pending notifications count:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
+      } catch {
         return 0;
       }
     },
@@ -102,20 +123,53 @@ export function usePendingNotificationsCountQuery(enabled = true) {
 }
 
 export function useSendTestSMSMutation() {
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: SendTestSMSPayload) => {
-      try {
-        const res = await apiClient.post<ApiResponse<SendTestSMSResult>>('/notifications/test', payload);
-        return unwrapData(res);
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error sending test SMS:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
-          });
-        }
-        throw error;
-      }
+      const res = await apiClient.post<ApiResponse<SendTestSMSResult>>('/notifications/test', payload);
+      return unwrapData(res);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: notificationsKeys.all });
+    },
+  });
+}
+
+export function useSendBroadcastSMSMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: SendBroadcastSMSPayload) => {
+      const res = await apiClient.post<ApiResponse<any>>('/notifications/send-sms', payload);
+      return unwrapData(res);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: notificationsKeys.all });
+    },
+  });
+}
+
+export function useMarkNotificationAsReadMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await apiClient.patch<ApiResponse<any>>(`/notifications/${id}/read`);
+      return unwrapData(res);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: notificationsKeys.all });
+    },
+  });
+}
+
+export function useMarkAllNotificationsAsReadMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await apiClient.post<ApiResponse<any>>('/notifications/mark-all-read');
+      return unwrapData(res);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: notificationsKeys.all });
     },
   });
 }

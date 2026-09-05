@@ -76,23 +76,25 @@ import {
   useDailyAttendanceClosureQuery,
   useCloseDailyAttendanceMutation,
   useReopenDailyAttendanceMutation,
-  useStaffLeaveRequestsQuery,
-  useApproveLeaveRequestMutation,
-  useRejectLeaveRequestMutation,
   useRequestCorrectionMutation,
   getClientDeviceId,
   type AttendanceAuditLog,
   type DeviceBinding,
   type DailyAttendanceClosure,
-  type StaffLeaveRequest,
-  type AttendanceListParams
-} from '@/api/attendance';
-import {
   type AttendanceRecord,
   type AttendanceStatus,
+} from '@/api/attendance';
+import {
+  useStaffLeaveRequestsQuery,
+  useApproveLeaveRequestMutation,
+  useRejectLeaveRequestMutation,
+  type StaffLeaveRequest,
+  type LeaveType,
+} from '@/api/leaves';
+import {
   ATTENDANCE_STATUS_META,
-  BRANCH_GEOFENCES
-} from '@/mock/staffAttendance';
+  BRANCH_GEOFENCES,
+} from '@/constants/attendance';
 import { StaffClockWidget } from '@/components/attendance/StaffClockWidget';
 import { ClockInOutModal } from '@/components/attendance/ClockInOutModal';
 import { ReceptionQRModal } from '@/components/attendance/ReceptionQRModal';
@@ -100,7 +102,6 @@ import { AttendanceCorrectionModal } from '@/components/attendance/AttendanceCor
 import { StaffLeaveRequestModal } from '@/components/attendance/StaffLeaveRequestModal';
 import { AttendanceDashboardView } from '@/components/attendance/AttendanceDashboardView';
 import { AttendanceAutomationsView } from '@/components/attendance/AttendanceAutomationsView';
-import { getStaffAssignment } from '@/mock/staffAssignments';
 import { getBranchCanonicalKey } from '@/utils/branchIsolation';
 import dayjs from 'dayjs';
 
@@ -128,13 +129,13 @@ export const AttendancePage: React.FC = () => {
   // Manager Status Edit State
   const [editStatusModalOpen, setEditStatusModalOpen] = useState(false);
   const [selectedRecordForStatusEdit, setSelectedRecordForStatusEdit] = useState<AttendanceRecord | null>(null);
-  const [newStatusValue, setNewStatusValue] = useState<AttendanceStatus>('present');
+  const [newStatusValue, setNewStatusValue] = useState<AttendanceStatus>('ON_TIME');
   const [statusEditReason, setStatusEditReason] = useState('');
 
   // Manual Attendance Record State
   const [manualRecordModalOpen, setManualRecordModalOpen] = useState(false);
   const [manualUserId, setManualUserId] = useState<string>('');
-  const [manualStatus, setManualStatus] = useState<AttendanceStatus>('on_leave');
+  const [manualStatus, setManualStatus] = useState<AttendanceStatus>('ON_LEAVE');
   const [manualDate, setManualDate] = useState<string>(dayjs().format('YYYY-MM-DD'));
   const [manualReason, setManualReason] = useState('');
 
@@ -157,15 +158,18 @@ export const AttendancePage: React.FC = () => {
     month: selectedDate ? undefined : selectedMonth,
   });
 
-  const { data: correctionsList = [], refetch: refetchCorrections } = useAttendanceCorrectionsQuery(selectedBranch);
+  const { data: correctionsData = [], refetch: refetchCorrections } = useAttendanceCorrectionsQuery(selectedBranch !== 'all' ? selectedBranch : undefined);
+  const correctionsList: AttendanceRecord[] = Array.isArray(correctionsData) ? correctionsData : (correctionsData as any)?.items || [];
   const approveMutation = useApproveCorrectionMutation();
   const rejectMutation = useRejectCorrectionMutation();
   const updateStatusMutation = useUpdateAttendanceStatusMutation();
   const createManualMutation = useCreateManualAttendanceMutation();
 
   // Audit Logs & Device Binding Queries & State
-  const { data: auditLogs = [], refetch: refetchAuditLogs } = useAttendanceAuditLogsQuery();
-  const { data: deviceBindings = [], refetch: refetchDeviceBindings } = useDeviceBindingsQuery();
+  const { data: auditLogsData = [], refetch: refetchAuditLogs } = useAttendanceAuditLogsQuery();
+  const auditLogs: AttendanceAuditLog[] = Array.isArray(auditLogsData) ? auditLogsData : (auditLogsData as any)?.items || [];
+  const { data: deviceBindingsData = [], refetch: refetchDeviceBindings } = useDeviceBindingsQuery();
+  const deviceBindings: DeviceBinding[] = Array.isArray(deviceBindingsData) ? deviceBindingsData : (deviceBindingsData as any)?.items || [];
   const bindDeviceMutation = useBindDeviceMutation();
   const resetDeviceMutation = useResetDeviceBindingMutation();
 
@@ -175,7 +179,7 @@ export const AttendancePage: React.FC = () => {
   const [bindDeviceIdInput, setBindDeviceIdInput] = useState('');
   const [bindDeviceNameInput, setBindDeviceNameInput] = useState('');
 
-  const filteredAuditLogs = auditLogs.filter((log) => {
+  const filteredAuditLogs = auditLogs.filter((log: any) => {
     if (selectedAuditFilter === 'ALL') return true;
     if (selectedAuditFilter === 'BLOCKED') return log.status === 'BLOCKED';
     if (selectedAuditFilter === 'OVERRIDDEN') return log.status === 'OVERRIDDEN';
@@ -194,11 +198,8 @@ export const AttendancePage: React.FC = () => {
     try {
       await bindDeviceMutation.mutateAsync({
         userId: bindUserId,
-        staffName: staff ? getUserFullName(staff) : 'Staff Member',
-        role: staff?.role || 'staff',
         deviceId: bindDeviceIdInput.trim(),
         deviceName: bindDeviceNameInput.trim() || 'Assigned Corporate Terminal',
-        boundBy: user?.name || 'Administrator',
       });
       message.success(`Device ${bindDeviceIdInput} bound to ${staff ? getUserFullName(staff) : 'Staff Member'}`);
       setBindDeviceModalOpen(false);
@@ -211,10 +212,7 @@ export const AttendancePage: React.FC = () => {
 
   const handleResetDevice = async (targetUserId: string, staffName: string) => {
     try {
-      await resetDeviceMutation.mutateAsync({
-        userId: targetUserId,
-        resetBy: user?.name || 'Administrator',
-      });
+      await resetDeviceMutation.mutateAsync(targetUserId);
       message.success(`Device binding reset for ${staffName}. Staff may now bind a new authorized terminal.`);
       refetchDeviceBindings();
       refetchAuditLogs();
@@ -226,12 +224,12 @@ export const AttendancePage: React.FC = () => {
   // Attendance Closure Query & Mutations (Rule 1: Check-out must happen before attendance is closed)
   const effectiveBranchId = selectedBranch || 'branch-accra-hq';
   const effectiveDate = selectedDate || dayjs().format('YYYY-MM-DD');
-  const { data: dailyClosure, refetch: refetchClosure } = useDailyAttendanceClosureQuery(effectiveBranchId, effectiveDate);
+  const { data: dailyClosure, refetch: refetchClosure } = useDailyAttendanceClosureQuery(effectiveDate, effectiveBranchId);
   const closeAttendanceMutation = useCloseDailyAttendanceMutation();
   const reopenAttendanceMutation = useReopenDailyAttendanceMutation();
 
   // Leave Requests Query & Mutations (Rule 3: Leave must be approved before day is marked as leave)
-  const { data: leaveRequests = [], refetch: refetchLeaves } = useStaffLeaveRequestsQuery(selectedBranch);
+  const { data: leaveRequests = [], refetch: refetchLeaves } = useStaffLeaveRequestsQuery(selectedBranch !== 'all' ? { branchId: selectedBranch } : undefined);
   const approveLeaveMutation = useApproveLeaveRequestMutation();
   const rejectLeaveMutation = useRejectLeaveRequestMutation();
   const [leaveModalOpen, setLeaveModalOpen] = useState(false);
@@ -239,7 +237,7 @@ export const AttendancePage: React.FC = () => {
   const [selectedLeaveForAction, setSelectedLeaveForAction] = useState<StaffLeaveRequest | null>(null);
   const [leaveRejectionReason, setLeaveRejectionReason] = useState('');
 
-  const pendingLeaves = leaveRequests.filter((l) => l.status === 'pending');
+  const pendingLeaves = leaveRequests.filter((l: any) => String(l.status).toUpperCase() === 'PENDING');
 
   const handleCloseAttendanceRegister = async () => {
     try {
@@ -248,7 +246,7 @@ export const AttendancePage: React.FC = () => {
         branchId: effectiveBranchId,
         branchName: branchMeta.branchName,
         date: effectiveDate,
-        closedBy: user?.name || 'Branch Manager',
+        notes: `Closed by ${user?.name || 'Branch Manager'}`,
       });
       message.success(`Attendance register for ${branchMeta.branchName} on ${effectiveDate} is now closed. Check-outs are locked.`);
       refetchClosure();
@@ -265,7 +263,7 @@ export const AttendancePage: React.FC = () => {
         branchId: effectiveBranchId,
         branchName: branchMeta.branchName,
         date: effectiveDate,
-        reopenedBy: user?.name || 'Branch Manager',
+        reason: `Reopened by ${user?.name || 'Branch Manager'}`,
       });
       message.success(`Attendance register for ${branchMeta.branchName} on ${effectiveDate} reopened.`);
       refetchClosure();
@@ -279,8 +277,7 @@ export const AttendancePage: React.FC = () => {
     try {
       await approveLeaveMutation.mutateAsync({
         leaveId: leave.id,
-        approvedBy: user?.name || 'Branch Manager',
-        note: `Approved by ${user?.name || 'Branch Manager'} on ${dayjs().format('DD MMM YYYY')}`,
+        reviewNotes: `Approved by ${user?.name || 'Branch Manager'} on ${dayjs().format('DD MMM YYYY')}`,
       });
       message.success(`Leave approved for ${leave.staffName}! Attendance records marked as 'On Leave' from ${leave.startDate} to ${leave.endDate}.`);
       refetchLeaves();
@@ -295,7 +292,6 @@ export const AttendancePage: React.FC = () => {
     try {
       await rejectLeaveMutation.mutateAsync({
         leaveId: selectedLeaveForAction.id,
-        rejectedBy: user?.name || 'Branch Manager',
         reason: leaveRejectionReason.trim() || 'Leave request declined by management.',
       });
       message.info(`Leave application for ${selectedLeaveForAction.staffName} rejected.`);
@@ -309,19 +305,19 @@ export const AttendancePage: React.FC = () => {
   };
 
   // Status counts for interactive 8-status KPI ribbon
-  const statusCounts: Record<AttendanceStatus, number> = {
-    present: attendanceList.filter((r) => r.status === 'present').length,
-    late: attendanceList.filter((r) => r.status === 'late').length,
-    early_leave: attendanceList.filter((r) => r.status === 'early_leave').length,
-    half_day: attendanceList.filter((r) => r.status === 'half_day').length,
-    absent: attendanceList.filter((r) => r.status === 'absent').length,
-    on_leave: attendanceList.filter((r) => r.status === 'on_leave').length,
-    correction_requested: attendanceList.filter((r) => r.status === 'correction_requested').length,
-    approved_exception: attendanceList.filter((r) => r.status === 'approved_exception').length,
+  const statusCounts: Record<string, number> = {
+    ON_TIME: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'ON_TIME' || r.status === 'present').length,
+    LATE: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'LATE' || r.status === 'late').length,
+    EARLY_DEPARTURE: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'EARLY_DEPARTURE' || r.status === 'early_leave').length,
+    HALF_DAY: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'HALF_DAY' || r.status === 'half_day').length,
+    ABSENT: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'ABSENT' || r.status === 'absent').length,
+    ON_LEAVE: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'ON_LEAVE' || r.status === 'on_leave').length,
+    OVERTIME: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'OVERTIME').length,
+    HOLIDAY: attendanceList.filter((r: any) => String(r.status).toUpperCase() === 'HOLIDAY').length,
   };
 
   // Filter personal records
-  const myAttendanceRecords = attendanceList.filter((r) => r.userId === user?.id);
+  const myAttendanceRecords = attendanceList.filter((r: any) => r.userId === user?.id);
 
   // Handle Approve Correction
   const handleApproveCorrection = async (record: AttendanceRecord) => {
@@ -360,9 +356,8 @@ export const AttendancePage: React.FC = () => {
     try {
       await updateStatusMutation.mutateAsync({
         recordId: selectedRecordForStatusEdit.id,
-        newStatus: newStatusValue,
+        status: newStatusValue,
         reason: statusEditReason,
-        updatedBy: user?.name || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Supervisor',
       });
       message.success(`Status for ${selectedRecordForStatusEdit.staffName} updated to ${ATTENDANCE_STATUS_META[newStatusValue]?.label || newStatusValue}`);
       setEditStatusModalOpen(false);
@@ -384,13 +379,10 @@ export const AttendancePage: React.FC = () => {
       await createManualMutation.mutateAsync({
         userId: manualUserId,
         staffName: staff ? getUserFullName(staff) : 'Staff Member',
-        staffRole: staff?.role || 'customer_service',
         branchId: branch?.id || 'branch-accra-hq',
-        branchName: branch?.name || 'Accra Head Office',
         date: manualDate,
         status: manualStatus,
         reason: manualReason,
-        recordedBy: user?.name || `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || 'Supervisor / HR',
       });
       message.success(`Attendance record created for ${staff ? getUserFullName(staff) : 'Staff Member'} as ${ATTENDANCE_STATUS_META[manualStatus]?.label || manualStatus}`);
       setManualRecordModalOpen(false);
@@ -1191,7 +1183,7 @@ export const AttendancePage: React.FC = () => {
                             icon={<EditOutlined />}
                             onClick={() => {
                               setManualUserId(staffUsers[0]?.id || '');
-                              setManualStatus('on_leave');
+                              setManualStatus('ON_LEAVE');
                               setManualDate(dayjs().format('YYYY-MM-DD'));
                               setManualReason('');
                               setManualRecordModalOpen(true);
@@ -1590,7 +1582,7 @@ export const AttendancePage: React.FC = () => {
                             fixed: 'right' as const,
                             render: (_: any, l: StaffLeaveRequest) => {
                               const isSelf = l.userId === user?.id;
-                              if (l.status !== 'pending') {
+                              if (String(l.status).toUpperCase() !== 'PENDING') {
                                 return <Text type="secondary" style={{ fontSize: 11 }}>Decided</Text>;
                               }
                               return (
@@ -1669,7 +1661,7 @@ export const AttendancePage: React.FC = () => {
                           <Card size="small" style={{ borderRadius: 10, borderLeft: '4px solid #ff4d4f' }}>
                             <Statistic
                               title={<span style={{ fontSize: 12, color: '#64748b' }}>Blocked Fraud Attempts</span>}
-                              value={auditLogs.filter((a) => a.status === 'BLOCKED').length}
+                              value={auditLogs.filter((a: any) => a.status === 'BLOCKED').length}
                               valueStyle={{ color: '#ff4d4f', fontWeight: 800 }}
                               prefix={<CloseCircleOutlined />}
                             />
@@ -1697,7 +1689,7 @@ export const AttendancePage: React.FC = () => {
                           <Card size="small" style={{ borderRadius: 10, borderLeft: '4px solid #faad14' }}>
                             <Statistic
                               title={<span style={{ fontSize: 12, color: '#64748b' }}>Supervisor Overrides</span>}
-                              value={auditLogs.filter((a) => a.status === 'OVERRIDDEN').length}
+                              value={auditLogs.filter((a: any) => a.status === 'OVERRIDDEN').length}
                               valueStyle={{ color: '#d48806', fontWeight: 800 }}
                               prefix={<FileProtectOutlined />}
                             />
@@ -1887,10 +1879,10 @@ export const AttendancePage: React.FC = () => {
                               render: (_: any, a: AttendanceAuditLog) => (
                                 <Space direction="vertical" size={2}>
                                   <Tag color={a.status === 'PASSED' ? 'green' : a.status === 'BLOCKED' ? 'red' : 'purple'} style={{ fontWeight: 700 }}>
-                                    {a.status}
+                                    {a.status || 'LOGGED'}
                                   </Tag>
                                   <Tag color={a.severity === 'critical' ? 'magenta' : a.severity === 'high' ? 'volcano' : a.severity === 'medium' ? 'orange' : 'blue'} style={{ fontSize: 10 }}>
-                                    {a.severity.toUpperCase()} RISK
+                                    {(a.severity || 'info').toUpperCase()} RISK
                                   </Tag>
                                 </Space>
                               ),

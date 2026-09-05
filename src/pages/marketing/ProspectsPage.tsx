@@ -8,15 +8,16 @@ import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
+import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
 import { useUsersQuery } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
-import { markSeen } from '@/mock/seenTracker';
-import { PendingPhotoUpload, PhotoUpload } from '@/components/shared/PhotoUpload';
-import { setPhoto } from '@/mock/photos';
+import { useAwardBonusMutation, useStaffBonusesQuery } from '@/api/bonuses';
+import { markSeen } from '@/utils/seenTracker';
+import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -25,8 +26,6 @@ const { Text } = Typography;
 import dayjs from 'dayjs';
 import { DatePicker } from 'antd';
 import { SettingOutlined, TrophyOutlined, CalendarOutlined } from '@ant-design/icons';
-import { awardBonusForEvent, useStaffBonuses } from '@/mock/bonusRules';
-import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 
 export const ProspectsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -35,6 +34,7 @@ export const ProspectsPage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [bonusModalOpen, setBonusModalOpen] = useState(false);
   const [form] = Form.useForm();
+  const [editForm] = Form.useForm();
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'weekly' | 'monthly' | 'yearly' | 'custom'>('all');
@@ -45,9 +45,8 @@ export const ProspectsPage: React.FC = () => {
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
   const [convertModal, setConvertModal] = useState(false);
   const [prospectToConvert, setProspectToConvert] = useState<Prospect | null>(null);
-  const [editForm] = Form.useForm();
-
-  const { totalBonusGHS: userBonusTotal } = useStaffBonuses(user?.id);
+  const { data: userBonuses = [] } = useStaffBonusesQuery(user?.id);
+  const userBonusTotal = (userBonuses as any[]).reduce((sum: number, b: any) => sum + (b.amountGHS || 0), 0);
 
   // Drill-down from the Director Overview's per-marketer table ("View
   // Prospects") lands here with these params — apply them as a filter
@@ -144,26 +143,9 @@ export const ProspectsPage: React.FC = () => {
           user
         )
       );
-      // Photo upload has no real endpoint (see src/mock/photos.ts) —
-      // applied locally once we have the prospect's real id back.
-      if (photo && (newProspect as any)?.id) {
-        setPhoto('prospect', (newProspect as any).id, photo);
-      }
-
-      // Automatically award bonus for prospect addition
-      const bonusAward = awardBonusForEvent('prospect_added', user, {
-        prospectName: `${values.firstName} ${values.lastName}`,
-        prospectId: (newProspect as any)?.id,
-      });
-
       setIsModalOpen(false);
       form.resetFields();
-
-      if (bonusAward) {
-        message.success(`Prospect added successfully! 🎉 You earned a GH₵${bonusAward.amountGHS.toFixed(2)} bonus!`);
-      } else {
-        message.success('Prospect added successfully!');
-      }
+      message.success('Prospect added successfully!');
     } catch (err: any) {
       console.error('Failed to add prospect:', err);
       message.error(err.error?.message || 'Failed to add prospect. Please try again.');

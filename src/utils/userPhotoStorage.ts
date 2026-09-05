@@ -73,3 +73,8 @@ export function removeEntityPhoto(entityType: string, entityId: string | undefin
     console.error('Failed to remove entity photo from storage:', err);
   }
 }
+
+export const getPhoto = getEntityPhoto;
+export const setPhoto = setEntityPhoto;
+export const removePhoto = removeEntityPhoto;
+

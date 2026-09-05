@@ -34,7 +34,7 @@ import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { getUserBranchId } from '@/utils/branchIsolation';
 import { tokens } from '@/constants/tokens';
-import { markSeen } from '@/mock/seenTracker';
+import { markSeen } from '@/utils/seenTracker';
 import {
   useCheckIns,
   visitorCategoryLabels,
@@ -42,7 +42,7 @@ import {
   type CheckInRecord,
   type CheckInStatus,
   type VisitorCategory,
-} from '@/mock/checkIns';
+} from '@/utils/visitorCheckIns';
 
 const { Text, Title, Paragraph } = Typography;
 const { Option } = Select;

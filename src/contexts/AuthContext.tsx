@@ -3,7 +3,6 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { useNavigate } from 'react-router-dom';
 import { App } from 'antd'; // Changed from 'message' to 'App'
 import apiClient, { setTokens, clearTokens, getAccessToken, getRefreshToken } from '@/api/client';
-import { getStaffAssignment, setStaffAssignment } from '@/mock/staffAssignments';
 import { getEntityPhoto } from '@/utils/userPhotoStorage';
 import type { User } from '@/types';
 
@@ -53,57 +52,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setIsLoading(true);
       const response = await apiClient.post('/auth/login', { email, password });
-      
-      console.log('🔍 Login response raw data:', response.data);
 
       const responseData = response.data;
-      
-      // 1. Unpack the response container safely without mutating
       const dataContainer = responseData?.data || responseData;
-      
-      // 2. Extract tokens from all possible standard payload locations
       const accessToken = responseData?.accessToken || dataContainer?.accessToken || dataContainer?.token;
       const refreshToken = responseData?.refreshToken || dataContainer?.refreshToken;
-
-      // 3. Safely target the user profile object
       const userData = dataContainer?.user || dataContainer;
 
-      console.log('📤 Extracted validation profile:', { 
-        id: userData?.id,
-        firstName: userData?.firstName,
-        lastName: userData?.lastName,
-        email: userData?.email,
-        role: userData?.role,
-        hasAccessToken: !!accessToken,
-        hasRefreshToken: !!refreshToken,
-      });
-
-      // Validate required fields
       if (!accessToken) {
-        console.error('❌ No access token found in response wrappers:', responseData);
         throw new Error('No access token received from server');
       }
 
       if (!userData?.id || !userData?.email) {
-        console.error('❌ User profile validation missing keys:', userData);
         throw new Error('Invalid user data received from server');
       }
 
-      // Store tokens using the client's setTokens function
       setTokens(accessToken, refreshToken || '');
 
-      // Retrieve local or server assignment
-      const localAssign = getStaffAssignment(userData.id);
-      const branchId = userData.branchId || userData.branch || localAssign?.branchId;
-      const departmentId = userData.departmentId || userData.department || localAssign?.departmentId;
-
-      if (branchId || departmentId) {
-        setStaffAssignment(userData.id, { branchId, departmentId });
-      }
-
+      const branchId = userData.branchId || userData.branch;
+      const departmentId = userData.departmentId || userData.department;
       const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
 
-      // Build user object safely
       const userObj: User = {
         id: userData.id,
         firstName: userData.firstName || 'User',
@@ -123,14 +92,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         updatedAt: userData.updatedAt || new Date().toISOString(),
       };
 
-      console.log('✅ User context authenticated successfully:', userObj);
       setUser(userObj);
 
       // Async fetch server assignment in background if available
       apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
         const assign = res.data?.data || res.data;
         if (assign?.branchId || assign?.departmentId) {
-          setStaffAssignment(userData.id, { branchId: assign.branchId, departmentId: assign.departmentId });
           setUser((prev) => prev ? {
             ...prev,
             branchId: assign.branchId || prev.branchId,
@@ -196,14 +163,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userData = dataContainer.user || dataContainer;
 
       if (userData && userData.id) {
-        const localAssign = getStaffAssignment(userData.id);
-        const branchId = userData.branchId || userData.branch || localAssign?.branchId;
-        const departmentId = userData.departmentId || userData.department || localAssign?.departmentId;
-
-        if (branchId || departmentId) {
-          setStaffAssignment(userData.id, { branchId, departmentId });
-        }
-
+        const branchId = userData.branchId || userData.branch;
+        const departmentId = userData.departmentId || userData.department;
         const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
 
         const userObj: User = {
@@ -230,7 +191,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
           const assign = res.data?.data || res.data;
           if (assign?.branchId || assign?.departmentId) {
-            setStaffAssignment(userData.id, { branchId: assign.branchId, departmentId: assign.departmentId });
             setUser((prev) => prev ? {
               ...prev,
               branchId: assign.branchId || prev.branchId,

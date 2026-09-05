@@ -62,7 +62,7 @@ type Appointment = ApiAppointment & {
 };
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
-import { markSeen } from '@/mock/seenTracker';
+import { markSeen } from '@/utils/seenTracker';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import calendar from 'dayjs/plugin/calendar';

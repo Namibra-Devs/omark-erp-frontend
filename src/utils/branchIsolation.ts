@@ -1,6 +1,5 @@
 // src/utils/branchIsolation.ts
 import { roleLabels } from '@/constants/enums';
-import { getStaffAssignment } from '@/mock/staffAssignments';
 
 export interface BranchInfo {
   id: string;
@@ -35,12 +34,11 @@ export const getBranchCanonicalKey = (branchIdOrName?: string): string => {
 };
 
 /**
- * Resolves the branch ID for a user based on local storage assignments and direct user attributes.
+ * Resolves the branch ID for a user based on direct user attributes.
  */
 export const getUserBranchId = (user: any): string | undefined => {
   if (!user?.id) return undefined;
-  const assignment = getStaffAssignment(user.id);
-  return assignment?.branchId || user.branchId || user.branch || user.branchCode;
+  return user.branchId || user.branch || user.branchCode;
 };
 
 /**

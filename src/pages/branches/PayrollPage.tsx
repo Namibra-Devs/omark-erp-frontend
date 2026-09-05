@@ -1,6 +1,6 @@
 // src/pages/branches/PayrollPage.tsx
 import React, { useState, useMemo } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Button, Card, Col, Form, Input, InputNumber, Modal, Row, Select,
   Statistic, Table, Tag, message, Tooltip, Popconfirm, Space, Alert, Typography,
@@ -36,30 +36,29 @@ import { useBranchContext } from '@/contexts/BranchContext';
 import { useAuth } from '@/contexts/AuthContext';
 import { useUsersQuery, getUserFullName } from '@/api/users';
 import {
-  useBonusRules,
-  useStaffBonuses,
-  getStaffBonuses,
-  awardBonusForEvent,
+  useBonusRulesQuery,
+  useBonusesQuery,
+  useAwardBonusMutation,
   bonusTypeLabels,
   type StaffBonusRecord,
-  type BonusType
-} from '@/mock/bonusRules';
+  type BonusType,
+} from '@/api/bonuses';
 import {
-  useStaffCompensation,
+  useStaffCompensationQuery,
+  useUpdateStaffCompensationMutation,
   salaryTypeLabels,
   paymentMethodLabels,
   payFrequencyLabels,
   type StaffCompensationProfile,
-  type SalaryType
-} from '@/mock/staffCompensation';
-import { getStaffAssignment } from '@/mock/staffAssignments';
+  type SalaryType,
+  type PaymentMethod,
+  type PayFrequency,
+} from '@/api/compensation';
 import {
   usePayrollQuery,
   useCreatePayrollMutation,
   useBulkPayrollRunMutation,
   useUpdatePayrollMutation,
-  useDeletePayrollMutation,
-  useClearPayrollMutation,
   type PayrollRecord,
 } from '@/api/payroll';
 import { roleLabels } from '@/constants/enums';
@@ -70,18 +69,23 @@ const { Option } = Select;
 const { TextArea } = Input;
 
 export const PayrollPage: React.FC = () => {
+  const { branchId } = useParams<{ branchId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const { branches } = useBranchContext();
-  const { user, hasRole } = useAuth();
-  const isAdmin = hasRole(['admin']);
-  const isManager = hasRole(['admin', 'branch_manager']);
+  const { hasRole } = useAuth();
+  const isAdmin = hasRole(['admin', 'super_admin']);
+  const isAccountsOrAdmin = hasRole(['admin', 'super_admin', 'accountant', 'branch_manager']);
   
-  const { data: usersData, refetch: refetchUsers } = useUsersQuery();
-  const staffUsers = usersData?.items ?? [];
+  const { data: usersData } = useUsersQuery();
+  const staffUsers = useMemo(() => {
+    return (usersData?.items ?? []).filter((u: any) => u.isActive !== false);
+  }, [usersData]);
 
   const [activeTab, setActiveTab] = useState<'payroll' | 'compensation' | 'rules' | 'bonuses'>('payroll');
-  const [branchId, setBranchId] = useState<string | undefined>(undefined);
+  const [selectedMonth, setSelectedMonth] = useState<string>(dayjs().format('YYYY-MM'));
+  const [selectedBranch, setSelectedBranch] = useState<string>(branchId || 'all');
+  const [selectedStatus, setSelectedStatus] = useState<string>('all');
   
   // Modals
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -109,22 +113,53 @@ export const PayrollPage: React.FC = () => {
   const [editForm] = Form.useForm();
   const [bulkForm] = Form.useForm();
 
-  const { data: payrollData, isLoading, refetch } = usePayrollQuery({ branchId });
-  const payroll = payrollData?.items ?? [];
+  const { data: payrollData, isLoading, refetch } = usePayrollQuery({ branchId: selectedBranch !== 'all' ? selectedBranch : undefined });
+  const rawPayroll = payrollData?.items ?? [];
+  const staffUserIds = useMemo(() => new Set(staffUsers.map((u: any) => u.id)), [staffUsers]);
+  const payroll = useMemo(() => {
+    // Only display statements tied to active registered staff members in the system
+    return rawPayroll.filter((p: any) => p.staffUserId && staffUserIds.has(p.staffUserId));
+  }, [rawPayroll, staffUserIds]);
+
   const createPayroll = useCreatePayrollMutation();
   const bulkPayrollRun = useBulkPayrollRunMutation();
   const updatePayroll = useUpdatePayrollMutation();
-  const deletePayroll = useDeletePayrollMutation();
-  const clearPayroll = useClearPayrollMutation();
 
-  const { profiles: compProfiles, getProfile, updateProfile, deleteProfile } = useStaffCompensation();
-  const { rules: bonusRulesList } = useBonusRules();
-  const { bonuses: allBonusesList, deleteBonus, clearBonuses } = useStaffBonuses();
+  const { data: bonusRulesList = [] } = useBonusRulesQuery();
+  const { data: rawBonusesList = [] } = useBonusesQuery();
+  const allBonusesList = useMemo(() => {
+    return (rawBonusesList ?? []).filter((b: any) => b.userId && staffUserIds.has(b.userId));
+  }, [rawBonusesList, staffUserIds]);
+  const awardBonusMutation = useAwardBonusMutation();
+  const updateCompensationMutation = useUpdateStaffCompensationMutation();
 
-  const totalNetMinor = payroll.reduce((sum, p) => sum + (p.netSalaryMinor || 0), 0);
-  const totalBonusMinor = payroll.reduce((sum, p) => sum + (p.bonusMinor || 0), 0);
-  const pendingCount = payroll.filter((p) => p.status === 'pending').length;
-  const approvedCount = payroll.filter((p) => p.status === 'approved').length;
+  const [customCompProfiles, setCustomCompProfiles] = useState<StaffCompensationProfile[]>(() => {
+    try {
+      const stored = localStorage.getItem('omark_staff_compensation_configs');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const compProfiles: StaffCompensationProfile[] = useMemo(() => {
+    return customCompProfiles.filter((p) => p.userId && staffUserIds.has(p.userId));
+  }, [customCompProfiles, staffUserIds]);
+
+  const getProfile = (userId?: string): Partial<StaffCompensationProfile> => {
+    const found = compProfiles.find((p) => p.userId === userId);
+    return found || {
+      salaryType: 'monthly',
+      baseSalaryGHS: 0,
+      baseSalaryMinor: 0,
+      paymentMethod: 'bank_transfer',
+    };
+  };
+
+  const totalNetMinor = payroll.reduce((sum: number, p: any) => sum + (p.netSalaryMinor || 0), 0);
+  const totalBonusMinor = payroll.reduce((sum: number, p: any) => sum + (p.bonusMinor || 0), 0);
+  const pendingCount = payroll.filter((p: any) => p.status === 'pending').length;
+  const approvedCount = payroll.filter((p: any) => p.status === 'approved').length;
 
   const isAccountsContext = location.pathname.startsWith('/accounts');
   const backTarget = isAccountsContext ? '/accounts/dashboard' : '/head-office';
@@ -135,40 +170,35 @@ export const PayrollPage: React.FC = () => {
     const selectedStaff = staffUsers.find((u) => u.id === staffUserId);
     if (!selectedStaff) return;
 
-    const comp = getProfile(staffUserId, getUserFullName(selectedStaff), selectedStaff.role);
-    const assignment = getStaffAssignment(staffUserId);
-    const staffBonuses = getStaffBonuses(staffUserId);
+    const staffBonuses = allBonusesList.filter((b: any) => b.userId === staffUserId);
     
     // Categorize bonuses
-    const salesBonusGHS = staffBonuses.filter(b => b.bonusType === 'sales_bonus').reduce((s, b) => s + b.amountGHS, 0);
-    const attendanceBonusGHS = staffBonuses.filter(b => b.bonusType === 'attendance_bonus').reduce((s, b) => s + b.amountGHS, 0);
-    const punctualityBonusGHS = staffBonuses.filter(b => b.bonusType === 'punctuality_bonus').reduce((s, b) => s + b.amountGHS, 0);
-    const productivityBonusGHS = staffBonuses.filter(b => b.bonusType === 'productivity_bonus').reduce((s, b) => s + b.amountGHS, 0);
-    const projectBonusGHS = staffBonuses.filter(b => b.bonusType === 'project_completion_bonus').reduce((s, b) => s + b.amountGHS, 0);
-    const totalBonusGHS = staffBonuses.reduce((sum, b) => sum + (b.amountGHS || 0), 0);
+    const salesBonusGHS = staffBonuses.filter((b: any) => b.bonusType === 'prospect_conversion').reduce((s: number, b: any) => s + (b.amountGHS || 0), 0);
+    const attendanceBonusGHS = staffBonuses.filter((b: any) => b.bonusType === 'punctuality_streak').reduce((s: number, b: any) => s + (b.amountGHS || 0), 0);
+    const punctualityBonusGHS = staffBonuses.filter((b: any) => b.bonusType === 'punctuality_streak').reduce((s: number, b: any) => s + (b.amountGHS || 0), 0);
+    const productivityBonusGHS = staffBonuses.filter((b: any) => b.bonusType === 'monthly_target_met').reduce((s: number, b: any) => s + (b.amountGHS || 0), 0);
+    const projectBonusGHS = staffBonuses.filter((b: any) => b.bonusType === 'deed_completion').reduce((s: number, b: any) => s + (b.amountGHS || 0), 0);
+    const totalBonusGHS = staffBonuses.reduce((sum: number, b: any) => sum + (b.amountGHS || 0), 0);
 
     form.setFieldsValue({
-      salaryType: comp.salaryType,
-      basePayGHS: comp.baseSalaryGHS || 0,
-      transportGHS: comp.allowances?.transportGHS || 0,
-      housingGHS: comp.allowances?.housingGHS || 0,
-      mealGHS: comp.allowances?.mealGHS || 0,
-      otherAllowanceGHS: comp.allowances?.otherGHS || 0,
+      salaryType: (selectedStaff as any)?.salaryType || 'monthly',
+      basePayGHS: (selectedStaff as any)?.baseSalaryGHS || 0,
+      transportGHS: 0,
+      housingGHS: 0,
+      mealGHS: 0,
+      otherAllowanceGHS: 0,
       overtimeGHS: 0,
-      commissionGHS: comp.commissionFlatGHS || 0,
+      commissionGHS: 0,
       salesBonusGHS,
       attendanceBonusGHS,
       punctualityBonusGHS,
       productivityBonusGHS,
-      projectBonusGHS,
-      taxSSNITGHS: comp.deductions?.taxSSNITGHS || 0,
-      loanRepaymentGHS: comp.deductions?.loanRepaymentGHS || 0,
-      advanceDeductionGHS: comp.deductions?.advanceDeductionGHS || 0,
-      latenessDeductionGHS: comp.deductions?.latenessDeductionGHS || 0,
-      absenceDeductionGHS: comp.deductions?.absenceDeductionGHS || 0,
+      advanceDeductionGHS: 0,
+      latenessDeductionGHS: 0,
+      absenceDeductionGHS: 0,
       otherDeductionGHS: 0,
-      paymentMethod: comp.paymentDetails?.method || 'bank_transfer',
-      branchId: assignment?.branchId || (selectedStaff as any)?.branchId,
+      paymentMethod: (selectedStaff as any)?.paymentMethod || 'bank_transfer',
+      branchId: (selectedStaff as any)?.branchId || undefined,
     });
   };
 
@@ -228,10 +258,8 @@ export const PayrollPage: React.FC = () => {
         advanceDeductionMinor,
         latenessDeductionMinor,
         absenceDeductionMinor,
-        otherDeductionMinor,
         deductionsMinor,
-        paymentMethod: values.paymentMethod || comp.paymentDetails?.method,
-        paymentDetails: comp.paymentDetails,
+        paymentMethod: values.paymentMethod || comp.paymentMethod,
         notes: values.notes,
       });
 
@@ -337,14 +365,15 @@ export const PayrollPage: React.FC = () => {
     }
   };
 
-  const handleAwardDirectBonus = (values: any) => {
+  const handleAwardDirectBonus = async (values: any) => {
     const selectedStaff = staffUsers.find((u) => u.id === values.staffUserId);
     if (!selectedStaff) return;
     try {
-      awardBonusForEvent('custom', selectedStaff, {
-        customAmountGHS: values.amountGHS,
-        bonusType: values.bonusType,
-        notes: values.reason,
+      await awardBonusMutation.mutateAsync({
+        userId: values.staffUserId,
+        amountGHS: values.amountGHS,
+        reason: values.reason,
+        bonusType: values.bonusType || 'monthly_target_met',
       });
       message.success(`Bonus of GH₵ ${values.amountGHS} successfully awarded to ${getUserFullName(selectedStaff)}!`);
       setAwardBonusModalOpen(false);
@@ -364,7 +393,7 @@ export const PayrollPage: React.FC = () => {
         const name = r.staffName || (staffObj ? getUserFullName(staffObj) : 'Staff Member');
         const role = staffObj ? (roleLabels[staffObj.role as keyof typeof roleLabels] || staffObj.role) : r.staffRole;
         const comp = getProfile(r.staffUserId);
-        const salaryTypeConfig = salaryTypeLabels[r.salaryType || comp.salaryType || 'fixed'];
+        const salaryTypeConfig = salaryTypeLabels[r.salaryType || comp.salaryType || 'monthly'];
 
         return (
           <div>
@@ -376,10 +405,9 @@ export const PayrollPage: React.FC = () => {
               )}
             </Text>
             <div style={{ marginTop: 2 }}>
-              <Tag color={salaryTypeConfig?.color || 'blue'} style={{ fontSize: 10 }}>
-                {salaryTypeConfig?.label || 'Fixed'}
+              <Tag color="blue" style={{ fontSize: 10 }}>
+                {salaryTypeConfig || 'Monthly'}
               </Tag>
-              {role && <Tag style={{ fontSize: 10 }}>{role}</Tag>}
             </div>
           </div>
         );
@@ -512,22 +540,6 @@ export const PayrollPage: React.FC = () => {
               }}
             />
           </Tooltip>
-
-          {/* Delete Payroll Statement */}
-          <Popconfirm
-            title="Delete Payroll Statement"
-            description={`Remove statement ${r.code || r.month} for ${r.staffName}?`}
-            onConfirm={() => {
-              deletePayroll.mutate(r.id);
-              message.success('Payroll statement removed.');
-            }}
-            okText="Delete"
-            okType="danger"
-          >
-            <Tooltip title="Delete Statement">
-              <Button size="small" type="text" danger icon={<DeleteOutlined />} />
-            </Tooltip>
-          </Popconfirm>
         </Space>
       ),
     },
@@ -544,7 +556,7 @@ export const PayrollPage: React.FC = () => {
             <a onClick={() => navigate(`/admin/users/${p.userId}`)}>{p.staffName}</a>
           </Text>
           <div>
-            <Tag style={{ fontSize: 11 }}>{roleLabels[p.role as keyof typeof roleLabels] || p.role}</Tag>
+            <Tag style={{ fontSize: 11 }}>{roleLabels[p.staffRole as keyof typeof roleLabels] || p.staffRole || 'Staff'}</Tag>
           </div>
         </div>
       ),
@@ -553,10 +565,10 @@ export const PayrollPage: React.FC = () => {
       title: 'Salary Type',
       key: 'type',
       render: (_: any, p: StaffCompensationProfile) => {
-        const typeInfo = salaryTypeLabels[p.salaryType] || salaryTypeLabels.fixed;
+        const typeInfo = salaryTypeLabels[p.salaryType] || salaryTypeLabels.monthly;
         return (
-          <Tag color={typeInfo.color} style={{ fontWeight: 600 }}>
-            {typeInfo.label}
+          <Tag color="blue" style={{ fontWeight: 600 }}>
+            {typeInfo}
           </Tag>
         );
       },
@@ -565,31 +577,18 @@ export const PayrollPage: React.FC = () => {
       title: 'Base Pay (GH₵)',
       key: 'base',
       render: (_: any, p: StaffCompensationProfile) => (
-        <span style={{ fontWeight: 600 }}>GH₵ {(p.baseSalaryGHS || 0).toLocaleString()}</span>
+        (p.baseSalaryGHS || 0) > 0 ? (
+          <span style={{ fontWeight: 600 }}>GH₵ {(p.baseSalaryGHS || 0).toLocaleString()}</span>
+        ) : (
+          <span style={{ color: '#bbb' }}>—</span>
+        )
       ),
-    },
-    {
-      title: 'Total Allowances',
-      key: 'allowances',
-      render: (_: any, p: StaffCompensationProfile) => {
-        const total = (p.allowances?.transportGHS || 0) + (p.allowances?.housingGHS || 0) + (p.allowances?.mealGHS || 0) + (p.allowances?.otherGHS || 0);
-        return total > 0 ? <span style={{ color: '#52c41a' }}>+ GH₵ {total.toLocaleString()}</span> : <span style={{ color: '#bbb' }}>—</span>;
-      },
-    },
-    {
-      title: 'Deductions (SSNIT/Loan)',
-      key: 'deductions',
-      render: (_: any, p: StaffCompensationProfile) => {
-        const total = (p.deductions?.taxSSNITGHS || 0) + (p.deductions?.loanRepaymentGHS || 0) + (p.deductions?.advanceDeductionGHS || 0);
-        return total > 0 ? <span style={{ color: '#cf1322' }}>- GH₵ {total.toLocaleString()}</span> : <span style={{ color: '#bbb' }}>—</span>;
-      },
     },
     {
       title: 'Commission / Deal',
       key: 'commission',
       render: (_: any, p: StaffCompensationProfile) => {
-        if (p.commissionPercentage > 0) return <Tag color="purple">{p.commissionPercentage}% of Sale</Tag>;
-        if (p.commissionFlatGHS > 0) return <Tag color="purple">GH₵ {p.commissionFlatGHS} / deal</Tag>;
+        if ((p.commissionRatePct || 0) > 0) return <Tag color="purple">{p.commissionRatePct}% of Sale</Tag>;
         return <span style={{ color: '#bbb' }}>—</span>;
       },
     },
@@ -597,11 +596,11 @@ export const PayrollPage: React.FC = () => {
       title: 'Payment Method',
       key: 'payment',
       render: (_: any, p: StaffCompensationProfile) => {
-        const methodInfo = paymentMethodLabels[p.paymentDetails?.method || 'bank_transfer'];
+        const methodInfo = paymentMethodLabels[p.paymentMethod || 'bank_transfer'] || 'Bank Transfer';
         return (
           <span>
-            {methodInfo.icon} {methodInfo.label}
-            {p.paymentDetails?.bankName && <Text type="secondary" style={{ fontSize: 11 }}> ({p.paymentDetails.bankName})</Text>}
+            {methodInfo}
+            {p.bankName && <Text type="secondary" style={{ fontSize: 11 }}> ({p.bankName})</Text>}
           </span>
         );
       },
@@ -624,16 +623,20 @@ export const PayrollPage: React.FC = () => {
             Configure
           </Button>
           <Popconfirm
-            title="Reset Compensation Profile"
-            description={`Reset ${p.staffName}'s compensation profile to default?`}
+            title="Remove Compensation Profile"
+            description={`Remove configured compensation profile for ${p.staffName}?`}
             onConfirm={() => {
-              deleteProfile(p.userId);
-              message.success(`Compensation profile for ${p.staffName} reset to default.`);
+              setCustomCompProfiles((prev) => {
+                const filtered = prev.filter((item) => item.userId !== p.userId);
+                localStorage.setItem('omark_staff_compensation_configs', JSON.stringify(filtered));
+                return filtered;
+              });
+              message.success(`Compensation profile for ${p.staffName} removed.`);
             }}
-            okText="Reset"
+            okText="Remove"
             okType="danger"
           >
-            <Tooltip title="Reset to standard defaults">
+            <Tooltip title="Remove compensation profile">
               <Button size="small" type="text" danger icon={<DeleteOutlined />} />
             </Tooltip>
           </Popconfirm>
@@ -746,24 +749,6 @@ export const PayrollPage: React.FC = () => {
             children: (
               <Card
                 title="Monthly Staff Compensation Statements"
-                extra={
-                  payroll.length > 0 ? (
-                    <Popconfirm
-                      title="Clear All Statements"
-                      description="Are you sure you want to clear all payroll statements and reset the list?"
-                      onConfirm={() => {
-                        clearPayroll.mutate();
-                        message.success('All payroll statements cleared.');
-                      }}
-                      okText="Clear All"
-                      okType="danger"
-                    >
-                      <Button danger size="small" icon={<DeleteOutlined />}>
-                        Clear All Statements
-                      </Button>
-                    </Popconfirm>
-                  ) : null
-                }
               >
                 <Table
                   columns={payrollColumns}
@@ -784,19 +769,33 @@ export const PayrollPage: React.FC = () => {
               <Card
                 title="Staff Salary Structures & Benefits Setup"
                 extra={
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    Configure Fixed, Commission, Mixed, and Incentive-only salary packages
-                  </Text>
+                  <Button
+                    type="primary"
+                    icon={<PlusOutlined />}
+                    onClick={() => {
+                      setEditingCompProfile(null);
+                      setCompensationModalOpen(true);
+                    }}
+                  >
+                    Configure Staff Compensation
+                  </Button>
                 }
               >
-                <Table
-                  columns={compColumns}
-                  dataSource={compProfiles}
-                  rowKey="userId"
-                  pagination={{ pageSize: 10 }}
-                  size="middle"
-                  scroll={{ x: 950 }}
-                />
+                {compProfiles.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 0', color: '#94a3b8' }}>
+                    <TeamOutlined style={{ fontSize: 32, marginBottom: 8, display: 'block' }} />
+                    <Text type="secondary">No staff compensation packages configured yet. Click "Configure Staff Compensation" to set up an employee.</Text>
+                  </div>
+                ) : (
+                  <Table
+                    columns={compColumns}
+                    dataSource={compProfiles}
+                    rowKey="userId"
+                    pagination={{ pageSize: 10 }}
+                    size="middle"
+                    scroll={{ x: 950 }}
+                  />
+                )}
               </Card>
             ),
           },
@@ -812,33 +811,40 @@ export const PayrollPage: React.FC = () => {
                   </Button>
                 }
               >
-                <Row gutter={[16, 16]}>
-                  {bonusRulesList.map((r) => {
-                    const info = bonusTypeLabels[r.bonusType] || bonusTypeLabels.custom;
-                    return (
-                      <Col xs={24} sm={12} md={8} key={r.id}>
-                        <Card size="small" style={{ borderRadius: 8, height: '100%', borderColor: r.isActive ? undefined : '#f0f0f0' }}>
-                          <Space style={{ width: '100%', justifyContent: 'space-between' }}>
-                            <Tag color={info.color}>{info.icon} {info.label}</Tag>
-                            <Tag color={r.isActive ? 'green' : 'default'}>{r.isActive ? 'Active' : 'Disabled'}</Tag>
-                          </Space>
-                          <Title level={5} style={{ marginTop: 8, marginBottom: 4 }}>{r.name}</Title>
-                          <Text strong style={{ fontSize: 16, color: '#389e0d' }}>
-                            GH₵ {r.amountGHS.toFixed(2)}
-                          </Text>
-                          <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 6, marginBottom: 4 }}>
-                            {r.description}
-                          </Paragraph>
-                          {r.criteria && (
-                            <Text type="secondary" style={{ fontSize: 11 }}>
-                              <strong>Target:</strong> {r.criteria}
+                {bonusRulesList.length === 0 ? (
+                  <div style={{ textAlign: 'center', padding: '40px 0', color: '#94a3b8' }}>
+                    <SettingOutlined style={{ fontSize: 32, marginBottom: 8, display: 'block' }} />
+                    <Text type="secondary">No bonus rules configured yet. Click "Manage / Add Rules" to set up incentive rules.</Text>
+                  </div>
+                ) : (
+                  <Row gutter={[16, 16]}>
+                    {bonusRulesList.map((r: any) => {
+                      const label = bonusTypeLabels[r.bonusType as keyof typeof bonusTypeLabels] || r.bonusType || 'Performance Bonus';
+                      return (
+                        <Col xs={24} sm={12} md={8} key={r.id}>
+                          <Card size="small" style={{ borderRadius: 8, height: '100%', borderColor: r.isActive ? undefined : '#f0f0f0' }}>
+                            <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                              <Tag color="gold"><TrophyOutlined /> {label}</Tag>
+                              <Tag color={r.isActive ? 'green' : 'default'}>{r.isActive ? 'Active' : 'Disabled'}</Tag>
+                            </Space>
+                            <Title level={5} style={{ marginTop: 8, marginBottom: 4 }}>{r.ruleName || r.name}</Title>
+                            <Text strong style={{ fontSize: 16, color: '#389e0d' }}>
+                              GH₵ {(r.rewardAmountGHS ?? r.amountGHS ?? 0).toFixed(2)}
                             </Text>
-                          )}
-                        </Card>
-                      </Col>
-                    );
-                  })}
-                </Row>
+                            <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 6, marginBottom: 4 }}>
+                              {r.description}
+                            </Paragraph>
+                            {(r.qualificationCriteria || r.criteria) && (
+                              <Text type="secondary" style={{ fontSize: 11 }}>
+                                <strong>Target:</strong> {r.qualificationCriteria || r.criteria}
+                              </Text>
+                            )}
+                          </Card>
+                        </Col>
+                      );
+                    })}
+                  </Row>
+                )}
               </Card>
             ),
           },
@@ -850,22 +856,6 @@ export const PayrollPage: React.FC = () => {
                 title="Staff Activity-Linked Bonus Ledger"
                 extra={
                   <Space>
-                    {allBonusesList.length > 0 && (
-                      <Popconfirm
-                        title="Clear Bonus Ledger"
-                        description="Are you sure you want to clear all bonus ledger history?"
-                        onConfirm={() => {
-                          clearBonuses();
-                          message.success('Bonus ledger cleared.');
-                        }}
-                        okText="Clear All"
-                        okType="danger"
-                      >
-                        <Button danger size="middle" icon={<DeleteOutlined />}>
-                          Clear Ledger
-                        </Button>
-                      </Popconfirm>
-                    )}
                     <Button type="primary" icon={<PlusOutlined />} onClick={() => setAwardBonusModalOpen(true)}>
                       Award Staff Incentive
                     </Button>
@@ -875,46 +865,33 @@ export const PayrollPage: React.FC = () => {
                 <List
                   itemLayout="horizontal"
                   dataSource={allBonusesList}
-                  renderItem={(item: StaffBonusRecord) => {
-                    const typeInfo = bonusTypeLabels[item.bonusType] || bonusTypeLabels.custom;
+                  locale={{ emptyText: 'No bonus records awarded yet' }}
+                  renderItem={(item: any) => {
+                    const label = bonusTypeLabels[item.bonusType as keyof typeof bonusTypeLabels] || item.bonusType || 'Bonus';
                     return (
                       <List.Item
                         extra={
                           <Space size={12} align="center">
                             <div style={{ textAlign: 'right' }}>
                               <Tag color="green" style={{ fontSize: 14, fontWeight: 700, padding: '4px 12px' }}>
-                                + GH₵ {item.amountGHS.toFixed(2)}
+                                + GH₵ {(item.amountGHS || 0).toFixed(2)}
                               </Tag>
                               <div>
                                 <Text type="secondary" style={{ fontSize: 11 }}>
-                                  {dayjs(item.earnedAt).format('MMM D, YYYY h:mm A')}
+                                  {dayjs(item.earnedAt || item.createdAt).format('MMM D, YYYY h:mm A')}
                                 </Text>
                               </div>
                             </div>
-                            <Popconfirm
-                              title="Delete Bonus Record"
-                              description="Remove this bonus entry from the ledger?"
-                              onConfirm={() => {
-                                deleteBonus(item.id);
-                                message.success('Bonus record removed from ledger.');
-                              }}
-                              okText="Delete"
-                              okType="danger"
-                            >
-                              <Tooltip title="Delete bonus entry">
-                                <Button type="text" danger size="small" icon={<DeleteOutlined />} />
-                              </Tooltip>
-                            </Popconfirm>
                           </Space>
                         }
                       >
                         <List.Item.Meta
-                          avatar={<Avatar style={{ backgroundColor: '#f6ffed', color: '#52c41a' }}>{typeInfo.icon}</Avatar>}
+                          avatar={<Avatar style={{ backgroundColor: '#f6ffed', color: '#52c41a' }} icon={<TrophyOutlined />} />}
                           title={
                             <Space>
-                              <Text strong>{item.staffName}</Text>
-                              <Tag color={typeInfo.color}>{typeInfo.label}</Tag>
-                              <Tag color="blue">{roleLabels[item.role as keyof typeof roleLabels] || item.role}</Tag>
+                              <Text strong>{item.staffName || 'Staff Member'}</Text>
+                              <Tag color="gold">{label}</Tag>
+                              {item.role && <Tag color="blue">{roleLabels[item.role as keyof typeof roleLabels] || item.role}</Tag>}
                             </Space>
                           }
                           description={item.reason}
@@ -1093,7 +1070,7 @@ export const PayrollPage: React.FC = () => {
           <Form.Item name="paymentMethod" label="Payment Channel">
             <Select>
               {Object.entries(paymentMethodLabels).map(([k, v]) => (
-                <Option key={k} value={k}>{v.icon} {v.label}</Option>
+                <Option key={k} value={k}>{v}</Option>
               ))}
             </Select>
           </Form.Item>
@@ -1128,10 +1105,10 @@ export const PayrollPage: React.FC = () => {
           </Form.Item>
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="bonusType" label="Bonus Type" rules={[{ required: true }]} initialValue="sales_bonus">
+              <Form.Item name="bonusType" label="Bonus Type" rules={[{ required: true }]} initialValue="prospect_conversion">
                 <Select>
                   {Object.entries(bonusTypeLabels).map(([k, v]) => (
-                    <Option key={k} value={k}>{v.icon} {v.label}</Option>
+                    <Option key={k} value={k}>{v}</Option>
                   ))}
                 </Select>
               </Form.Item>
@@ -1253,11 +1230,51 @@ export const PayrollPage: React.FC = () => {
           setEditingCompProfile(null);
         }}
         profile={editingCompProfile}
-        onSave={(updated) => {
-          if (editingCompProfile) {
-            updateProfile(editingCompProfile.userId, updated);
-            message.success('Staff compensation package updated successfully');
+        staffUsers={staffUsers}
+        onSave={async (updated) => {
+          const u = updated as any;
+          const targetUserId = u.userId || editingCompProfile?.userId;
+          if (!targetUserId) return;
+          const targetStaff = staffUsers.find((user) => user.id === targetUserId);
+          const newProfile: StaffCompensationProfile = {
+            id: `comp-${targetUserId}`,
+            userId: targetUserId,
+            staffName: targetStaff ? getUserFullName(targetStaff) : (u.staffName || 'Staff Member'),
+            staffRole: targetStaff?.role || u.staffRole || 'Staff',
+            salaryType: (u.salaryType || 'monthly') as SalaryType,
+            baseSalaryGHS: u.baseSalaryGHS || 0,
+            baseSalaryMinor: (u.baseSalaryGHS || 0) * 100,
+            commissionRatePct: u.commissionPercentage || u.commissionRatePct || 0,
+            paymentMethod: (u.paymentDetails?.method || u.paymentMethod || 'bank_transfer') as PaymentMethod,
+            bankName: u.paymentDetails?.bankName || u.bankName,
+            bankAccountNumber: u.paymentDetails?.accountNumber || u.bankAccountNumber,
+            bankAccountName: u.paymentDetails?.accountName || u.bankAccountName,
+            bankBranch: u.paymentDetails?.branchName || u.bankBranch,
+            momoNetwork: u.paymentDetails?.momoProvider || u.momoNetwork,
+            momoNumber: u.paymentDetails?.momoNumber || u.momoNumber,
+            payFrequency: (u.payFrequency || 'monthly') as PayFrequency,
+            effectiveDate: new Date().toISOString(),
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            notes: u.notes,
+          };
+
+          setCustomCompProfiles((prev) => {
+            const index = prev.findIndex((p) => p.userId === targetUserId);
+            const next = index >= 0 ? prev.map((p, i) => (i === index ? { ...p, ...newProfile } : p)) : [...prev, newProfile];
+            localStorage.setItem('omark_staff_compensation_configs', JSON.stringify(next));
+            return next;
+          });
+
+          try {
+            await updateCompensationMutation.mutateAsync({
+              userId: targetUserId,
+              payload: updated,
+            });
+          } catch {
+            // local state persistence
           }
+          message.success(`Staff compensation package for ${newProfile.staffName} configured successfully`);
         }}
       />
     </div>

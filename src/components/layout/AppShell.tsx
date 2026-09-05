@@ -51,7 +51,7 @@ export const AppShell: React.FC = () => {
               width: '100%',
             }}>
               <img 
-                src="/images/logo1.png" 
+                src="/images/logo.webp" 
                 alt="Omark Real Estate" 
                 style={{ 
                   height: 40, 
@@ -71,7 +71,7 @@ export const AppShell: React.FC = () => {
           ) : (
             // Collapsed view - Logo only
             <img 
-              src="/images/logo1.png" 
+              src="/images/logo.webp" 
               alt="Omark Real Estate" 
               style={{ 
                 height: 40, 

@@ -84,10 +84,10 @@ export const AccountsDashboardPage: React.FC = () => {
   const expenses = filterEntitiesByBranch(rawExpenses, user, branches);
   const paymentPlans = filterEntitiesByBranch(rawPaymentPlans, user, branches);
 
-  const internalExpensesMinor = expenses.filter((e) => e.type === 'internal').reduce((sum, e) => sum + e.amountMinor, 0);
-  const externalExpensesMinor = expenses.filter((e) => e.type === 'external').reduce((sum, e) => sum + e.amountMinor, 0);
-  const totalBonusesMinor = payroll.reduce((sum, p) => sum + (p.bonusMinor || 0), 0);
-  const pendingPayrollCount = payroll.filter((p) => p.status === 'pending').length;
+  const internalExpensesMinor = expenses.filter((e: any) => e.type === 'internal').reduce((sum: number, e: any) => sum + (e.amountMinor || 0), 0);
+  const externalExpensesMinor = expenses.filter((e: any) => e.type === 'external').reduce((sum: number, e: any) => sum + (e.amountMinor || 0), 0);
+  const totalBonusesMinor = (payroll as any[]).reduce((sum: number, p: any) => sum + (p.bonusMinor || 0), 0);
+  const pendingPayrollCount = (payroll as any[]).filter((p: any) => p.status === 'pending').length;
 
   const handleAddExpense = async (values: { branchId?: string; category: string; description?: string; amountGHS: number; type: 'internal' | 'external'; date: dayjs.Dayjs }) => {
     try {

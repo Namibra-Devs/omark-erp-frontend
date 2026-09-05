@@ -35,10 +35,10 @@ import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
-import { ProgressCell } from '@/components/shared/ProgressCell';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { ProgressCell } from '@/components/shared/ProgressCell';
 import { tokens } from '@/constants/tokens';
-import { useDeedPolicy } from '@/mock/deedPolicy';
+import { useDeedPolicyQuery } from '@/api/deedPolicy';
 import { useCustomerQuery } from '@/api/customers';
 import { usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
 import { usePropertyQuery } from '@/api/properties';
@@ -50,7 +50,7 @@ import {
 } from '@/api/payments';
 import { useDeedsQuery, useGenerateDeedMutation } from '@/api/deeds';
 import { printDeedWithPhoto } from '@/components/shared/printDeedWithPhoto';
-import { cacheCustomerDetail } from '@/mock/customerPortalCache';
+import { cacheCustomerDetail } from '@/utils/customerPortalCache';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -82,7 +82,7 @@ export const CustomerDetailPage: React.FC = () => {
   ]);
 
   const paystackVerifyAttempted = useRef(false);
-  const deedPolicy = useDeedPolicy();
+  const { data: deedPolicy } = useDeedPolicyQuery();
 
   // ── API Queries ────────────────────────────────────────────────────────────
   const {
@@ -150,15 +150,13 @@ export const CustomerDetailPage: React.FC = () => {
   // (installments, payment history) that the customers list doesn't carry.
   useEffect(() => {
     if (customer?.id) {
-      cacheCustomerDetail(customer.id, {
-        firstName: customer.firstName,
-        lastName: customer.lastName,
-        phoneNumber: customer.phoneNumber,
-        property: property || undefined,
-        paymentPlan: paymentPlan || undefined,
-        installments: installments.length > 0 ? installments : undefined,
-        recentPayments: recentPayments.length > 0 ? recentPayments : undefined,
-      });
+      cacheCustomerDetail(
+        customer,
+        property || undefined,
+        paymentPlan || undefined,
+        installments,
+        recentPayments
+      );
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [customer?.id, paymentPlan, installments, recentPayments, property]);
@@ -264,15 +262,12 @@ export const CustomerDetailPage: React.FC = () => {
 
   const resetDeedForm = () => {
     deedForm.resetFields();
-    setWitnesses(Array.from({ length: deedPolicy.defaultWitnessCount }, () => ({ name: '', contact: '' })));
+    setWitnesses(Array.from({ length: deedPolicy?.defaultWitnessCount ?? 2 }, () => ({ name: '', contact: '' })));
   };
 
-  // Applies the Company Deed Policy (src/mock/deedPolicy.ts) before opening
-  // the modal — pre-fills Business Contacts and starts with the policy's
-  // default witness count. Still fully editable per deed.
   const openGenerateDeedModal = () => {
-    setWitnesses(Array.from({ length: deedPolicy.defaultWitnessCount }, () => ({ name: '', contact: '' })));
-    deedForm.setFieldsValue({ businessContacts: deedPolicy.standardBusinessContacts });
+    setWitnesses(Array.from({ length: deedPolicy?.defaultWitnessCount ?? 2 }, () => ({ name: '', contact: '' })));
+    deedForm.setFieldsValue({ businessContacts: deedPolicy?.businessContacts });
     setGenerateDeedModal(true);
   };
 
@@ -1087,7 +1082,7 @@ export const CustomerDetailPage: React.FC = () => {
             Business Contacts pre-filled from Company Deed Policy — editable below
           </Tag>
 
-          <Divider>Witnesses ({deedPolicy.defaultWitnessCount} required by policy, minimum 1)</Divider>
+          <Divider>Witnesses ({deedPolicy?.defaultWitnessCount ?? 2} required by policy, minimum 1)</Divider>
 
           {witnesses.map((witness, index) => (
             <Row key={index} gutter={[8, 8]} style={{ marginBottom: 8 }}>

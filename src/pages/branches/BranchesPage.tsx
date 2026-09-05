@@ -8,9 +8,8 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
 import type { BranchEntity } from '@/api/branches';
-import { useUsersQuery, getUserPhone } from '@/api/users';
+import { useUsersQuery, getUserPhone, useUpdateUserAssignmentMutation } from '@/api/users';
 import { roleLabels } from '@/constants/enums';
-import { getStaffAssignment, setStaffAssignment } from '@/mock/staffAssignments';
 
 const { Text } = Typography;
 
@@ -18,6 +17,7 @@ export const BranchesPage: React.FC = () => {
   const navigate = useNavigate();
   const { branches, isLoading: branchesLoading, addBranch, updateBranch, deleteBranch } = useBranchContext();
   const { data: usersData, isLoading: usersLoading } = useUsersQuery();
+  const updateAssignmentMutation = useUpdateUserAssignmentMutation();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingBranch, setEditingBranch] = useState<BranchEntity | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -33,8 +33,7 @@ export const BranchesPage: React.FC = () => {
   // Helper to get assigned staff for a branch
   const getBranchStaff = (branchId: string) => {
     return users.filter((u: any) => {
-      const assignment = getStaffAssignment(u.id);
-      const bId = assignment?.branchId || u.branchId || u.branch;
+      const bId = u.branchId || u.branch;
       return bId === branchId;
     });
   };
@@ -59,7 +58,7 @@ export const BranchesPage: React.FC = () => {
     return [...users].sort((a: any, b: any) => {
       if (a.role === 'branch_manager' && b.role !== 'branch_manager') return -1;
       if (a.role !== 'branch_manager' && b.role === 'branch_manager') return 1;
-      return (a.firstName || '').localeCompare(b.firstName || '');
+      return (a.firstName || '').localeCompare(a.firstName || '');
     });
   }, [users]);
 
@@ -87,13 +86,19 @@ export const BranchesPage: React.FC = () => {
       if (editingBranch) {
         await updateBranch(editingBranch.id, values);
         if (values.managerUserId) {
-          setStaffAssignment(values.managerUserId, { branchId: editingBranch.id, departmentId: 'dept-ops' });
+          await updateAssignmentMutation.mutateAsync({
+            userId: values.managerUserId,
+            payload: { branchId: editingBranch.id, departmentId: 'dept-ops' },
+          });
         }
         message.success('Branch updated successfully');
       } else {
         const newBranch = await addBranch(values);
         if (values.managerUserId && (newBranch as any)?.id) {
-          setStaffAssignment(values.managerUserId, { branchId: (newBranch as any).id, departmentId: 'dept-ops' });
+          await updateAssignmentMutation.mutateAsync({
+            userId: values.managerUserId,
+            payload: { branchId: (newBranch as any).id, departmentId: 'dept-ops' },
+          });
         }
         message.success('Branch created successfully');
       }

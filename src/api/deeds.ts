@@ -105,6 +105,45 @@ export function useDeedDocumentQuery(id: string | undefined) {
   });
 }
 
+export function useUpdateDeedStageMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, stage, notes }: { id: string; stage: string; notes?: string }) => {
+      const res = await apiClient.patch<ApiResponse<Deed>>(`/deeds/${id}`, { stage, notes });
+      return unwrapData(res);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: deedsKeys.all });
+    },
+  });
+}
+
+export function useCollectDeedMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, collectorName, collectorId, signatureUrl }: { id: string; collectorName: string; collectorId: string; signatureUrl?: string }) => {
+      const res = await apiClient.post<ApiResponse<Deed>>(`/deeds/${id}/collect`, { collectorName, collectorId, signatureUrl });
+      return unwrapData(res);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: deedsKeys.all });
+    },
+  });
+}
+
+export function useUploadDeedDocumentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, documentUrl }: { id: string; documentUrl: string }) => {
+      const res = await apiClient.post<ApiResponse<Deed>>(`/deeds/${id}/documents`, { documentUrl });
+      return unwrapData(res);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: deedsKeys.all });
+    },
+  });
+}
+
 // --- Utility Functions ---
 
 /**
@@ -135,3 +174,4 @@ export const useDeeds = useDeedsQuery;
 export const useGenerateDeed = useGenerateDeedMutation;
 /** @deprecated Use useDeedDocumentQuery instead */
 export const useDeedDocument = useDeedDocumentQuery;
+

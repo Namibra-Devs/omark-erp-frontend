@@ -7,6 +7,9 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { usePortalActivateMutation, usePortalLoginMutation, usePortalRequestOtpMutation, usePortalVerifyOtpMutation } from '@/api/portal';
 
+import { setPortalSessionCustomerId } from '@/utils/portalAuth';
+import { cacheCustomerDetail } from '@/utils/customerPortalCache';
+
 const { Title, Text } = Typography;
 
 export const PortalLoginPage: React.FC = () => {
@@ -37,6 +40,10 @@ export const PortalLoginPage: React.FC = () => {
       const res = await verifyOtpMutation.mutateAsync({ phoneNumber, code: values.code });
       if (res?.token) {
         localStorage.setItem('portal_token', res.token);
+        if (res.customer?.id) {
+          setPortalSessionCustomerId(res.customer.id);
+          cacheCustomerDetail(res.customer, undefined, undefined, [], []);
+        }
         navigate('/portal');
       }
     } catch (err: any) {
@@ -49,6 +56,10 @@ export const PortalLoginPage: React.FC = () => {
       const res = await loginMutation.mutateAsync({ phoneNumber, password: values.password });
       if (res?.token) {
         localStorage.setItem('portal_token', res.token);
+        if (res.customer?.id) {
+          setPortalSessionCustomerId(res.customer.id);
+          cacheCustomerDetail(res.customer, undefined, undefined, [], []);
+        }
         navigate('/portal');
       }
     } catch (err: any) {
@@ -56,6 +67,10 @@ export const PortalLoginPage: React.FC = () => {
         const activateRes = await activateMutation.mutateAsync({ phoneNumber, password: values.password });
         if (activateRes?.token) {
           localStorage.setItem('portal_token', activateRes.token);
+          if (activateRes.customer?.id) {
+            setPortalSessionCustomerId(activateRes.customer.id);
+            cacheCustomerDetail(activateRes.customer, undefined, undefined, [], []);
+          }
           navigate('/portal');
         }
       } catch (activateErr: any) {

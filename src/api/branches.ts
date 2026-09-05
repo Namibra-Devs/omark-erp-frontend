@@ -60,6 +60,20 @@ export interface DepartmentEntity {
   description?: string;
 }
 
+export type Branch = BranchEntity;
+export type BranchDepartment = DepartmentEntity;
+
+export const STANDARD_DEPARTMENTS: DepartmentEntity[] = [
+  { id: 'dept-mkt', name: 'Marketing & Sales', description: 'Lead generation, client conversion, and property sales' },
+  { id: 'dept-cs', name: 'Customer Service', description: 'Front-desk check-in, customer inquiries, and support' },
+  { id: 'dept-fin', name: 'Finance & Accounts', description: 'Payments, bank reconciliation, expense audits, and payroll' },
+  { id: 'dept-ops', name: 'Operations & Survey', description: 'Site mapping, legal documentation, and deed registry' },
+  { id: 'dept-exec', name: 'Executive Administration', description: 'Branch management and strategic leadership' },
+];
+
+export const mockBranchDepartments = STANDARD_DEPARTMENTS;
+
+
 // --- Query Keys ---
 
 export const branchesKeys = {

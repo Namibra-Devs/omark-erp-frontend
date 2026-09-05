@@ -13,7 +13,7 @@ import {
   SafetyCertificateOutlined,
   KeyOutlined
 } from '@ant-design/icons';
-import { BRANCH_GEOFENCES, generateReceptionQR } from '@/mock/staffAttendance';
+import { BRANCH_GEOFENCES, generateReceptionQR } from '@/constants/attendance';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;

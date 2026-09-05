@@ -1,11 +1,6 @@
-// src/mock/seenTracker.ts
+// src/utils/seenTracker.ts
 //
 // Generic "unseen since last visit" tracker backing the nav badge counters.
-// There's no backend concept of read/unread per user for any of this (no
-// endpoint tracks it), so it's local to this browser — good enough to
-// demo the badge-appears / badge-disappears-on-open / badge-reappears-on-
-// change loop, keyed by an arbitrary channel + viewer id (e.g.
-// `complaints-staff` + a user id, or `complaints-customer` + a customer id).
 import { useCallback, useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'omark_seen_tracker';
@@ -58,10 +53,9 @@ export const useUnseenCount = (channel: string, viewerId: string | undefined, ti
   }, [channel, viewerId]);
 
   const count = viewerId ? timestamps.filter((t) => t > lastSeen).length : 0;
-
-  const markSeenNow = useCallback(() => {
+  const boundMarkSeen = useCallback(() => {
     if (viewerId) markSeen(channel, viewerId);
   }, [channel, viewerId]);
 
-  return { count, markSeen: markSeenNow };
+  return { count, markSeen: boundMarkSeen };
 };

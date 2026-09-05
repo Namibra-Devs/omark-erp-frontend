@@ -12,16 +12,16 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
-import { useUpdateUserMutation, useUserBonusesQuery, useUserActivityQuery } from '@/api/users';
+import { useUpdateUserMutation, useUserActivityQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
 import { usePayrollQuery, type PayrollRecord } from '@/api/payroll';
 import { useBranchesQuery } from '@/api/branches';
 import { getUserBranchRoleTitle } from '@/utils/branchIsolation';
-import { useStaffBonuses } from '@/mock/bonusRules';
-
-import { useAttendanceQuery, useStaffLeaveRequestsQuery } from '@/api/attendance';
+import { useBonusesQuery, type StaffBonusRecord } from '@/api/bonuses';
+import { useAttendanceQuery } from '@/api/attendance';
+import { useStaffLeaveRequestsQuery } from '@/api/leaves';
 
 const { Title, Text } = Typography;
 
@@ -44,32 +44,38 @@ export const MyProfilePage: React.FC = () => {
   const [form] = Form.useForm();
   const updateUser = useUpdateUserMutation();
 
-  const canSeeProspects = hasRole(['marketing_staff', 'marketing_director', 'admin']);
-  const canSeeAppointments = hasRole(['customer_service', 'admin']);
-  const canSeeDeeds = hasRole(['secretary', 'admin']);
+  // Queries (only fetch when user is available)
+  const canSeeProspects = hasRole(['admin', 'marketing_staff']);
+  const canSeeAppointments = hasRole(['admin', 'marketing_staff', 'customer_service']);
+  const canSeeDeeds = hasRole(['admin', 'secretary', 'customer_service']);
 
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery(
-    { assignedUserId: user?.id, pageSize: 20 },
-    canSeeProspects && !!user?.id
+    { assignedUserId: user?.id },
+    canSeeProspects && Boolean(user?.id)
   );
   const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery(
-    { pageSize: 50 },
-    canSeeAppointments
+    {},
+    canSeeAppointments && Boolean(user?.id)
   );
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery(
-    { pageSize: 50 },
-    canSeeDeeds
+    {},
+    canSeeDeeds && Boolean(user?.id)
   );
+
   const { data: serverActivity = [] } = useUserActivityQuery(user?.id);
 
   // Live Attendance & Leave Queries
   const { data: attendanceData = [] } = useAttendanceQuery({ userId: user?.id });
-  const { data: leaveData = [] } = useStaffLeaveRequestsQuery(undefined, user?.id);
+  const { data: leaveData = [] } = useStaffLeaveRequestsQuery({ userId: user?.id });
 
   // Live Payroll & Bonus API queries
   const { data: payrollData, isLoading: payrollLoading } = usePayrollQuery({ staffUserId: user?.id });
-  const { data: bonuses = [], isLoading: bonusesLoading } = useUserBonusesQuery(user?.id);
-  const { bonuses: earnedBonuses, totalBonusMinor: earnedBonusMinorTotal } = useStaffBonuses(user?.id);
+  const { data: bonuses = [], isLoading: bonusesLoading } = useBonusesQuery({ userId: user?.id });
+  const earnedBonuses: StaffBonusRecord[] = bonuses;
+  const earnedBonusMinorTotal = useMemo(
+    () => earnedBonuses.reduce((sum: number, b: any) => sum + (b.amountMinor || (b.amountGHS ? b.amountGHS * 100 : 0)), 0),
+    [earnedBonuses]
+  );
 
   const myPayroll: PayrollRecord[] = payrollData?.items ?? [];
 
@@ -227,7 +233,7 @@ export const MyProfilePage: React.FC = () => {
         ? <Tag color="green">GHS {(r.bonusMinor / 100).toLocaleString()}</Tag>
         : <span style={{ color: '#bbb' }}>—</span>,
     },
-    { title: 'Deductions', key: 'deductions', render: (_: any, r: PayrollRecord) => (r.deductionsMinor || 0) > 0 ? `GHS ${(r.deductionsMinor / 100).toLocaleString()}` : '—' },
+    { title: 'Deductions', key: 'deductions', render: (_: any, r: PayrollRecord) => (r.deductionsMinor || 0) > 0 ? `GHS ${((r.deductionsMinor || 0) / 100).toLocaleString()}` : '—' },
     { title: 'Net Salary', key: 'net', render: (_: any, r: PayrollRecord) => <strong>GHS {(r.netSalaryMinor / 100).toLocaleString()}</strong> },
     { title: 'Status', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color={payrollStatusColor[v] || 'default'}>{v}</Tag> },
   ];

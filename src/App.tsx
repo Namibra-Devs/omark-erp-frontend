@@ -1,7 +1,7 @@
 // src/App.tsx
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ConfigProvider, App as AntdApp } from 'antd';
+import { ConfigProvider, App as AntdApp, Spin } from 'antd';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { BranchProvider } from '@/contexts/BranchContext';
@@ -13,65 +13,71 @@ import { ScrollToTop } from '@/components/layout/ScrollToTop';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { tokens } from '@/constants/tokens';
 
-// Pages
+// Fast initial load for Login
 import { LoginPage } from '@/pages/LoginPage';
 
-// Dashboard Pages
-import { SecretaryDashboardPage } from '@/pages/dashboard/SecretaryDashboardPage';
-import { AccountsDashboardPage } from '@/pages/dashboard/AccountsDashboardPage';
-import { AdminDashboardPage } from '@/pages/dashboard/AdminDashboardPage';
+// Public Pages (Lazy)
+const BookingPage = React.lazy(() => import('@/pages/public/BookingPage').then(m => ({ default: m.BookingPage })));
 
-// Prospect Pages
-import { ProspectsPage } from '@/pages/marketing/ProspectsPage';
-import { ProspectDetailPage } from '@/pages/marketing/ProspectDetailPage';
-import { DirectorOverviewPage } from '@/pages/marketing/DirectorOverviewPage';
-import { CSProspectsPage } from '@/pages/cs/CSProspectsPage';
+// Dashboard Pages (Lazy)
+const SecretaryDashboardPage = React.lazy(() => import('@/pages/dashboard/SecretaryDashboardPage').then(m => ({ default: m.SecretaryDashboardPage })));
+const AccountsDashboardPage = React.lazy(() => import('@/pages/dashboard/AccountsDashboardPage').then(m => ({ default: m.AccountsDashboardPage })));
+const AdminDashboardPage = React.lazy(() => import('@/pages/dashboard/AdminDashboardPage').then(m => ({ default: m.AdminDashboardPage })));
 
-// Customer Service Pages
-import { AppointmentsPage } from '@/pages/cs/AppointmentsPage';
-import { CheckInsPage } from '@/pages/cs/CheckInsPage';
+// Prospect Pages (Lazy)
+const ProspectsPage = React.lazy(() => import('@/pages/marketing/ProspectsPage').then(m => ({ default: m.ProspectsPage })));
+const ProspectDetailPage = React.lazy(() => import('@/pages/marketing/ProspectDetailPage').then(m => ({ default: m.ProspectDetailPage })));
+const DirectorOverviewPage = React.lazy(() => import('@/pages/marketing/DirectorOverviewPage').then(m => ({ default: m.DirectorOverviewPage })));
+const CSProspectsPage = React.lazy(() => import('@/pages/cs/CSProspectsPage').then(m => ({ default: m.CSProspectsPage })));
 
-// Customer Pages
-import { CustomersPage } from '@/pages/customers/CustomersPage';
-import { CustomerDetailPage } from '@/pages/customers/CustomerDetailPage';
+// Customer Service Pages (Lazy)
+const AppointmentsPage = React.lazy(() => import('@/pages/cs/AppointmentsPage').then(m => ({ default: m.AppointmentsPage })));
+const CheckInsPage = React.lazy(() => import('@/pages/cs/CheckInsPage').then(m => ({ default: m.CheckInsPage })));
 
-// Payment Plan Pages
-import { PaymentPlansPage } from '@/pages/paymentPlans/PaymentPlansPage';
+// Customer Pages (Lazy)
+const CustomersPage = React.lazy(() => import('@/pages/customers/CustomersPage').then(m => ({ default: m.CustomersPage })));
+const CustomerDetailPage = React.lazy(() => import('@/pages/customers/CustomerDetailPage').then(m => ({ default: m.CustomerDetailPage })));
 
-// Deeds Pages
-import { DeedsPage } from '@/pages/deeds/DeedsPage';
+// Payment Plan Pages (Lazy)
+const PaymentPlansPage = React.lazy(() => import('@/pages/paymentPlans/PaymentPlansPage').then(m => ({ default: m.PaymentPlansPage })));
 
-// Notifications Pages
-import { NotificationsPage } from '@/pages/notifications/NotificationsPage';
+// Deeds Pages (Lazy)
+const DeedsPage = React.lazy(() => import('@/pages/deeds/DeedsPage').then(m => ({ default: m.DeedsPage })));
 
-// Admin Pages
-import { UsersPage } from '@/pages/admin/UsersPage';
-import { StaffProfilePage } from '@/pages/admin/StaffProfilePage';
-import { PropertiesPage } from '@/pages/admin/PropertiesPage';
-import { ComplaintsPage } from '@/pages/admin/ComplaintsPage';
-import { DeedPolicyPage } from '@/pages/admin/DeedPolicyPage';
-import { MyProfilePage } from '@/pages/profile/MyProfilePage';
-import { ExpensesPage } from '@/pages/accounts/ExpensesPage';
+// Notifications Pages (Lazy)
+const NotificationsPage = React.lazy(() => import('@/pages/notifications/NotificationsPage').then(m => ({ default: m.NotificationsPage })));
 
-// Branch Pages (prototype — see src/mock/branches.ts)
-import { BranchesPage } from '@/pages/branches/BranchesPage';
-import { HeadOfficeDashboard } from '@/pages/branches/HeadOfficeDashboard';
-import { BranchDashboard } from '@/pages/branches/BranchDashboard';
-import { MasterPricingPage } from '@/pages/branches/MasterPricingPage';
-import { ApprovalWorkflowPage } from '@/pages/branches/ApprovalWorkflowPage';
-import { PayrollPage } from '@/pages/branches/PayrollPage';
-import { AttendancePage } from '@/pages/attendance/AttendancePage';
+// Admin Pages (Lazy)
+const UsersPage = React.lazy(() => import('@/pages/admin/UsersPage').then(m => ({ default: m.UsersPage })));
+const StaffProfilePage = React.lazy(() => import('@/pages/admin/StaffProfilePage').then(m => ({ default: m.StaffProfilePage })));
+const PropertiesPage = React.lazy(() => import('@/pages/admin/PropertiesPage').then(m => ({ default: m.PropertiesPage })));
+const ComplaintsPage = React.lazy(() => import('@/pages/admin/ComplaintsPage').then(m => ({ default: m.ComplaintsPage })));
+const DeedPolicyPage = React.lazy(() => import('@/pages/admin/DeedPolicyPage').then(m => ({ default: m.DeedPolicyPage })));
+const MyProfilePage = React.lazy(() => import('@/pages/profile/MyProfilePage').then(m => ({ default: m.MyProfilePage })));
+const ExpensesPage = React.lazy(() => import('@/pages/accounts/ExpensesPage').then(m => ({ default: m.ExpensesPage })));
 
-// Public Pages
-import { BookingPage } from '@/pages/public/BookingPage';
+// Branch Pages (Lazy)
+const BranchesPage = React.lazy(() => import('@/pages/branches/BranchesPage').then(m => ({ default: m.BranchesPage })));
+const HeadOfficeDashboard = React.lazy(() => import('@/pages/branches/HeadOfficeDashboard').then(m => ({ default: m.HeadOfficeDashboard })));
+const BranchDashboard = React.lazy(() => import('@/pages/branches/BranchDashboard').then(m => ({ default: m.BranchDashboard })));
+const MasterPricingPage = React.lazy(() => import('@/pages/branches/MasterPricingPage').then(m => ({ default: m.MasterPricingPage })));
+const ApprovalWorkflowPage = React.lazy(() => import('@/pages/branches/ApprovalWorkflowPage').then(m => ({ default: m.ApprovalWorkflowPage })));
+const PayrollPage = React.lazy(() => import('@/pages/branches/PayrollPage').then(m => ({ default: m.PayrollPage })));
+const AttendancePage = React.lazy(() => import('@/pages/attendance/AttendancePage').then(m => ({ default: m.AttendancePage })));
 
-// Customer Portal Pages (prototype — see src/mock/portalAuth.ts)
-import { PortalLoginPage } from '@/pages/portal/PortalLoginPage';
-import { PortalLayout } from '@/pages/portal/PortalLayout';
-import { PortalDashboardPage } from '@/pages/portal/PortalDashboardPage';
-import { PortalPropertyPage } from '@/pages/portal/PortalPropertyPage';
-import { PortalPaymentsPage } from '@/pages/portal/PortalPaymentsPage';
-import { PortalComplaintsPage } from '@/pages/portal/PortalComplaintsPage';
+// Customer Portal Pages (Lazy)
+const PortalLoginPage = React.lazy(() => import('@/pages/portal/PortalLoginPage').then(m => ({ default: m.PortalLoginPage })));
+const PortalLayout = React.lazy(() => import('@/pages/portal/PortalLayout').then(m => ({ default: m.PortalLayout })));
+const PortalDashboardPage = React.lazy(() => import('@/pages/portal/PortalDashboardPage').then(m => ({ default: m.PortalDashboardPage })));
+const PortalPropertyPage = React.lazy(() => import('@/pages/portal/PortalPropertyPage').then(m => ({ default: m.PortalPropertyPage })));
+const PortalPaymentsPage = React.lazy(() => import('@/pages/portal/PortalPaymentsPage').then(m => ({ default: m.PortalPaymentsPage })));
+const PortalComplaintsPage = React.lazy(() => import('@/pages/portal/PortalComplaintsPage').then(m => ({ default: m.PortalComplaintsPage })));
+
+const RouteLoadingFallback = () => (
+  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: '60vh', width: '100%' }}>
+    <Spin size="large" tip="Loading..." />
+  </div>
+);
 
 // Error pages
 const UnauthorizedPage = () => (
@@ -125,7 +131,8 @@ const AppRoutes: React.FC = () => {
   return (
     <>
     <ScrollToTop />
-    <Routes>
+    <React.Suspense fallback={<RouteLoadingFallback />}>
+      <Routes>
       {/* ============ PUBLIC ROUTES ============ */}
       <Route path="/login" element={<LoginPage />} />
       <Route path="/book-appointment" element={<BookingPage />} />
@@ -459,6 +466,7 @@ const AppRoutes: React.FC = () => {
       {/* ===== CATCH ALL ===== */}
       <Route path="*" element={<Navigate to="/404" replace />} />
     </Routes>
+    </React.Suspense>
     </>
   );
 };

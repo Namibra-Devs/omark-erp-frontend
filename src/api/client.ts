@@ -12,14 +12,22 @@ import type { ApiError, ApiResponse } from '@/types';
 // no Netlify dashboard environment-variable configuration is needed at all.
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? (import.meta.env.DEV ? 'https://api.erp.omarkrealestate.com' : '');
 
+const REQUEST_TIMEOUT_MS = 20000;
+
+interface RefreshSubscriber {
+  resolve: (token: string) => void;
+  reject: (error: any) => void;
+}
+
 let accessToken: string | null = localStorage.getItem('accessToken');
 let refreshToken: string | null = localStorage.getItem('refreshToken');
 let isRefreshing = false;
-let refreshSubscribers: ((token: string) => void)[] = [];
+let refreshSubscribers: RefreshSubscriber[] = [];
 
 // CRM legacy client pointing to /api/v1
 const apiClient: AxiosInstance = axios.create({
   baseURL: `${BASE_URL}/api/v1`,
+  timeout: REQUEST_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
@@ -28,24 +36,31 @@ const apiClient: AxiosInstance = axios.create({
 // ERP new client pointing to the base URL
 export const erpClient: AxiosInstance = axios.create({
   baseURL: BASE_URL,
+  timeout: REQUEST_TIMEOUT_MS,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-function subscribeTokenRefresh(cb: (token: string) => void) {
-  refreshSubscribers.push(cb);
+function subscribeTokenRefresh(resolve: (token: string) => void, reject: (error: any) => void) {
+  refreshSubscribers.push({ resolve, reject });
 }
 
 function onTokenRefreshed(token: string) {
-  refreshSubscribers.forEach(cb => cb(token));
+  refreshSubscribers.forEach((sub) => sub.resolve(token));
+  refreshSubscribers = [];
+}
+
+function onTokenRefreshFailed(error: any) {
+  refreshSubscribers.forEach((sub) => sub.reject(error));
   refreshSubscribers = [];
 }
 
 const addAuthInterceptor = (instance: AxiosInstance) => {
   instance.interceptors.request.use(
     (config: InternalAxiosRequestConfig) => {
-      const token = getAccessToken() || (window.location.pathname.startsWith('/portal') ? localStorage.getItem('portal_token') : null);
+      const isPortalRoute = window.location.pathname.startsWith('/portal') || config.url?.includes('/portal/');
+      const token = isPortalRoute ? localStorage.getItem('portal_token') : getAccessToken();
       if (token) {
         config.headers.Authorization = `Bearer ${token}`;
       }
@@ -65,18 +80,38 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
       // Each API hook handles its own unwrapping of the server envelope
       return response;
     },
-    async (error: AxiosError<ApiError>) => {
-      const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+    async (error: AxiosError<any>) => {
+      const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
 
-      // Handle 401 - try refresh (exclude auth login/refresh requests)
-      const isAuthEndpoint = originalRequest?.url?.includes('/auth/login') || originalRequest?.url?.includes('/auth/refresh') || originalRequest?.url?.includes('/portal/auth');
-      if (error.response?.status === 401 && !originalRequest._retry && !isAuthEndpoint) {
+      // Handle 401 for Customer Portal
+      const isPortalRoute = window.location.pathname.startsWith('/portal') || originalRequest?.url?.includes('/portal/');
+      const isAuthEndpoint =
+        originalRequest?.url?.includes('/auth/login') ||
+        originalRequest?.url?.includes('/auth/refresh') ||
+        originalRequest?.url?.includes('/portal/auth');
+
+      if (isPortalRoute && error.response?.status === 401 && !isAuthEndpoint) {
+        localStorage.removeItem('portal_token');
+        localStorage.removeItem('portal_customer_id');
+        if (window.location.pathname !== '/portal/login') {
+          window.location.href = '/portal/login';
+        }
+        return Promise.reject(error);
+      }
+
+      // Handle 401 for ERP Staff - try token refresh
+      if (error.response?.status === 401 && originalRequest && !originalRequest._retry && !isAuthEndpoint && !isPortalRoute) {
         if (isRefreshing) {
-          return new Promise((resolve) => {
-            subscribeTokenRefresh((token: string) => {
-              originalRequest.headers.Authorization = `Bearer ${token}`;
-              resolve(instance(originalRequest));
-            });
+          return new Promise((resolve, reject) => {
+            subscribeTokenRefresh(
+              (token: string) => {
+                originalRequest.headers.Authorization = `Bearer ${token}`;
+                resolve(instance(originalRequest));
+              },
+              (refreshErr: any) => {
+                reject(refreshErr);
+              }
+            );
           });
         }
 
@@ -103,7 +138,8 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
           originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
           return instance(originalRequest);
         } catch (refreshError) {
-          // Refresh failed — clear tokens and redirect to login if not on /login
+          // Reject all queued requests so spinners do not hang forever
+          onTokenRefreshFailed(refreshError);
           clearTokens();
           if (window.location.pathname !== '/login' && !window.location.pathname.startsWith('/portal/login')) {
             window.location.href = '/login';
@@ -114,13 +150,32 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
         }
       }
 
-      // Transform error response
-      const apiError: ApiError = {
+      // Extract comprehensive error details without dropping NestJS or Express error formats
+      const serverData = error.response?.data as any;
+      const rawMsg =
+        serverData?.error?.message ||
+        (Array.isArray(serverData?.message) ? serverData.message.join(', ') : serverData?.message) ||
+        (typeof serverData?.error === 'string' ? serverData.error : null) ||
+        error.message ||
+        'An unexpected error occurred';
+
+      const errorCode =
+        serverData?.error?.code ||
+        serverData?.code ||
+        (error.response?.status ? `HTTP_${error.response.status}` : 'UNKNOWN_ERROR');
+
+      // Construct a backward-compatible rich error object that matches ApiError,
+      // while also carrying status, response, and standard Error fields so UI components
+      // can inspect either err.response, err.error.message, or err.message
+      const apiError: ApiError & { status?: number; response?: any; message: string } = {
         error: {
-          code: error.response?.data?.error?.code || 'UNKNOWN_ERROR',
-          message: error.response?.data?.error?.message || 'An unexpected error occurred',
-          details: error.response?.data?.error?.details,
+          code: errorCode,
+          message: rawMsg,
+          details: serverData?.error?.details || serverData?.details,
         },
+        status: error.response?.status,
+        response: error.response,
+        message: rawMsg,
       };
 
       return Promise.reject(apiError);

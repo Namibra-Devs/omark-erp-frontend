@@ -1,7 +1,7 @@
 // src/contexts/CustomerPortalAuthContext.tsx
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
-import { getCachedCustomer, type CachedCustomerRecord } from '@/mock/customerPortalCache';
-import { clearPortalSession, getPortalSessionCustomerId } from '@/mock/portalAuth';
+import { getCachedCustomer, type CachedCustomerRecord } from '@/utils/customerPortalCache';
+import { clearPortalSession, getPortalSessionCustomerId } from '@/utils/portalAuth';
 
 interface CustomerPortalAuthContextType {
   customer: CachedCustomerRecord | null;
@@ -31,6 +31,9 @@ export const CustomerPortalAuthProvider: React.FC<{ children: React.ReactNode }>
 
   useEffect(() => {
     refresh();
+    const handleStorage = () => refresh();
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
   }, [refresh]);
 
   const setSessionCustomerId = (customerId: string) => {

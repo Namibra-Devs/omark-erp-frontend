@@ -9,12 +9,13 @@ import {
   DollarOutlined, CheckCircleOutlined, InfoCircleOutlined
 } from '@ant-design/icons';
 import {
-  useBonusRules,
+  useBonusRulesQuery,
+  useCreateBonusRuleMutation,
+  useUpdateBonusRuleMutation,
   bonusTypeLabels,
   type BonusRule,
   type BonusType,
-  type BonusEventType,
-} from '@/mock/bonusRules';
+} from '@/api/bonuses';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 
@@ -28,16 +29,18 @@ interface BonusRulesModalProps {
 }
 
 export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose }) => {
-  const { rules, addRule, updateRule, deleteRule } = useBonusRules();
+  const { data: rules = [], isLoading } = useBonusRulesQuery();
+  const createRuleMutation = useCreateBonusRuleMutation();
+  const updateRuleMutation = useUpdateBonusRuleMutation();
   const [editingAmounts, setEditingAmounts] = useState<Record<string, number>>({});
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [rolesDropdownOpen, setRolesDropdownOpen] = useState(false);
   const [form] = Form.useForm();
 
-  const handleToggle = (rule: BonusRule, checked: boolean) => {
+  const handleToggle = async (rule: any, checked: boolean) => {
     try {
-      updateRule(rule.id, { isActive: checked });
-      message.success(`${rule.name} ${checked ? 'enabled' : 'disabled'}`);
+      await updateRuleMutation.mutateAsync({ id: rule.id, payload: { isActive: checked } });
+      message.success(`${rule.ruleName || rule.name} ${checked ? 'enabled' : 'disabled'}`);
     } catch (err: any) {
       message.error(err.message || 'Failed to update rule');
     }
@@ -49,12 +52,13 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
     }
   };
 
-  const handleSaveAmount = (rule: BonusRule) => {
+  const handleSaveAmount = async (rule: any) => {
     const newAmount = editingAmounts[rule.id];
-    if (newAmount === undefined || newAmount === rule.amountGHS) return;
+    const currAmount = rule.rewardAmountGHS ?? rule.amountGHS;
+    if (newAmount === undefined || newAmount === currAmount) return;
     try {
-      updateRule(rule.id, { amountGHS: newAmount });
-      message.success(`Updated ${rule.name} to GH₵ ${newAmount.toFixed(2)}`);
+      await updateRuleMutation.mutateAsync({ id: rule.id, payload: { rewardAmountGHS: newAmount, rewardAmountMinor: Math.round(newAmount * 100) } });
+      message.success(`Updated ${rule.ruleName || rule.name} to GH₵ ${newAmount.toFixed(2)}`);
       setEditingAmounts((prev) => {
         const next = { ...prev };
         delete next[rule.id];
@@ -65,23 +69,25 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
     }
   };
 
-  const handleCreateRule = (values: any) => {
+  const handleCreateRule = async (values: any) => {
     try {
-      addRule({
+      await createRuleMutation.mutateAsync({
         bonusType: values.bonusType,
-        eventType: values.eventType || 'custom',
-        name: values.name,
-        amountGHS: values.amountGHS,
+        ruleName: values.name,
+        triggerEvent: values.eventType || 'custom',
+        rewardType: 'FIXED_GHS',
+        rewardAmountGHS: values.amountGHS,
+        rewardAmountMinor: Math.round(values.amountGHS * 100),
         applicableRoles: values.applicableRoles || ['marketing_staff', 'customer_service'],
         isActive: true,
         description: values.description,
-        criteria: values.criteria,
+        qualificationCriteria: values.criteria,
       });
       message.success('New bonus rule created successfully');
       setCreateModalOpen(false);
       form.resetFields();
     } catch (err: any) {
-      message.error('Failed to create bonus rule');
+      message.error(err?.message || 'Failed to create bonus rule');
     }
   };
 
@@ -90,23 +96,25 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
       title: 'Bonus Rule & Type',
       key: 'name',
       render: (_: any, record: BonusRule) => {
-        const typeInfo = bonusTypeLabels[record.bonusType] || bonusTypeLabels.custom;
+        const typeLabel = bonusTypeLabels[record.bonusType] || record.bonusType;
+        const ruleName = record.ruleName || (record as any).name || 'Bonus Rule';
+        const criteria = record.qualificationCriteria || (record as any).criteria;
         return (
           <div>
             <Space align="center">
-              <span style={{ fontSize: 16 }}>{typeInfo.icon}</span>
-              <Text strong style={{ fontSize: 14 }}>{record.name}</Text>
-              <Tag color={typeInfo.color} style={{ fontSize: 11, borderRadius: 10 }}>
-                {typeInfo.label}
+              <TrophyOutlined style={{ fontSize: 16, color: '#f59e0b' }} />
+              <Text strong style={{ fontSize: 14 }}>{ruleName}</Text>
+              <Tag color="gold" style={{ fontSize: 11, borderRadius: 10 }}>
+                {typeLabel}
               </Tag>
             </Space>
             <Paragraph type="secondary" style={{ fontSize: 12, margin: '4px 0 0 0' }}>
               {record.description}
             </Paragraph>
-            {record.criteria && (
+            {criteria && (
               <div style={{ marginTop: 2 }}>
                 <Text type="secondary" style={{ fontSize: 11, color: '#8c8c8c' }}>
-                  <strong>Criteria:</strong> {record.criteria}
+                  <strong>Criteria:</strong> {criteria}
                 </Text>
               </div>
             )}
@@ -120,7 +128,7 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
       width: 200,
       render: (_: any, record: BonusRule) => (
         <Space wrap size={[4, 4]}>
-          {record.applicableRoles.map((r) => (
+          {(record.applicableRoles || []).map((r) => (
             <Tag key={r} color="blue" style={{ fontSize: 11 }}>
               {roleLabels[r as keyof typeof roleLabels] || r}
             </Tag>
@@ -133,8 +141,9 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
       key: 'amount',
       width: 170,
       render: (_: any, record: BonusRule) => {
-        const currentEdit = editingAmounts[record.id] ?? record.amountGHS;
-        const isModified = editingAmounts[record.id] !== undefined && editingAmounts[record.id] !== record.amountGHS;
+        const ruleAmount = record.rewardAmountGHS ?? (record as any).amountGHS ?? 0;
+        const currentEdit = editingAmounts[record.id] ?? ruleAmount;
+        const isModified = editingAmounts[record.id] !== undefined && editingAmounts[record.id] !== ruleAmount;
 
         return (
           <Space direction="vertical" size={2}>
@@ -175,16 +184,6 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
         />
       ),
     },
-    {
-      title: '',
-      key: 'actions',
-      width: 50,
-      render: (_: any, record: BonusRule) => (
-        <Popconfirm title="Delete this bonus rule?" onConfirm={() => deleteRule(record.id)}>
-          <Button type="text" danger size="small" icon={<DeleteOutlined />} />
-        </Popconfirm>
-      ),
-    },
   ];
 
   return (
@@ -221,6 +220,7 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
           columns={columns}
           dataSource={rules}
           rowKey="id"
+          loading={isLoading}
           pagination={false}
           size="middle"
           scroll={{ x: 700 }}
@@ -246,7 +246,7 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
                 <Select placeholder="Select type">
                   {Object.entries(bonusTypeLabels).map(([k, v]) => (
                     <Option key={k} value={k}>
-                      {v.icon} {v.label}
+                      {v}
                     </Option>
                   ))}
                 </Select>

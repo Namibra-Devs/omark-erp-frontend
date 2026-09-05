@@ -4,8 +4,7 @@ import { Drawer, Form, Input, Select, Space, Button, Typography, message, Divide
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { mockBranchDepartments } from '@/mock/branches';
-import { useStaffAssignment } from '@/mock/staffAssignments';
+import { mockBranchDepartments } from '@/api/branches';
 import type { User } from '../types';
 
 const { Option } = Select;
@@ -28,11 +27,9 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
 }) => {
   const [form] = Form.useForm();
   const { branches } = useBranchContext();
-  const { assignment, update: updateAssignment } = useStaffAssignment(user?.id);
 
   useEffect(() => {
     if (user && open) {
-      // Map user data to form fields
       const formValues = {
         firstName: user.firstName || '',
         lastName: user.lastName || '',
@@ -43,22 +40,15 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
         role: user.role || '',
         status: user.status || 'active',
         department: user.department || '',
-        isActive: user.status === 'active',
-        branchId: assignment.branchId,
-        departmentId: assignment.departmentId,
+        branchId: (user as any)?.branchId || (user as any)?.branch,
+        departmentId: (user as any)?.departmentId || user.department,
       };
 
-      console.log('📝 Setting form values:', formValues);
       form.setFieldsValue(formValues);
     }
-  }, [user, open, form, assignment]);
+  }, [user, open, form]);
 
   const handleSubmit = (values: any) => {
-    console.log('📤 Edit form submitted:', values);
-
-    // Branch/department are prototype-only (see src/mock/staffAssignments.ts)
-    // — saved to the local mock store, never sent to the real PATCH /users/{id}.
-    updateAssignment({ branchId: values.branchId, departmentId: values.departmentId });
 
     // Build the payload with proper field mapping
     const payload: any = {};
@@ -104,7 +94,7 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
       return;
     }
     
-    onEdit(payload);
+    onEdit({ ...payload, branchId: values.branchId, departmentId: values.departmentId });
   };
 
   const handleClose = () => {

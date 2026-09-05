@@ -8,8 +8,8 @@ import {
 } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
 import { useCustomerPortalAuth } from '@/contexts/CustomerPortalAuthContext';
-import { useComplaints } from '@/mock/complaints';
-import { useUnseenCount } from '@/mock/seenTracker';
+import { useComplaintsQuery } from '@/api/complaints';
+import { useUnseenCount } from '@/utils/seenTracker';
 
 const { Header, Content } = Layout;
 const { Text } = Typography;
@@ -19,11 +19,8 @@ export const PortalLayout: React.FC = () => {
   const location = useLocation();
   const { customer, logout } = useCustomerPortalAuth();
 
-  const allComplaints = useComplaints();
-  const myComplaints = useMemo(
-    () => (customer ? allComplaints.filter((c) => c.customerId === customer.id) : []),
-    [allComplaints, customer]
-  );
+  const { data: complaintsData } = useComplaintsQuery(customer?.id ? { customerId: customer.id } : undefined);
+  const myComplaints = complaintsData?.items ?? [];
   const { count: complaintUpdatesCount } = useUnseenCount(
     'complaints-customer',
     customer?.id,

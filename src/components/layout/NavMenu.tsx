@@ -26,10 +26,10 @@ import { usePendingNotificationsCountQuery } from '@/api/notifications';
 import { useUnseenCountsQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
-import { useComplaints } from '@/mock/complaints';
-import { useCheckIns } from '@/mock/checkIns';
-import { useUnseenCount } from '@/mock/seenTracker';
-import { useMockActivityFeed } from '@/pages/dashboard/admin/hooks/useMockActivityFeed';
+import { useComplaintsQuery } from '@/api/complaints';
+import { useApprovalsQuery } from '@/api/approvals';
+import { useCheckIns } from '@/utils/visitorCheckIns';
+import { useUnseenCount } from '@/utils/seenTracker';
 
 /** Small red counter badge, same visual language as the existing Notifications badge. */
 const NavBadge: React.FC<{ count: number; title?: string }> = ({ count, title }) => {
@@ -66,16 +66,18 @@ export const NavMenu: React.FC = () => {
 
   // ── Cross-nav badge counters ──────────────────────────────────────────────
   const canSeeComplaints = hasRole(['secretary', 'customer_service', 'admin']);
-  const complaints = useComplaints();
+  const { data: complaintsData } = useComplaintsQuery(canSeeComplaints ? { status: 'open' } : undefined);
+  const complaintsList = complaintsData?.items ?? [];
   const { count: fallbackComplaintsCount } = useUnseenCount(
     'complaints-staff',
     canSeeComplaints ? user?.id : undefined,
-    complaints.map((c) => c.createdAt)
+    complaintsList.map((c) => c.createdAt)
   );
 
   const canSeeHeadOffice = hasRole(['admin']);
   const canSeePayroll = hasRole(['accounts', 'admin', 'branch_manager']);
-  const { stats: mockStats } = useMockActivityFeed();
+  const { data: approvalsData = [] } = useApprovalsQuery();
+  const pendingApprovalsFromApi = approvalsData.filter((a) => a.status === 'pending').length;
 
   const canSeeMyProspects = hasRole(['marketing_staff', 'marketing_director', 'admin']);
   const { data: myProspectsData } = useProspectsQuery(
@@ -106,10 +108,10 @@ export const NavMenu: React.FC = () => {
     checkInRecords.map((c) => c.createdAt)
   );
 
-  // Use real backend unseen-counts if available, falling back to local trackers
+  // Use real backend unseen-counts if available, falling back to live query data
   const newComplaintsCount = apiUnseenCounts?.complaints ?? (canSeeComplaints ? fallbackComplaintsCount : 0);
-  const pendingApprovalsCount = apiUnseenCounts?.approvals ?? (canSeeHeadOffice ? mockStats.pendingApprovalsCount : 0);
-  const pendingPayrollCount = canSeePayroll ? mockStats.pendingPayrollCount : 0;
+  const pendingApprovalsCount = apiUnseenCounts?.approvals ?? (canSeeHeadOffice ? pendingApprovalsFromApi : 0);
+  const pendingPayrollCount = 0;
   const newProspectsCount = apiUnseenCounts?.prospects ?? (canSeeMyProspects ? fallbackProspectsCount : 0);
   const newAppointmentsCount = apiUnseenCounts?.appointments ?? (canSeeAppointmentsBadge ? fallbackAppointmentsCount : 0);
   const newCheckInsCount = apiUnseenCounts?.checkIns ?? (canSeeCheckIns ? fallbackCheckInsCount : 0);

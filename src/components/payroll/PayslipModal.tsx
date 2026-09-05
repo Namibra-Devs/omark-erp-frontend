@@ -12,7 +12,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { PayrollRecord } from '@/api/payroll';
-import { salaryTypeLabels, paymentMethodLabels } from '@/mock/staffCompensation';
+import { salaryTypeLabels, paymentMethodLabels } from '@/api/compensation';
 import { tokens } from '@/constants/tokens';
 
 const { Title, Text } = Typography;
@@ -57,7 +57,7 @@ export const PayslipModal: React.FC<PayslipModalProps> = ({ open, onClose, recor
   const absenceGHS = (record.absenceDeductionMinor || 0) / 100;
   const loanGHS = (record.loanDeductionMinor || 0) / 100;
   const advanceGHS = (record.advanceDeductionMinor || 0) / 100;
-  const otherDeductionGHS = (record.otherDeductionMinor || 0) / 100;
+  const otherDeductionGHS = ((record as any).otherDeductionMinor || 0) / 100;
   const totalDeductionsGHS =
     (record.deductionsMinor || 0) / 100 ||
     (taxSSNITGHS + latenessGHS + absenceGHS + loanGHS + advanceGHS + otherDeductionGHS);
@@ -254,15 +254,15 @@ export const PayslipModal: React.FC<PayslipModalProps> = ({ open, onClose, recor
                   Salary Structure
                 </td>
                 <td style={{ padding: '9px 12px', color: '#1e293b', borderRight: '1px solid #e2e8f0' }}>
-                  <Tag color={salaryTypeConfig?.color || 'blue'} style={{ fontWeight: 600 }}>
-                    {salaryTypeConfig?.label || 'Standard Fixed'}
+                  <Tag color="blue" style={{ fontWeight: 600 }}>
+                    {salaryTypeConfig || 'Standard Fixed'}
                   </Tag>
                 </td>
                 <td style={{ background: '#f8fafc', padding: '9px 12px', fontWeight: 600, color: '#475569', borderRight: '1px solid #e2e8f0' }}>
                   Payment Channel
                 </td>
                 <td style={{ padding: '9px 12px', color: '#1e293b' }}>
-                  <span>{paymentMethodConfig?.icon} {paymentMethodConfig?.label || 'Bank Transfer'}</span>
+                  <span>{paymentMethodConfig || 'Bank Transfer'}</span>
                   {record.paymentReference && <Tag color="default" style={{ marginLeft: 6 }}>{record.paymentReference}</Tag>}
                 </td>
               </tr>

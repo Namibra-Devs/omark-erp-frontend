@@ -19,8 +19,7 @@ import { usePropertiesQuery } from '@/api/properties';
 import { useDeedsQuery } from '@/api/deeds';
 import type { Role } from '@/types';
 import type { User, SystemStats, ActivityLog } from '../types';
-import { setStaffAssignment, useStaffAssignment } from '@/mock/staffAssignments';
-import { setPhoto } from '@/mock/photos';
+import { setPhoto } from '@/utils/userPhotoStorage';
 import { useMockActivityFeed } from './useMockActivityFeed';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActivityLogQuery } from '@/api/activityLog';
@@ -176,7 +175,7 @@ export const useAdminDashboard = () => {
   // Office / unassigned) still sees everything, matching the oversight
   // role the dedicated Head Office pages already provide.
   const { user: currentUser } = useAuth();
-  const { assignment: myAssignment } = useStaffAssignment(currentUser?.id);
+  const myAssignment = { branchId: currentUser?.branchId || currentUser?.branch };
 
   // ── Live API queries ────────────────────────────────────────────────────
   const { data: apiStats, isLoading: statsLoading } = useAdminDashboardOverviewQuery();
@@ -426,7 +425,6 @@ export const useAdminDashboard = () => {
         if (response?.id) {
           setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
           if (branchId || departmentId) {
-            setStaffAssignment(response.id, { branchId, departmentId });
             try {
               await updateUserAssignmentMutation.mutateAsync({
                 userId: response.id,
@@ -499,10 +497,6 @@ export const useAdminDashboard = () => {
       {
         onSuccess: async () => {
           if (userData.branchId !== undefined || userData.departmentId !== undefined) {
-            setStaffAssignment(id, {
-              branchId: userData.branchId,
-              departmentId: userData.departmentId,
-            });
             try {
               await updateUserAssignmentMutation.mutateAsync({
                 userId: id,

@@ -24,21 +24,17 @@ import {
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { mockBranchDepartments } from '@/mock/branches';
 import { useUserAssignmentQuery, useUpdateUserMutation } from '@/api/users';
-import { useDepartmentsQuery } from '@/api/branches';
+import { useDepartmentsQuery, mockBranchDepartments } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import type { User } from '../types';
 
 const { Text } = Typography;
 const { Option } = Select;
 
-import { getStaffAssignment } from '@/mock/staffAssignments';
-
 const StaffBranchCell: React.FC<{ userId: string; record?: any; branches: any[] }> = ({ userId, record, branches }) => {
   const { data: assignment } = useUserAssignmentQuery(userId);
-  const localAssignment = getStaffAssignment(userId);
-  const branchId = assignment?.branchId || localAssignment?.branchId || record?.branchId || record?.branch;
+  const branchId = assignment?.branchId || record?.branchId || record?.branch;
   const branch = branches.find((b) => b.id === branchId || b.branchCode === branchId || b.name === branchId);
   const name = assignment?.branchName || branch?.name || (typeof branchId === 'string' && branchId.length > 0 ? branchId : null);
 
@@ -51,8 +47,7 @@ const StaffBranchCell: React.FC<{ userId: string; record?: any; branches: any[] 
 const StaffDepartmentCell: React.FC<{ userId: string; record?: any }> = ({ userId, record }) => {
   const { data: assignment } = useUserAssignmentQuery(userId);
   const { data: departments = [] } = useDepartmentsQuery();
-  const localAssignment = getStaffAssignment(userId);
-  const deptId = assignment?.departmentId || localAssignment?.departmentId || record?.departmentId || record?.department;
+  const deptId = assignment?.departmentId || record?.departmentId || record?.department;
   const dept = departments.find((d) => d.id === deptId || d.name === deptId) || mockBranchDepartments.find((d) => d.id === deptId || d.name === deptId);
   const name = assignment?.departmentName || dept?.name || (typeof deptId === 'string' && deptId.length > 0 ? deptId : null);
 

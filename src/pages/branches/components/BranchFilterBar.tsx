@@ -1,10 +1,8 @@
-// src/pages/branches/components/BranchFilterBar.tsx
-// ⚠️ PROTOTYPE — filters run entirely against local mock data (src/mock/branches.ts).
 import React from 'react';
+import dayjs, { Dayjs } from 'dayjs';
 import { Button, Card, DatePicker, Select, Space } from 'antd';
 import { ClearOutlined, FilterOutlined } from '@ant-design/icons';
-import dayjs, { Dayjs } from 'dayjs';
-import type { Branch, BranchDepartment } from '@/mock/branches';
+import type { Branch, BranchDepartment } from '@/api/branches';
 
 const { RangePicker } = DatePicker;
 

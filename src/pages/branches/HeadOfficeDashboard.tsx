@@ -14,7 +14,6 @@ import { useBranchContext } from '@/contexts/BranchContext';
 import { useExpensesQuery } from '@/api/expenses';
 import { useApprovalsQuery } from '@/api/approvals';
 import { useUsersQuery, getUserPhone } from '@/api/users';
-import { getStaffAssignment } from '@/mock/staffAssignments';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 
 const { Text } = Typography;
@@ -44,8 +43,7 @@ export const HeadOfficeDashboard: React.FC = () => {
   // Helper to get assigned staff for a branch
   const getBranchStaff = (branchId: string) => {
     return users.filter((u) => {
-      const assignment = getStaffAssignment(u.id);
-      const bId = assignment?.branchId || (u as any).branchId || (u as any).branch;
+      const bId = (u as any).branchId || (u as any).branch;
       return bId === branchId;
     });
   };

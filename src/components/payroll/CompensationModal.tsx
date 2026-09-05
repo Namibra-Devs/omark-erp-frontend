@@ -10,8 +10,8 @@ import {
   salaryTypeLabels,
   payFrequencyLabels,
   paymentMethodLabels,
-} from '@/mock/staffCompensation';
-import { useBonusRules } from '@/mock/bonusRules';
+} from '@/api/compensation';
+import { useBonusRulesQuery } from '@/api/bonuses';
 
 const { Text, Title } = Typography;
 const { Option } = Select;
@@ -21,6 +21,7 @@ interface CompensationModalProps {
   open: boolean;
   onClose: () => void;
   profile: StaffCompensationProfile | null;
+  staffUsers?: any[];
   onSave: (updated: Partial<StaffCompensationProfile>) => void;
 }
 
@@ -28,53 +29,73 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
   open,
   onClose,
   profile,
+  staffUsers = [],
   onSave,
 }) => {
   const [form] = Form.useForm();
-  const { rules } = useBonusRules();
+  const { data: rules = [] } = useBonusRulesQuery();
   const [bonusDropdownOpen, setBonusDropdownOpen] = useState(false);
 
   const selectedSalaryType = Form.useWatch('salaryType', form);
   const selectedPaymentMethod = Form.useWatch(['paymentDetails', 'method'], form);
 
   useEffect(() => {
-    if (profile && open) {
-      form.setFieldsValue({
-        salaryType: profile.salaryType || 'fixed',
-        baseSalaryGHS: profile.baseSalaryGHS || 0,
-        payFrequency: profile.payFrequency || 'monthly',
-        allowances: {
-          transportGHS: profile.allowances?.transportGHS || 0,
-          housingGHS: profile.allowances?.housingGHS || 0,
-          mealGHS: profile.allowances?.mealGHS || 0,
-          otherGHS: profile.allowances?.otherGHS || 0,
-        },
-        deductions: {
-          taxSSNITGHS: profile.deductions?.taxSSNITGHS || 0,
-          loanRepaymentGHS: profile.deductions?.loanRepaymentGHS || 0,
-          advanceDeductionGHS: profile.deductions?.advanceDeductionGHS || 0,
-          latenessDeductionGHS: profile.deductions?.latenessDeductionGHS || 0,
-          absenceDeductionGHS: profile.deductions?.absenceDeductionGHS || 0,
-        },
-        commissionPercentage: profile.commissionPercentage || 0,
-        commissionFlatGHS: profile.commissionFlatGHS || 0,
-        eligibleBonusRuleIds: profile.eligibleBonusRuleIds || [],
-        paymentDetails: {
-          method: profile.paymentDetails?.method || 'bank_transfer',
-          bankName: profile.paymentDetails?.bankName || '',
-          accountNumber: profile.paymentDetails?.accountNumber || '',
-          accountName: profile.paymentDetails?.accountName || profile.staffName,
-          branchName: profile.paymentDetails?.branchName || '',
-          momoProvider: profile.paymentDetails?.momoProvider || 'MTN',
-          momoNumber: profile.paymentDetails?.momoNumber || '',
-        },
-        notes: profile.notes || '',
-      });
+    if (open) {
+      if (profile) {
+        const p = profile as any;
+        form.setFieldsValue({
+          userId: p.userId,
+          salaryType: p.salaryType || 'monthly',
+          baseSalaryGHS: p.baseSalaryGHS || 0,
+          payFrequency: p.payFrequency || 'monthly',
+          allowances: {
+            transportGHS: p.allowances?.transportGHS || 0,
+            housingGHS: p.allowances?.housingGHS || 0,
+            mealGHS: p.allowances?.mealGHS || 0,
+            otherGHS: p.allowances?.otherGHS || 0,
+          },
+          deductions: {
+            taxSSNITGHS: p.deductions?.taxSSNITGHS || 0,
+            loanRepaymentGHS: p.deductions?.loanRepaymentGHS || 0,
+            advanceDeductionGHS: p.deductions?.advanceDeductionGHS || 0,
+            latenessDeductionGHS: p.deductions?.latenessDeductionGHS || 0,
+            absenceDeductionGHS: p.deductions?.absenceDeductionGHS || 0,
+          },
+          commissionPercentage: p.commissionPercentage || p.commissionRatePct || 0,
+          commissionFlatGHS: p.commissionFlatGHS || 0,
+          eligibleBonusRuleIds: p.eligibleBonusRuleIds || [],
+          paymentDetails: {
+            method: p.paymentDetails?.method || p.paymentMethod || 'bank_transfer',
+            bankName: p.paymentDetails?.bankName || p.bankName || '',
+            accountNumber: p.paymentDetails?.accountNumber || p.bankAccountNumber || '',
+            accountName: p.paymentDetails?.accountName || p.bankAccountName || p.staffName || '',
+            branchName: p.paymentDetails?.branchName || p.bankBranch || '',
+            momoProvider: p.paymentDetails?.momoProvider || p.momoNetwork || 'MTN',
+            momoNumber: p.paymentDetails?.momoNumber || p.momoNumber || '',
+          },
+          notes: p.notes || '',
+        });
+      } else {
+        form.resetFields();
+        form.setFieldsValue({
+          salaryType: 'monthly',
+          payFrequency: 'monthly',
+          baseSalaryGHS: 0,
+          paymentDetails: { method: 'bank_transfer' },
+        });
+      }
     }
   }, [profile, open, form]);
 
   const handleSubmit = (values: any) => {
-    onSave(values);
+    const selectedUser = staffUsers.find((u) => u.id === (values.userId || profile?.userId));
+    onSave({
+      ...values,
+      userId: values.userId || profile?.userId,
+      staffName: selectedUser ? `${selectedUser.firstName || ''} ${selectedUser.lastName || ''}`.trim() : (profile?.staffName || 'Staff Member'),
+      staffRole: selectedUser?.role || profile?.staffRole,
+      baseSalaryMinor: (values.baseSalaryGHS || 0) * 100,
+    });
     onClose();
   };
 
@@ -83,7 +104,7 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
       title={
         <Space>
           <DollarOutlined style={{ color: '#2E5E8C' }} />
-          <span>Configure Compensation Profile — {profile?.staffName}</span>
+          <span>{profile ? `Configure Compensation Profile — ${profile.staffName}` : 'Configure New Staff Compensation Profile'}</span>
         </Space>
       }
       open={open}
@@ -93,6 +114,22 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
       destroyOnClose
     >
       <Form form={form} layout="vertical" onFinish={handleSubmit}>
+        {!profile && (
+          <Form.Item
+            name="userId"
+            label="Select Staff Member"
+            rules={[{ required: true, message: 'Please select a staff member' }]}
+          >
+            <Select showSearch placeholder="Select staff member" optionFilterProp="children">
+              {staffUsers.map((u) => (
+                <Option key={u.id} value={u.id}>
+                  👤 {u.firstName} {u.lastName} ({u.role}) — {u.email}
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+        )}
+
         {/* Structure & Base Pay */}
         <div style={{ background: '#f8fafc', padding: 14, borderRadius: 8, marginBottom: 16 }}>
           <Text strong style={{ fontSize: 14, color: '#1e293b', display: 'block', marginBottom: 12 }}>
@@ -108,7 +145,7 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
                 <Select placeholder="Select structure">
                   {Object.entries(salaryTypeLabels).map(([key, val]) => (
                     <Option key={key} value={key}>
-                      <span style={{ fontWeight: 600 }}>{val.label}</span>
+                      <span style={{ fontWeight: 600 }}>{val}</span>
                     </Option>
                   ))}
                 </Select>
@@ -133,7 +170,7 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
               <Form.Item
                 name="baseSalaryGHS"
                 label="Base Salary (GH₵)"
-                rules={[{ required: selectedSalaryType !== 'incentive_only', message: 'Enter base salary' }]}
+                rules={[{ required: selectedSalaryType !== 'commission_only', message: 'Enter base salary' }]}
               >
                 <InputNumber
                   style={{ width: '100%' }}
@@ -147,7 +184,7 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
             <Col xs={24} sm={12}>
               <div style={{ paddingTop: 8 }}>
                 <Text type="secondary" style={{ fontSize: 12 }}>
-                  {salaryTypeLabels[selectedSalaryType as SalaryType]?.desc || 'Standard staff compensation structure'}
+                  Standard staff compensation structure
                 </Text>
               </div>
             </Col>
@@ -249,7 +286,7 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
                     </div>
                   )}
                 >
-                  {rules.map((r) => (
+                  {rules.map((r: any) => (
                     <Option key={r.id} value={r.id}>
                       {r.name} (GH₵ {r.amountGHS})
                     </Option>
@@ -271,7 +308,7 @@ export const CompensationModal: React.FC<CompensationModalProps> = ({
                 <Select>
                   {Object.entries(paymentMethodLabels).map(([k, v]) => (
                     <Option key={k} value={k}>
-                      {v.icon} {v.label}
+                      {v}
                     </Option>
                   ))}
                 </Select>

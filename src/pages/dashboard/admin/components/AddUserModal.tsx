@@ -13,7 +13,7 @@ import {
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { mockBranchDepartments } from '@/mock/branches';
+import { mockBranchDepartments } from '@/api/branches';
 
 const { Text, Title } = Typography;
 const { Option } = Select;
@@ -507,7 +507,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           <Col span={12}>
             <Form.Item name="branchId" label="Branch">
               <Select placeholder="Select branch" allowClear suffixIcon={<BankOutlined style={{ color: '#bbb' }} />}>
-                {branches.map((b) => (
+                {branches.map((b: any) => (
                   <Option key={b.id} value={b.id}>{b.name}</Option>
                 ))}
               </Select>
@@ -532,7 +532,7 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           firstName={preview.firstName}
           lastName={preview.lastName}
           role={preview.role}
-          branchName={branches.find((b) => b.id === preview.branchId)?.name}
+          branchName={branches.find((b: any) => b.id === preview.branchId)?.name}
         />
 
         <Form.Item

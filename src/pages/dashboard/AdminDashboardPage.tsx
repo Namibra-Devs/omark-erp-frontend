@@ -25,7 +25,6 @@ import { ExportModal } from './admin/components/ExportModal';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { CrossSystemActivity } from './admin/components/CrossSystemActivity';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { useStaffAssignment } from '@/mock/staffAssignments';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 
 const { Title, Text } = Typography;
@@ -87,8 +86,7 @@ export const AdminDashboardPage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const canViewAnalytics = hasRole(['admin', 'accounts', 'marketing_director']);
   const { branches } = useBranchContext();
-  const { assignment: myAssignment } = useStaffAssignment(user?.id);
-  const myBranchName = branches.find((b) => b.id === myAssignment.branchId)?.name;
+  const myBranchName = branches.find((b) => b.id === (user?.branchId || user?.branch))?.name || user?.branch;
   const {
     users,
     activityLogs,

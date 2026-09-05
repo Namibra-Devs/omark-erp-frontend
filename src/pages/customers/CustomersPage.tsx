@@ -10,9 +10,10 @@ import {
 } from '@/api/customers';
 import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
 import { usePropertiesQuery } from '@/api/properties';
-import { cacheCustomerSummaries } from '@/mock/customerPortalCache';
+import { useBranchesQuery } from '@/api/branches';
+import { cacheCustomerSummaries, clearCustomerCache } from '@/utils/customerPortalCache';
 import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
-import { setPhoto } from '@/mock/photos';
+import { setPhoto } from '@/utils/userPhotoStorage';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
@@ -68,7 +69,6 @@ import {
   ApartmentOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
-import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -159,14 +159,14 @@ export const CustomersPage: React.FC = () => {
 
   // Create maps for quick lookups
   const paymentPlanMap = React.useMemo(() => {
-    return paymentPlans.reduce((acc, plan) => {
+    return paymentPlans.reduce((acc: Record<string, PaymentPlan>, plan: any) => {
       acc[plan.customerId] = plan;
       return acc;
     }, {} as Record<string, PaymentPlan>);
   }, [paymentPlans]);
 
   const propertyMap = React.useMemo(() => {
-    return properties.reduce((acc, prop) => {
+    return properties.reduce((acc: Record<string, any>, prop: any) => {
       acc[prop.id] = prop;
       return acc;
     }, {} as Record<string, any>);
@@ -374,7 +374,8 @@ const handleAddCustomer = async (values: any) => {
             refetchPaymentPlans();
           }, 500);
         } catch (error: any) {
-          message.error(error?.message || 'Failed to delete customer');
+          const msg = error?.response?.data?.error?.message || error?.error?.message || error?.message || 'Failed to delete customer';
+          message.error(msg);
         }
       },
     });

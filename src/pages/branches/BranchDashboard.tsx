@@ -37,7 +37,6 @@ import { useBranchQuery } from '@/api/branches';
 import { useExpensesQuery } from '@/api/expenses';
 import { useComplaintsQuery } from '@/api/complaints';
 import { useUsersQuery, getUserPhone } from '@/api/users';
-import { getStaffAssignment } from '@/mock/staffAssignments';
 
 const { Text } = Typography;
 
@@ -61,8 +60,7 @@ export const BranchDashboard: React.FC = () => {
   const assignedStaff = useMemo(() => {
     if (!branchId) return [];
     return users.filter((u) => {
-      const assignment = getStaffAssignment(u.id);
-      const bId = assignment?.branchId || (u as any).branchId || (u as any).branch;
+      const bId = (u as any).branchId || (u as any).branch;
       return bId === branchId;
     });
   }, [users, branchId]);

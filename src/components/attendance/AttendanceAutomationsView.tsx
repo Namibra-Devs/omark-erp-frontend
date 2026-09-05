@@ -49,7 +49,7 @@ import {
   useAutomationExecutionLogsQuery,
   useTriggerAutomationJobMutation,
   type AttendanceAutomationConfig,
-  type AutomationExecutionLog
+  type AutomationExecutionLog,
 } from '@/api/attendance';
 import {
   getBranchGeofences,
@@ -57,10 +57,58 @@ import {
   updateBranchGeofenceDetails,
   calculateGpsDistanceMeters,
   type BranchGeofence
-} from '@/mock/staffAttendance';
+} from '@/constants/attendance';
 import dayjs from 'dayjs';
 
 const { Title, Text, Paragraph } = Typography;
+
+const DEFAULT_AUTOMATION_CONFIG: AttendanceAutomationConfig = {
+  geofencing: {
+    enabled: true,
+    radiusMeters: 75,
+    strictMockLocationBlock: true,
+    autoPromptOnArrival: true,
+    autoGeoResyncIntervalMinutes: 5,
+  },
+  shiftRules: {
+    enabled: true,
+    standardShiftStart: '08:00',
+    standardShiftEnd: '17:00',
+    gracePeriodMinutes: 30,
+    halfDayThresholdMinutes: 240,
+    earlyDepartureThresholdTime: '16:30',
+    autoCloseTime: '19:00',
+    autoCloseDailyRegister: true,
+    autoCloseRegisterHour: 19,
+  },
+  reminders: {
+    morningReminderEnabled: true,
+    morningReminderTime: '07:30',
+    morningPreShiftReminder: true,
+    eveningReminderEnabled: true,
+    eveningReminderTime: '17:00',
+    eveningCheckOutReminder: true,
+    managerUnpunchedStaffAlert: true,
+    managerAlertTime: '09:00',
+    stalePendingRequestsAlert: true,
+    staleThresholdHours: 24,
+    sendSmsNotification: false,
+    sendInAppAlert: true,
+  },
+  bonusPool: {
+    punctualityBonusRateGHS: 150,
+    minimumAttendanceRatePct: 90,
+    qualificationThresholdDays: 20,
+  },
+  analytics: {
+    enabled: true,
+    punctualityBonusMinPercent: 90,
+    autoComputePunctualityBonus: true,
+    chronicLatenessThresholdDays: 3,
+    highRiskAbsenceDays: 2,
+    autoGenerateWarningNotice: true,
+  },
+};
 
 export const AttendanceAutomationsView: React.FC = () => {
   const { data: configData, isLoading: configLoading } = useAttendanceAutomationConfigQuery();
@@ -68,7 +116,10 @@ export const AttendanceAutomationsView: React.FC = () => {
   const updateConfigMutation = useUpdateAttendanceAutomationConfigMutation();
   const triggerJobMutation = useTriggerAutomationJobMutation();
 
-  const [formState, setFormState] = useState<AttendanceAutomationConfig | null>(null);
+  const [formState, setFormState] = useState<AttendanceAutomationConfig>(() => ({
+    ...DEFAULT_AUTOMATION_CONFIG,
+    ...(configData || {}),
+  }));
   const [activeTabKey, setActiveTabKey] = useState<string>('geofencing');
   const [geofencesMap, setGeofencesMap] = useState<Record<string, BranchGeofence>>(() => getBranchGeofences());
 
@@ -90,7 +141,15 @@ export const AttendanceAutomationsView: React.FC = () => {
 
   useEffect(() => {
     if (configData) {
-      setFormState(JSON.parse(JSON.stringify(configData)));
+      setFormState({
+        ...DEFAULT_AUTOMATION_CONFIG,
+        ...configData,
+        geofencing: { ...DEFAULT_AUTOMATION_CONFIG.geofencing, ...(configData.geofencing || {}) },
+        shiftRules: { ...DEFAULT_AUTOMATION_CONFIG.shiftRules, ...(configData.shiftRules || {}) },
+        reminders: { ...DEFAULT_AUTOMATION_CONFIG.reminders, ...(configData.reminders || {}) },
+        bonusPool: { ...DEFAULT_AUTOMATION_CONFIG.bonusPool, ...(configData.bonusPool || {}) },
+        analytics: { ...DEFAULT_AUTOMATION_CONFIG.analytics, ...(configData.analytics || {}) },
+      });
     }
   }, [configData]);
 
@@ -104,17 +163,6 @@ export const AttendanceAutomationsView: React.FC = () => {
       window.removeEventListener('omark-attendance-changed', refreshGeofences);
     };
   }, []);
-
-  if (configLoading || !formState) {
-    return (
-      <Card style={{ borderRadius: 12, textAlign: 'center', padding: '60px 0' }}>
-        <SyncOutlined spin style={{ fontSize: 32, color: '#2E5E8C' }} />
-        <Paragraph style={{ marginTop: 16, color: '#64748b' }}>
-          Loading Attendance Automation & Policy Rules Engine...
-        </Paragraph>
-      </Card>
-    );
-  }
 
   const handleSaveConfig = async () => {
     try {

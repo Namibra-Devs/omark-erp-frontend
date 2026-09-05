@@ -55,11 +55,10 @@ import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
-import { PendingPhotoUpload, PhotoUpload } from '@/components/shared/PhotoUpload';
-import { setPhoto } from '@/mock/photos';
-import { awardBonusForEvent } from '@/mock/bonusRules';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
+import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
+import { useAwardBonusMutation } from '@/api/bonuses';
 import { useUsersQuery } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
@@ -126,6 +125,7 @@ export const CSProspectsPage: React.FC = () => {
   const createProspect = useCreateProspectMutation();
   const updateProspect = useUpdateProspectMutation();
   const deleteProspect = useDeleteProspectMutation();
+  const awardBonusMutation = useAwardBonusMutation();
 
   // Only admins can set assignedUserId at creation (per the API), and only
   // admins need to pick — customer_service reps creating their own
@@ -162,32 +162,29 @@ export const CSProspectsPage: React.FC = () => {
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleAddProspect = async (values: any) => {
     try {
-      // `photo` isn't a real prospect field — POST /prospects would reject
-      // it, so pull it out before spreading the rest into the payload.
       const { photo, ...prospectValues } = values;
       const payload = {
         ...prospectValues,
         source: 'customer_service' as ProspectSource,
-        // Admins explicitly choose the rep via the form below. Anyone else
-        // creating their own prospect self-assigns, as before.
         assignedUserId: isAdmin ? values.assignedUserId : user?.id,
       };
 
       const newProspect = await createProspect.mutateAsync(tagPayloadWithBranch(payload, user));
-      // Photo upload has no real endpoint (see src/mock/photos.ts) —
-      // applied locally once we have the prospect's real id back.
-      if (photo && (newProspect as any)?.id) {
-        setPhoto('prospect', (newProspect as any).id, photo);
-      }
-
-      // Automatically award bonus for prospect addition
-      const bonusAward = awardBonusForEvent('prospect_added', user, {
-        prospectName: `${values.firstName} ${values.lastName}`,
-        prospectId: (newProspect as any)?.id,
-      });
-
-      if (bonusAward) {
-        message.success(`Prospect added successfully! 🎉 You earned a GH₵${bonusAward.amountGHS.toFixed(2)} bonus!`);
+      if (user?.id) {
+        try {
+          await awardBonusMutation.mutateAsync({
+            userId: user.id,
+            branchId: user.branchId || 'branch-accra-hq',
+            bonusType: 'prospect_conversion',
+            amountGHS: 50,
+            reason: `CS Lead Registered: ${values.firstName} ${values.lastName}`,
+            relatedEntityId: (newProspect as any)?.id,
+            relatedEntityType: 'prospect',
+          });
+          message.success('Prospect added and incentive logged successfully!');
+        } catch {
+          message.success('Customer Service prospect added successfully!');
+        }
       } else {
         message.success('Customer Service prospect added successfully!');
       }

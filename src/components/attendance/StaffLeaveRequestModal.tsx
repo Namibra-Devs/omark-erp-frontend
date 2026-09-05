@@ -18,7 +18,7 @@ import {
 } from 'antd';
 import { CalendarOutlined, FileProtectOutlined } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
-import { useSubmitLeaveRequestMutation, type LeaveType } from '@/api/attendance';
+import { useSubmitLeaveRequestMutation, type LeaveType } from '@/api/leaves';
 import dayjs from 'dayjs';
 
 const { Text } = Typography;

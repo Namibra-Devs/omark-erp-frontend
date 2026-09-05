@@ -39,6 +39,7 @@ import {
   useClockInMutation,
   useClockOutMutation,
   useDailyAttendanceClosureQuery,
+  getClientDeviceId,
   type AttendanceRecord,
 } from '@/api/attendance';
 import {
@@ -47,11 +48,9 @@ import {
   validateReceptionQR,
   generateDailyReceptionQR,
   ATTENDANCE_STATUS_META,
-  getClientDeviceId,
   WORK_SHIFT_CONFIG,
   SENSITIVE_ROLES_REQUIRING_DEVICE_BINDING,
-} from '@/mock/staffAttendance';
-import { getStaffAssignment } from '@/mock/staffAssignments';
+} from '@/constants/attendance';
 import { AttendanceCorrectionModal } from './AttendanceCorrectionModal';
 import dayjs from 'dayjs';
 
@@ -87,8 +86,7 @@ export const ClockInOutModal: React.FC<ClockInOutModalProps> = ({ open, onClose,
   const [supervisorPin, setSupervisorPin] = useState('');
 
   // Resolve staff branch geofence
-  const staffAssignment = user?.id ? getStaffAssignment(user.id) : undefined;
-  const branchId = staffAssignment?.branchId || user?.branchId || 'branch-accra-hq';
+  const branchId = user?.branchId || 'branch-accra-hq';
   const branchGeofence = BRANCH_GEOFENCES[branchId] || BRANCH_GEOFENCES['branch-accra-hq'];
 
   const isClockedIn = Boolean(todayRecord?.clockInTime && !todayRecord.clockOutTime);

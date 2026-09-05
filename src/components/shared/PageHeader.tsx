@@ -12,7 +12,8 @@ interface PageHeaderProps {
     onClick: () => void;
     type?: ButtonProps['type'];
     icon?: React.ReactNode;
-    disabled?: boolean; 
+    disabled?: boolean;
+    danger?: boolean;
   }>;
 }
 
@@ -31,6 +32,7 @@ export const PageHeader: React.FC<PageHeaderProps> = ({ title, actions }) => {
               onClick={action.onClick}
               icon={action.icon}
               disabled={action.disabled}
+              danger={action.danger}
             >
               {action.label}
             </Button>

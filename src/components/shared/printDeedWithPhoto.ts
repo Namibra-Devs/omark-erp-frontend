@@ -9,13 +9,11 @@
 // <iframe>, then triggers the browser's print dialog — "Save as PDF"
 // there produces one combined document. If the hosting origin sends
 // X-Frame-Options/CSP headers blocking iframing, the embed will fail to
-// load; that's outside the frontend's control.
 import { downloadDeedPDF } from '@/api/deeds';
-import { getPhoto } from '@/mock/photos';
 
-export async function printDeedWithPhoto(deedId: string, customerId: string, customerName: string): Promise<void> {
+export async function printDeedWithPhoto(deedId: string, customerId: string, customerName: string, photoUrl?: string): Promise<void> {
   const documentUrl = await downloadDeedPDF(deedId);
-  const photo = getPhoto('customer', customerId);
+  const photo = photoUrl || '';
 
   const printWindow = window.open('', '_blank');
   if (!printWindow) {
