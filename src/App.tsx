@@ -422,7 +422,7 @@ const AppRoutes: React.FC = () => {
         <Route
           path="/head-office/approvals"
           element={
-            <ProtectedRoute allowedRoles={['admin']}>
+            <ProtectedRoute allowedRoles={['admin', 'branch_manager']}>
               <ApprovalWorkflowPage />
             </ProtectedRoute>
           }

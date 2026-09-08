@@ -277,6 +277,7 @@ export const SecretaryDashboardPage: React.FC = () => {
       setAddCustomerModal(false);
       form.resetFields();
       refetchCustomers();
+      refetchPaymentPlans();
       refetchDashboard();
     } catch (error: any) {
       message.error(error?.error?.message || error?.message || 'Failed to add customer');

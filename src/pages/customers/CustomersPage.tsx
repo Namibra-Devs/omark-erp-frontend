@@ -7,6 +7,7 @@ import {
   useDeleteCustomerMutation,
   useCreateCustomerMutation,
   useUpdateCustomerMutation,
+  customerKeys,
 } from '@/api/customers';
 import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
 import { usePropertiesQuery } from '@/api/properties';
@@ -69,7 +70,7 @@ import {
   ApartmentOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
-import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
+import { filterEntitiesByBranch, tagPayloadWithBranch, recordEntityBranch, getUserBranchId } from '@/utils/branchIsolation';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
@@ -107,7 +108,7 @@ export const CustomersPage: React.FC = () => {
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [activeTab, setActiveTab] = useState('all');
   const [page, setPage] = useState(1);
-  const PAGE_SIZE = 20;
+  const PAGE_SIZE = 100;
 
   // ── Live API data ─────────────────────────────────────────────────────────
   const { 
@@ -118,7 +119,7 @@ export const CustomersPage: React.FC = () => {
   } = useCustomersQuery({
     type: (typeFilter !== 'all' ? typeFilter : undefined) as any,
     q: searchText || undefined,
-    page,
+    page: 1,
     pageSize: PAGE_SIZE,
   });
 
@@ -292,22 +293,49 @@ const handleAddCustomer = async (values: any) => {
 
     console.log('📤 Creating customer with payload:', customerData);
 
-    const newCustomer = await createCustomer.mutateAsync(tagPayloadWithBranch(customerData, user));
+    const taggedPayload = tagPayloadWithBranch(customerData, user);
+    const newCustomer = await createCustomer.mutateAsync(taggedPayload);
+
     // Photo upload has no real endpoint (see src/mock/photos.ts) — applied
     // locally once we have the customer's real id back from the server.
     if (values.photo && newCustomer?.id) {
       setPhoto('customer', newCustomer.id, values.photo);
     }
+
+    // Persist branch association in local client storage
+    if (newCustomer?.id) {
+      const userBranchId = getUserBranchId(user);
+      if (userBranchId) {
+        recordEntityBranch('customer', newCustomer.id, userBranchId, user?.id);
+      }
+
+      // Optimistic / direct cache update for 0ms instantaneous realtime UI display
+      queryClient.setQueriesData({ queryKey: customerKeys.all }, (oldData: any) => {
+        if (!oldData) return oldData;
+        if (Array.isArray(oldData)) {
+          if (oldData.some((c: any) => c.id === newCustomer.id)) return oldData;
+          return [newCustomer, ...oldData];
+        }
+        const items = oldData.items || [];
+        if (items.some((c: any) => c.id === newCustomer.id)) return oldData;
+        return {
+          ...oldData,
+          items: [newCustomer, ...items],
+          total: (oldData.total ?? items.length) + 1,
+        };
+      });
+    }
+
     message.success('Customer created successfully!');
 
     setAddModal(false);
     addForm.resetFields();
     
-    // Refetch data with delay
-    setTimeout(() => {
-      refetchCustomers();
-      refetchPaymentPlans();
-    }, 500);
+    // Immediately synchronize queries with the backend
+    await Promise.all([
+      refetchCustomers(),
+      refetchPaymentPlans(),
+    ]);
   } catch (error: any) {
     console.error('Error creating customer:', error);
     const errorMsg = error?.response?.data?.message || error?.message || 'Failed to create customer';
@@ -328,7 +356,7 @@ const handleAddCustomer = async (values: any) => {
     try {
       setLoading(true);
 
-      await updateCustomer.mutateAsync({
+      const updated = await updateCustomer.mutateAsync({
         id: selectedCustomer.id,
         data: {
           firstName: values.firstName,
@@ -338,6 +366,21 @@ const handleAddCustomer = async (values: any) => {
         },
       });
 
+      // Update cache immediately for realtime UI responsiveness
+      queryClient.setQueriesData({ queryKey: customerKeys.all }, (oldData: any) => {
+        if (!oldData) return oldData;
+        if (Array.isArray(oldData)) {
+          return oldData.map((c: any) => (c.id === selectedCustomer.id ? { ...c, ...updated } : c));
+        }
+        if (oldData.items) {
+          return {
+            ...oldData,
+            items: oldData.items.map((c: any) => (c.id === selectedCustomer.id ? { ...c, ...updated } : c)),
+          };
+        }
+        return oldData;
+      });
+
       message.success('Customer updated successfully!');
 
       setEditModal(false);
@@ -345,9 +388,7 @@ const handleAddCustomer = async (values: any) => {
       setEditPaymentPlan(null);
       form.resetFields();
 
-      setTimeout(() => {
-        refetchCustomers();
-      }, 500);
+      await refetchCustomers();
     } catch (error: any) {
       console.error('Error updating customer:', error);
       message.error(error?.message || 'Failed to update customer');
@@ -367,12 +408,29 @@ const handleAddCustomer = async (values: any) => {
       onOk: async () => {
         try {
           await deleteCustomer.mutateAsync(id);
+
+          // Update cache immediately
+          queryClient.setQueriesData({ queryKey: customerKeys.all }, (oldData: any) => {
+            if (!oldData) return oldData;
+            if (Array.isArray(oldData)) {
+              return oldData.filter((c: any) => c.id !== id);
+            }
+            if (oldData.items) {
+              return {
+                ...oldData,
+                items: oldData.items.filter((c: any) => c.id !== id),
+                total: Math.max(0, (oldData.total ?? oldData.items.length) - 1),
+              };
+            }
+            return oldData;
+          });
+
           message.success('Customer deleted successfully!');
 
-          setTimeout(() => {
-            refetchCustomers();
-            refetchPaymentPlans();
-          }, 500);
+          await Promise.all([
+            refetchCustomers(),
+            refetchPaymentPlans(),
+          ]);
         } catch (error: any) {
           const msg = error?.response?.data?.error?.message || error?.error?.message || error?.message || 'Failed to delete customer';
           message.error(msg);
@@ -473,15 +531,22 @@ const handleAddCustomer = async (values: any) => {
     }, 1000);
   };
 
-  // Client-side tab filter
+  // Client-side tab & search filter
   const filteredCustomers = customers.filter(customer => {
     const matchesTab = activeTab === 'all' || customer.type === activeTab;
-    return matchesTab;
+    if (!matchesTab) return false;
+    if (!searchText) return true;
+    const q = searchText.toLowerCase().trim();
+    const fullName = `${customer.firstName} ${customer.lastName}`.toLowerCase();
+    const phone = (customer.phoneNumber || '').toLowerCase();
+    const addr = (customer.address || '').toLowerCase();
+    const code = (customer.code || '').toLowerCase();
+    return fullName.includes(q) || phone.includes(q) || addr.includes(q) || code.includes(q);
   });
 
   // Stats
   const stats = {
-    total: customersMeta?.total ?? customers.length,
+    total: customers.length,
     paymentPlan: customers.filter(c => c.type === 'payment_plan').length,
     fullyPaid: customers.filter(c => c.type === 'fully_paid').length,
     activePlans: paymentPlans.filter(p => p.status === 'active').length,
@@ -688,14 +753,13 @@ const handleAddCustomer = async (values: any) => {
   // Error state
   if (customersError) {
     return (
-      <div style={{ padding: 24 }}>
+      <div style={{ padding: 24, textAlign: 'center' }}>
         <Alert
-          message="Error Loading Customers"
-          description="There was an error loading the customers. Please try again."
           type="error"
-          showIcon
+          message="Failed to load customers"
+          description={(customersError as any)?.message || 'An unexpected error occurred'}
           action={
-            <Button size="small" type="primary" onClick={() => refetchCustomers()}>
+            <Button type="primary" onClick={() => refetchCustomers()}>
               Retry
             </Button>
           }
@@ -721,9 +785,11 @@ const handleAddCustomer = async (values: any) => {
           },
           {
             label: 'Refresh',
-            onClick: () => {
-              refetchCustomers();
-              refetchPaymentPlans();
+            onClick: async () => {
+              await Promise.all([
+                refetchCustomers(),
+                refetchPaymentPlans(),
+              ]);
               message.success('Refreshed!');
             },
             icon: <ReloadOutlined />,
@@ -800,7 +866,7 @@ const handleAddCustomer = async (values: any) => {
         <Row gutter={[16, 16]}>
           <Col xs={24} md={6}>
             <Input
-              placeholder="Search by name, phone, or address"
+              placeholder="Search by name, phone, address, or code"
               prefix={<SearchOutlined />}
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
@@ -813,7 +879,11 @@ const handleAddCustomer = async (values: any) => {
               style={{ width: '100%' }}
               placeholder="Filter by type"
               value={typeFilter}
-              onChange={setTypeFilter}
+              onChange={(val) => {
+                const target = val || 'all';
+                setTypeFilter(target);
+                setActiveTab(target);
+              }}
               allowClear
               size="middle"
             >
@@ -825,7 +895,10 @@ const handleAddCustomer = async (values: any) => {
           <Col xs={12} md={10}>
             <Tabs
               activeKey={activeTab}
-              onChange={setActiveTab}
+              onChange={(key) => {
+                setActiveTab(key);
+                setTypeFilter(key);
+              }}
               items={[
                 { key: 'all', label: 'All' },
                 { key: 'payment_plan', label: 'Payment Plans' },
@@ -847,7 +920,7 @@ const handleAddCustomer = async (values: any) => {
           columns={columns}
           dataSource={filteredCustomers}
           rowKey="id"
-          loading={loading}
+          loading={loading || customersLoading || paymentPlansLoading}
           size="middle"
           scroll={{ x: 1300 }}
           pagination={{
@@ -946,6 +1019,15 @@ const handleAddCustomer = async (values: any) => {
               placeholder="Select property"
               showSearch
               optionFilterProp="children"
+              onChange={(propId) => {
+                const prop = properties.find((p: any) => p.id === propId);
+                if (prop) {
+                  const priceGHS = prop.priceMinor / 100;
+                  addForm.setFieldsValue({
+                    totalAmount: priceGHS,
+                  });
+                }
+              }}
             >
               {properties.map((prop: any) => (
                 <Option key={prop.id} value={prop.id}>

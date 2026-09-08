@@ -1,7 +1,8 @@
 // src/components/layout/NavMenu.tsx (Enhanced with live notifications using optimized API)
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect } from 'react';
 import { Menu, Badge } from 'antd';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   DashboardOutlined,
   UserOutlined,
@@ -27,7 +28,8 @@ import { useUnseenCountsQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useComplaintsQuery } from '@/api/complaints';
-import { useApprovalsQuery } from '@/api/approvals';
+import { useApprovalsQuery, approvalsKeys } from '@/api/approvals';
+import { usePayrollQuery } from '@/api/payroll';
 import { useCheckIns } from '@/utils/visitorCheckIns';
 import { useUnseenCount } from '@/utils/seenTracker';
 
@@ -48,6 +50,7 @@ export const NavMenu: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, hasRole } = useAuth();
+  const queryClient = useQueryClient();
 
   // ── Real Staff Nav-Badge Unseen Counts API ─────────────────────────────────
   const { data: apiUnseenCounts } = useUnseenCountsQuery(user?.id, !!user?.id);
@@ -74,10 +77,32 @@ export const NavMenu: React.FC = () => {
     complaintsList.map((c) => c.createdAt)
   );
 
-  const canSeeHeadOffice = hasRole(['admin']);
+  const canSeeHeadOffice = hasRole(['admin', 'branch_manager']);
   const canSeePayroll = hasRole(['accounts', 'admin', 'branch_manager']);
+
+  // Live real-time approvals query
   const { data: approvalsData = [] } = useApprovalsQuery();
-  const pendingApprovalsFromApi = approvalsData.filter((a) => a.status === 'pending').length;
+  const pendingApprovalsFromApi = (Array.isArray(approvalsData) ? approvalsData : []).filter(
+    (a) => String(a?.status || '').trim().toLowerCase() === 'pending'
+  ).length;
+
+  // Live real-time payroll query
+  const { data: payrollData } = usePayrollQuery(canSeePayroll ? { status: 'pending' } : undefined);
+  const payrollList = Array.isArray(payrollData?.items) ? payrollData.items : [];
+  const pendingPayrollFromApi = payrollList.filter(
+    (p: any) => String(p?.status || '').trim().toLowerCase() === 'pending'
+  ).length;
+
+  // Listen for real-time approval decisions/creations across tabs & components
+  useEffect(() => {
+    const handleApprovalsChange = () => {
+      queryClient.invalidateQueries({ queryKey: approvalsKeys.all });
+    };
+    window.addEventListener('omark-approvals-changed', handleApprovalsChange);
+    return () => {
+      window.removeEventListener('omark-approvals-changed', handleApprovalsChange);
+    };
+  }, [queryClient]);
 
   const canSeeMyProspects = hasRole(['marketing_staff', 'marketing_director', 'admin']);
   const { data: myProspectsData } = useProspectsQuery(
@@ -108,10 +133,19 @@ export const NavMenu: React.FC = () => {
     checkInRecords.map((c) => c.createdAt)
   );
 
-  // Use real backend unseen-counts if available, falling back to live query data
+  // Real-time counter metrics with live query priority
   const newComplaintsCount = apiUnseenCounts?.complaints ?? (canSeeComplaints ? fallbackComplaintsCount : 0);
-  const pendingApprovalsCount = apiUnseenCounts?.approvals ?? (canSeeHeadOffice ? pendingApprovalsFromApi : 0);
-  const pendingPayrollCount = 0;
+  const pendingApprovalsCount = canSeeHeadOffice
+    ? (pendingApprovalsFromApi > 0 ? pendingApprovalsFromApi : (apiUnseenCounts?.approvals || 0))
+    : (apiUnseenCounts?.approvals || 0);
+
+  const pendingPayrollCount = canSeePayroll
+    ? (pendingPayrollFromApi > 0 ? pendingPayrollFromApi : (apiUnseenCounts?.payroll || 0))
+    : (apiUnseenCounts?.payroll || 0);
+
+  // Total pending items requiring Head Office action (Approvals + Escalated Payroll)
+  const headOfficeBadgeCount = pendingApprovalsCount + pendingPayrollCount;
+
   const newProspectsCount = apiUnseenCounts?.prospects ?? (canSeeMyProspects ? fallbackProspectsCount : 0);
   const newAppointmentsCount = apiUnseenCounts?.appointments ?? (canSeeAppointmentsBadge ? fallbackAppointmentsCount : 0);
   const newCheckInsCount = apiUnseenCounts?.checkIns ?? (canSeeCheckIns ? fallbackCheckInsCount : 0);
@@ -263,15 +297,33 @@ export const NavMenu: React.FC = () => {
       items.push({
         key: 'head-office-group',
         icon: <BankOutlined />,
-        label: <span>Head Office<NavBadge count={pendingApprovalsCount} title={`${pendingApprovalsCount} pending approval(s)`} /></span>,
+        label: (
+          <span>
+            Head Office
+            <NavBadge count={headOfficeBadgeCount} title={`${headOfficeBadgeCount} pending action(s)`} />
+          </span>
+        ),
         children: [
           { key: '/head-office', label: 'Dashboard' },
           { key: '/head-office/pricing', label: 'Master Pricing' },
           {
             key: '/head-office/approvals',
-            label: <span>Approvals<NavBadge count={pendingApprovalsCount} title={`${pendingApprovalsCount} pending approval(s)`} /></span>,
+            label: (
+              <span>
+                Approvals
+                <NavBadge count={pendingApprovalsCount} title={`${pendingApprovalsCount} pending approval(s)`} />
+              </span>
+            ),
           },
-          { key: '/head-office/payroll', label: 'Payroll' },
+          {
+            key: '/head-office/payroll',
+            label: (
+              <span>
+                Payroll
+                <NavBadge count={pendingPayrollCount} title={`${pendingPayrollCount} pending payroll run(s)`} />
+              </span>
+            ),
+          },
         ],
       });
       items.push({
@@ -280,6 +332,28 @@ export const NavMenu: React.FC = () => {
         label: 'Branches',
       });
     } else if (hasRole(['branch_manager'])) {
+      items.push({
+        key: 'head-office-group',
+        icon: <BankOutlined />,
+        label: (
+          <span>
+            Head Office
+            <NavBadge count={headOfficeBadgeCount} title={`${headOfficeBadgeCount} pending action(s)`} />
+          </span>
+        ),
+        children: [
+          { key: '/head-office', label: 'Dashboard' },
+          {
+            key: '/head-office/approvals',
+            label: (
+              <span>
+                Approvals
+                <NavBadge count={pendingApprovalsCount} title={`${pendingApprovalsCount} pending approval(s)`} />
+              </span>
+            ),
+          },
+        ],
+      });
       items.push({
         key: '/branches',
         icon: <ApartmentOutlined />,
@@ -382,6 +456,7 @@ export const NavMenu: React.FC = () => {
     newComplaintsCount,
     pendingApprovalsCount,
     pendingPayrollCount,
+    headOfficeBadgeCount,
     newProspectsCount,
     newAppointmentsCount,
     newCheckInsCount,

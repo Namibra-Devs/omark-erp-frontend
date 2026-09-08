@@ -33,7 +33,9 @@ export const HeadOfficeDashboard: React.FC = () => {
   }, [usersData]);
 
   const expenses = expensesData?.items ?? [];
-  const pendingApprovalsCount = approvals.filter((a: any) => a.status === 'pending').length;
+  const pendingApprovalsCount = (Array.isArray(approvals) ? approvals : []).filter(
+    (a: any) => String(a?.status || '').trim().toLowerCase() === 'pending'
+  ).length;
 
   const totalExpenseMinor = useMemo(
     () => expenses.reduce((sum, e) => sum + (e.amountMinor || 0), 0),
@@ -135,7 +137,12 @@ export const HeadOfficeDashboard: React.FC = () => {
         title="Head Office Dashboard"
         actions={[
           { label: 'Master Pricing', onClick: () => navigate('/head-office/pricing'), icon: <DollarOutlined />, type: 'default' },
-          { label: 'Approvals', onClick: () => navigate('/head-office/approvals'), icon: <AuditOutlined />, type: 'default' },
+          {
+            label: pendingApprovalsCount > 0 ? `Approvals (${pendingApprovalsCount} Pending)` : 'Approvals',
+            onClick: () => navigate('/head-office/approvals'),
+            icon: <AuditOutlined />,
+            type: pendingApprovalsCount > 0 ? 'primary' : 'default',
+          },
           { label: 'Payroll', onClick: () => navigate('/head-office/payroll'), icon: <IdcardOutlined />, type: 'default' },
           { label: 'Manage Branches', onClick: () => navigate('/branches'), icon: <BankOutlined /> },
         ]}
@@ -149,7 +156,13 @@ export const HeadOfficeDashboard: React.FC = () => {
           <Card><Statistic title="Total Expenses Ledger" value={totalExpenseMinor / 100} prefix="GHS" precision={2} valueStyle={{ color: '#faad14' }} /></Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
-          <Card><Statistic title="Pending Approvals" value={pendingApprovalsCount} valueStyle={{ color: pendingApprovalsCount > 0 ? '#ff4d4f' : '#52c41a' }} /></Card>
+          <Card>
+            <Statistic
+              title={<span><AuditOutlined /> Pending Approvals</span>}
+              value={pendingApprovalsCount}
+              valueStyle={{ color: pendingApprovalsCount > 0 ? '#ff4d4f' : '#52c41a' }}
+            />
+          </Card>
         </Col>
         <Col xs={24} sm={12} lg={6}>
           <Card><Statistic title="Total System Staff" value={totalSystemStaffCount} valueStyle={{ color: '#1890ff' }} /></Card>

@@ -3,6 +3,7 @@
 // Activity feed and live summary stats for the Admin Dashboard.
 import { useEffect, useState } from 'react';
 import { getStoredActivities } from '@/utils/activityNotificationEngine';
+import { getStoredApprovals } from '@/api/approvals';
 import type { ActivityLog } from '../types';
 
 export interface MockActivityStats {
@@ -26,7 +27,15 @@ const buildActivityLogs = (_branchId?: string): ActivityLog[] => {
   }));
 };
 
-const buildStats = (_branchId?: string): MockActivityStats => {
+const buildStats = (branchId?: string): MockActivityStats => {
+  const approvals = getStoredApprovals();
+  const pendingApprovals = (Array.isArray(approvals) ? approvals : []).filter((a) => {
+    const isPending = String(a?.status || '').trim().toLowerCase() === 'pending';
+    if (!isPending) return false;
+    if (branchId && a.branchId && a.branchId !== branchId) return false;
+    return true;
+  });
+
   return {
     totalExpensesMinor: 0,
     internalExpensesMinor: 0,
@@ -34,7 +43,7 @@ const buildStats = (_branchId?: string): MockActivityStats => {
     totalBonusesMinor: 0,
     pendingPayrollCount: 0,
     openComplaintsCount: 0,
-    pendingApprovalsCount: 0,
+    pendingApprovalsCount: pendingApprovals.length,
   };
 };
 
@@ -49,9 +58,11 @@ export const useMockActivityFeed = (branchId?: string) => {
     };
     refresh();
     window.addEventListener('omark-activity-changed', refresh);
+    window.addEventListener('omark-approvals-changed', refresh);
     window.addEventListener('storage', refresh);
     return () => {
       window.removeEventListener('omark-activity-changed', refresh);
+      window.removeEventListener('omark-approvals-changed', refresh);
       window.removeEventListener('storage', refresh);
     };
   }, [branchId]);

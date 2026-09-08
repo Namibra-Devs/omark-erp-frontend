@@ -90,8 +90,60 @@ export const getUserBranchRoleTitle = (user: any, branches: BranchInfo[] = []): 
   return roleDisplay;
 };
 
+const ENTITY_BRANCH_STORAGE_KEY = 'omark_entity_branch_map';
+
+interface StoredBranchRecord {
+  branchId: string;
+  userId?: string;
+  entityType?: string;
+  timestamp: string;
+}
+
+/**
+ * Persists an entity's branch affiliation in local client storage.
+ * Ensures entities created by branch staff are remembered even if the backend
+ * table lacks an explicit branchId column.
+ */
+export const recordEntityBranch = (
+  entityType: string,
+  entityId: string,
+  branchId: string,
+  userId?: string
+) => {
+  if (!entityId || !branchId) return;
+  try {
+    const raw = localStorage.getItem(ENTITY_BRANCH_STORAGE_KEY);
+    const map: Record<string, StoredBranchRecord> = raw ? JSON.parse(raw) : {};
+    map[entityId] = {
+      branchId,
+      userId,
+      entityType,
+      timestamp: new Date().toISOString(),
+    };
+    localStorage.setItem(ENTITY_BRANCH_STORAGE_KEY, JSON.stringify(map));
+  } catch (err) {
+    console.warn('Failed to save entity branch to storage:', err);
+  }
+};
+
+/**
+ * Looks up any recorded branch affiliation for an entity ID.
+ */
+export const getStoredEntityBranch = (entityId: string): string | undefined => {
+  if (!entityId) return undefined;
+  try {
+    const raw = localStorage.getItem(ENTITY_BRANCH_STORAGE_KEY);
+    if (!raw) return undefined;
+    const map: Record<string, StoredBranchRecord> = JSON.parse(raw);
+    return map[entityId]?.branchId;
+  } catch {
+    return undefined;
+  }
+};
+
 /**
  * Deterministically maps any untagged item ID to one of the canonical branches.
+ * Note: Used only for legacy mock simulation if explicitly required.
  */
 export const getDeterministicBranchSlot = (itemIdentifier: string | number): string => {
   const str = String(itemIdentifier || 'omark-item');
@@ -107,7 +159,8 @@ export const getDeterministicBranchSlot = (itemIdentifier: string | number): str
 /**
  * Filters any list of entities (prospects, customers, complaints, payments, plans) by a target branch ID.
  * Admins get all items unless a specific branch filter is passed.
- * Non-admins strictly get records matching their branch canonical key.
+ * Head office staff or users without an explicit branch assignment see all records.
+ * Non-admins strictly get records matching their branch canonical key or records in the general shared pool.
  */
 export const filterEntitiesByBranch = <T extends Record<string, any>>(
   items: T[],
@@ -123,33 +176,44 @@ export const filterEntitiesByBranch = <T extends Record<string, any>>(
   }
 
   const targetBranch = overrideBranchId || getUserBranchId(user);
-  const userCanonical = getBranchCanonicalKey(targetBranch || 'kumasi');
+  
+  // If user has no branch constraint (e.g. accounts, general management, unassigned), show all items
+  if (!targetBranch && !overrideBranchId) {
+    return items;
+  }
 
-  return items.filter((item, index) => {
-    // 1. Direct branch ID or name on item
-    const itemBranch = item.branchId || item.branch || item.branchName || item.location;
+  const userCanonical = getBranchCanonicalKey(targetBranch);
+
+  return items.filter((item) => {
+    // 1. Direct branch ID or name on item, or stored branch mapping
+    const itemBranch = 
+      item.branchId || 
+      item.branch || 
+      item.branchName || 
+      item.location || 
+      getStoredEntityBranch(item.id);
+
     if (itemBranch) {
       const itemCanonical = getBranchCanonicalKey(itemBranch);
-      if (itemCanonical === userCanonical) return true;
+      return itemCanonical === userCanonical;
     }
 
     // 2. User assignment match on item creator / assigned staff
     const assignedId = item.assignedUserId || item.recordedByUserId || item.generatedByUserId;
     if (assignedId) {
-      const creatorBranch = getUserBranchId({ id: assignedId });
+      // If the current user created or was assigned to this item, it is visible to them
+      if (user?.id && assignedId === user.id) {
+        return true;
+      }
+      const creatorBranch = getStoredEntityBranch(assignedId) || getUserBranchId({ id: assignedId });
       if (creatorBranch && getBranchCanonicalKey(creatorBranch) === userCanonical) {
         return true;
       }
     }
 
-    // 3. If item has no explicit branch metadata, partition deterministically across branch slots
-    if (!itemBranch && !assignedId) {
-      const idKey = item.id || item.code || item.name || item.firstName || index;
-      const assignedSlot = getDeterministicBranchSlot(idKey);
-      return assignedSlot === userCanonical;
-    }
-
-    return false;
+    // 3. If item has no explicit branch metadata at all (e.g. customer table in backend without branchId),
+    // treat it as part of the accessible shared entity pool rather than discarding it via hash partitioning
+    return true;
   });
 };
 
@@ -162,9 +226,13 @@ export const tagPayloadWithBranch = <T extends Record<string, any>>(
 ): T => {
   const branchId = getUserBranchId(user);
   if (!branchId) return payload;
-  return {
+  const tagged = {
     ...payload,
     branchId,
     assignedUserId: user?.id || payload.assignedUserId,
   };
+  if (payload.id) {
+    recordEntityBranch('entity', payload.id, branchId, user?.id);
+  }
+  return tagged;
 };

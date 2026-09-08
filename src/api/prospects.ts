@@ -267,6 +267,9 @@ export const useConvertProspectMutation = () => {
       queryClient.invalidateQueries({ queryKey: prospectKeys.lists() });
       queryClient.invalidateQueries({ queryKey: prospectKeys.detail(variables.prospectId) });
       queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['payment-plans'] });
+      queryClient.invalidateQueries({ queryKey: ['properties'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
     },
   });
 };
