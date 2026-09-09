@@ -45,6 +45,7 @@ import {
   ShareAltOutlined,
   PrinterOutlined,
   FlagOutlined,
+  FlagFilled,
   GlobalOutlined,
   EnvironmentOutlined,
   IdcardOutlined,
@@ -72,6 +73,13 @@ import {
   useDeleteProspectMutation,
   useInteractionsQuery
 } from '@/api/prospects';
+import {
+  useAppointmentsQuery,
+  useCreateAppointmentMutation,
+  appointmentsKeys,
+  type Appointment
+} from '@/api/appointments';
+import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 
@@ -97,6 +105,9 @@ export const CSProspectsPage: React.FC = () => {
   const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [logInteractionModal, setLogInteractionModal] = useState(false);
+  const [bookAppointmentModal, setBookAppointmentModal] = useState(false);
+  const [appointmentForm] = Form.useForm();
+  const queryClient = useQueryClient();
 
   // Export states
   const [exportModal, setExportModal] = useState(false);
@@ -121,11 +132,25 @@ export const CSProspectsPage: React.FC = () => {
     refetch: refetchInteractions,
   } = useInteractionsQuery(selectedProspect?.id ?? '');
 
+  // ── Appointments Query & Real-Time Sync ─────────────────────────────────────
+  const {
+    data: appointmentsData,
+    refetch: refetchAppointments,
+  } = useAppointmentsQuery({ pageSize: 500 });
+  const appointments = appointmentsData?.items ?? [];
+
+  useEffect(() => {
+    const handleAppointmentsChanged = () => refetchAppointments();
+    window.addEventListener('omark-appointments-changed', handleAppointmentsChanged);
+    return () => window.removeEventListener('omark-appointments-changed', handleAppointmentsChanged);
+  }, [refetchAppointments]);
+
   // ── API Mutations ──────────────────────────────────────────────────────────
   const createProspect = useCreateProspectMutation();
   const updateProspect = useUpdateProspectMutation();
   const deleteProspect = useDeleteProspectMutation();
   const awardBonusMutation = useAwardBonusMutation();
+  const createAppointment = useCreateAppointmentMutation();
 
   // Only admins can set assignedUserId at creation (per the API), and only
   // admins need to pick — customer_service reps creating their own
@@ -141,13 +166,64 @@ export const CSProspectsPage: React.FC = () => {
   const rawProspects: Prospect[] = prospectsData?.items ?? [];
   const prospects: Prospect[] = filterEntitiesByBranch(rawProspects, user, branches);
 
-  // ── Filter prospects by tab ─────────────────────────────────────────────
-  const filteredProspects = prospects.filter(prospect => {
-    const matchesTab = activeTab === 'all' || 
-      (activeTab === 'active' && prospect.status !== 'purchased' && prospect.status !== 'canceled') ||
-      (activeTab === 'completed' && (prospect.status === 'purchased' || prospect.status === 'canceled'));
-    return matchesTab;
-  });
+  // ── Calculate Due Appointments by Prospect ID ──────────────────────────────────
+  // An appointment is due if status is scheduled and date is today or in the past (overdue)
+  const dueProspectMap = React.useMemo(() => {
+    const map: Record<string, Appointment> = {};
+    const endOfToday = dayjs().endOf('day');
+
+    appointments.forEach((apt) => {
+      if (!apt.prospectId) return;
+      const isScheduled = String(apt.status || '').toLowerCase() === 'scheduled';
+      if (!isScheduled) return;
+
+      const aptTime = dayjs(apt.scheduledFor);
+      if (aptTime.isBefore(endOfToday)) {
+        // Keep the earliest due appointment
+        if (!map[apt.prospectId] || aptTime.isBefore(dayjs(map[apt.prospectId].scheduledFor))) {
+          map[apt.prospectId] = apt;
+        }
+      }
+    });
+
+    return map;
+  }, [appointments]);
+
+  // Appointments for the selected prospect in the drawer
+  const selectedProspectAppointments = React.useMemo(() => {
+    if (!selectedProspect?.id) return [];
+    return appointments.filter((a) => a.prospectId === selectedProspect.id);
+  }, [appointments, selectedProspect?.id]);
+
+  // ── Filter prospects by tab AND Priority Sort (Due Appointments Climb to Top) ──
+  const sortedProspects = React.useMemo(() => {
+    const list = prospects.filter((prospect) => {
+      const matchesTab =
+        activeTab === 'all' ||
+        (activeTab === 'active' && prospect.status !== 'purchased' && prospect.status !== 'canceled') ||
+        (activeTab === 'completed' && (prospect.status === 'purchased' || prospect.status === 'canceled'));
+      return matchesTab;
+    });
+
+    return [...list].sort((a, b) => {
+      const aDue = dueProspectMap[a.id];
+      const bDue = dueProspectMap[b.id];
+
+      // Priority 1: Prospects with DUE appointments climb automatically to the top of the list!
+      if (aDue && !bDue) return -1;
+      if (!aDue && bDue) return 1;
+      if (aDue && bDue) {
+        // Sort earliest due appointment first
+        return dayjs(aDue.scheduledFor).valueOf() - dayjs(bDue.scheduledFor).valueOf();
+      }
+
+      // Default sorting: newest prospects first
+      return dayjs(b.createdAt || 0).valueOf() - dayjs(a.createdAt || 0).valueOf();
+    });
+  }, [prospects, activeTab, dueProspectMap]);
+
+  // Backward compatibility alias for count checks
+  const filteredProspects = sortedProspects;
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const statusBreakdown = {
@@ -386,19 +462,47 @@ export const CSProspectsPage: React.FC = () => {
     {
       title: 'Customer',
       key: 'customer',
-      width: 200,
-      render: (_: any, record: Prospect) => (
-        <Space>
-          <PhotoUpload entityType="prospect" entityId={record.id} size={32} editable={false} />
-          <div>
-            <Text strong>{record.firstName} {record.lastName}</Text>
-            <br />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              <PhoneOutlined /> {record.phoneNumber}
-            </Text>
-          </div>
-        </Space>
-      ),
+      width: 250,
+      render: (_: any, record: Prospect) => {
+        const dueApt = dueProspectMap[record.id];
+        return (
+          <Space align="start">
+            <PhotoUpload entityType="prospect" entityId={record.id} size={32} editable={false} />
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                <Text strong>{record.firstName} {record.lastName}</Text>
+                {dueApt && (
+                  <Tooltip
+                    title={`🚩 APPOINTMENT DUE: ${dayjs(dueApt.scheduledFor).format('MMM D, YYYY h:mm A')} (${dayjs(dueApt.scheduledFor).fromNow()}). Reason: ${dueApt.reason || 'General Follow-up'}`}
+                  >
+                    <Tag
+                      color="red"
+                      icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
+                      style={{
+                        margin: 0,
+                        fontWeight: 700,
+                        fontSize: 11,
+                        padding: '1px 7px',
+                        borderRadius: 4,
+                        cursor: 'pointer',
+                        border: '1px solid #ffa39e',
+                        background: '#fff1f0',
+                        color: '#cf1322',
+                        boxShadow: '0 0 6px rgba(255, 77, 79, 0.35)',
+                      }}
+                    >
+                      DUE {dayjs(dueApt.scheduledFor).isBefore(dayjs().startOf('day')) ? 'OVERDUE' : dayjs(dueApt.scheduledFor).format('h:mm A')}
+                    </Tag>
+                  </Tooltip>
+                )}
+              </div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <PhoneOutlined /> {record.phoneNumber}
+              </Text>
+            </div>
+          </Space>
+        );
+      },
     },
     {
       title: 'Address',
@@ -765,6 +869,99 @@ export const CSProspectsPage: React.FC = () => {
           </Col>
         </Row>
 
+        {/* ── APPOINTMENTS & MEETINGS SECTION ──────────────────────────────── */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card
+              size="small"
+              title={
+                <Space>
+                  <CalendarOutlined style={{ color: '#1890ff' }} />
+                  <span>Scheduled Appointments & Follow-ups ({selectedProspectAppointments.length})</span>
+                </Space>
+              }
+              bordered={false}
+              style={{ background: '#fafafa' }}
+              extra={
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => setBookAppointmentModal(true)}
+                  style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                >
+                  Book Appointment
+                </Button>
+              }
+            >
+              {selectedProspectAppointments.length > 0 ? (
+                <Timeline style={{ marginTop: 8 }}>
+                  {selectedProspectAppointments.map((apt) => {
+                    const isDue =
+                      String(apt.status || '').toLowerCase() === 'scheduled' &&
+                      dayjs(apt.scheduledFor).isBefore(dayjs().endOf('day'));
+                    return (
+                      <Timeline.Item
+                        key={apt.id}
+                        color={apt.status === 'completed' ? 'green' : isDue ? 'red' : 'blue'}
+                        dot={isDue ? <FlagFilled style={{ color: '#ff4d4f', fontSize: 14 }} /> : undefined}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div>
+                            <Space size={6} wrap>
+                              <Text strong style={{ fontSize: 13 }}>
+                                {dayjs(apt.scheduledFor).format('ddd, MMM D, YYYY · h:mm A')}
+                              </Text>
+                              {isDue && (
+                                <Tag
+                                  color="red"
+                                  style={{
+                                    fontWeight: 700,
+                                    fontSize: 10,
+                                    padding: '0 5px',
+                                    border: '1px solid #ffa39e',
+                                    background: '#fff1f0',
+                                    color: '#cf1322',
+                                  }}
+                                >
+                                  🚩 DUE TODAY
+                                </Tag>
+                              )}
+                              <Tag color={apt.status === 'completed' ? 'green' : apt.status === 'canceled' ? 'default' : 'blue'}>
+                                {String(apt.status || 'scheduled').toUpperCase()}
+                              </Tag>
+                            </Space>
+                            <div style={{ marginTop: 4 }}>
+                              <Text style={{ fontSize: 12 }}>{apt.reason || 'Client Consultation / Site Inspection'}</Text>
+                            </div>
+                          </div>
+                        </div>
+                      </Timeline.Item>
+                    );
+                  })}
+                </Timeline>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                  <Empty
+                    description="No appointments booked yet for this prospect"
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  >
+                    <Button
+                      type="primary"
+                      ghost
+                      size="small"
+                      icon={<PlusOutlined />}
+                      onClick={() => setBookAppointmentModal(true)}
+                    >
+                      Schedule Follow-up Meeting
+                    </Button>
+                  </Empty>
+                </div>
+              )}
+            </Card>
+          </Col>
+        </Row>
+
         {/* Footer */}
         <div style={{ 
           marginTop: 24, 
@@ -794,7 +991,7 @@ export const CSProspectsPage: React.FC = () => {
   };
 
   return (
-    <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
+    <div style={{ maxWidth: '100%', padding: '0 4px' }}>
       <PageHeader
         title="Customer Service Prospects"
         actions={[
@@ -1314,6 +1511,80 @@ export const CSProspectsPage: React.FC = () => {
         </div>
       </Modal>
 
+      {/* ── QUICK BOOK APPOINTMENT MODAL ────────────────────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <CalendarOutlined style={{ color: '#1890ff' }} />
+            <span>Book Appointment for {selectedProspect?.firstName} {selectedProspect?.lastName}</span>
+          </Space>
+        }
+        open={bookAppointmentModal}
+        onCancel={() => {
+          setBookAppointmentModal(false);
+          appointmentForm.resetFields();
+        }}
+        footer={null}
+        width={500}
+        style={{ top: 24 }}
+        destroyOnClose
+      >
+        <Form
+          form={appointmentForm}
+          layout="vertical"
+          onFinish={async (values) => {
+            if (!selectedProspect) return;
+            try {
+              await createAppointment.mutateAsync({
+                prospectId: selectedProspect.id,
+                scheduledFor: values.scheduledFor.toISOString(),
+                reason: values.reason?.trim() || 'Prospect consultation / site visit',
+              });
+              queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
+              window.dispatchEvent(new Event('omark-appointments-changed'));
+              message.success(`Appointment booked for ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`);
+              setBookAppointmentModal(false);
+              appointmentForm.resetFields();
+            } catch (err: any) {
+              message.error(err?.message || 'Failed to book appointment');
+            }
+          }}
+          initialValues={{
+            reason: 'Site inspection and payment plan discussion',
+          }}
+        >
+          <Form.Item
+            name="scheduledFor"
+            label="Appointment Date & Time"
+            rules={[{ required: true, message: 'Please select appointment date & time' }]}
+          >
+            <DatePicker
+              showTime={{ format: 'hh:mm A', use12Hours: true }}
+              format="YYYY-MM-DD hh:mm A"
+              style={{ width: '100%' }}
+              disabledDate={(current) => current && current < dayjs().startOf('day')}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="reason"
+            label="Meeting Agenda / Purpose"
+            rules={[{ required: true, message: 'Please provide a purpose for the appointment' }]}
+          >
+            <Input placeholder="e.g. Site visit to Prampram, office meeting for deed signing" />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => setBookAppointmentModal(false)}>Cancel</Button>
+              <Button type="primary" htmlType="submit" loading={createAppointment.isPending} icon={<CheckCircleOutlined />}>
+                Confirm Appointment
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
       <ConvertProspectModal
         open={convertModal}
         prospect={prospectToConvert}
@@ -1327,7 +1598,10 @@ export const CSProspectsPage: React.FC = () => {
         open={logInteractionModal}
         prospect={selectedProspect}
         onClose={() => setLogInteractionModal(false)}
-        onLogged={() => refetchInteractions()}
+        onLogged={() => {
+          refetchInteractions();
+          refetchAppointments();
+        }}
       />
     </div>
   );

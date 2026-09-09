@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin, Popconfirm, Tooltip, Alert } from 'antd';
-import { PlusOutlined, EyeOutlined, SearchOutlined, EditOutlined, DeleteOutlined, DollarOutlined, CloseOutlined } from '@ant-design/icons';
+import { PlusOutlined, EyeOutlined, SearchOutlined, EditOutlined, DeleteOutlined, DollarOutlined, CloseOutlined, FlagFilled } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
@@ -12,6 +12,7 @@ import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload
 import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
+import { useAppointmentsQuery } from '@/api/appointments';
 import { useUsersQuery } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
@@ -99,34 +100,80 @@ export const ProspectsPage: React.FC = () => {
   const rawProspectList: Prospect[] = prospectsData?.items ?? [];
   const prospectList: Prospect[] = filterEntitiesByBranch(rawProspectList, user, branches);
 
-  // Date-wise filtering (Daily, Weekly, Monthly, Yearly, Custom)
-  const filteredByDateList = useMemo(() => {
-    if (dateFilter === 'all') return prospectList;
-    const now = dayjs();
-    return prospectList.filter((p) => {
-      if (!p.createdAt) return true;
-      const created = dayjs(p.createdAt);
-      if (dateFilter === 'today') {
-        return created.isSame(now, 'day');
+  // Appointments Query to track due dates
+  const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 500 });
+  const appointments = appointmentsData?.items ?? [];
+
+  useEffect(() => {
+    const handleAptsChanged = () => refetchAppointments();
+    window.addEventListener('omark-appointments-changed', handleAptsChanged);
+    return () => window.removeEventListener('omark-appointments-changed', handleAptsChanged);
+  }, [refetchAppointments]);
+
+  // Due appointments map
+  const dueProspectMap = useMemo(() => {
+    const map: Record<string, any> = {};
+    const endOfToday = dayjs().endOf('day');
+
+    appointments.forEach((apt) => {
+      if (!apt.prospectId) return;
+      const isScheduled = String(apt.status || '').toLowerCase() === 'scheduled';
+      if (!isScheduled) return;
+
+      const aptTime = dayjs(apt.scheduledFor);
+      if (aptTime.isBefore(endOfToday)) {
+        if (!map[apt.prospectId] || aptTime.isBefore(dayjs(map[apt.prospectId].scheduledFor))) {
+          map[apt.prospectId] = apt;
+        }
       }
-      if (dateFilter === 'weekly') {
-        return created.isSame(now, 'week');
-      }
-      if (dateFilter === 'monthly') {
-        return created.isSame(now, 'month');
-      }
-      if (dateFilter === 'yearly') {
-        return created.isSame(now, 'year');
-      }
-      if (dateFilter === 'custom' && customDateRange && customDateRange[0] && customDateRange[1]) {
-        return (
-          (created.isAfter(customDateRange[0].startOf('day')) || created.isSame(customDateRange[0].startOf('day'))) &&
-          (created.isBefore(customDateRange[1].endOf('day')) || created.isSame(customDateRange[1].endOf('day')))
-        );
-      }
-      return true;
     });
-  }, [prospectList, dateFilter, customDateRange]);
+
+    return map;
+  }, [appointments]);
+
+  // Date-wise filtering (Daily, Weekly, Monthly, Yearly, Custom) + PRIORITY SORTING (Due climbs to top)
+  const filteredByDateList = useMemo(() => {
+    let list = prospectList;
+    if (dateFilter !== 'all') {
+      const now = dayjs();
+      list = prospectList.filter((p) => {
+        if (!p.createdAt) return true;
+        const created = dayjs(p.createdAt);
+        if (dateFilter === 'today') {
+          return created.isSame(now, 'day');
+        }
+        if (dateFilter === 'weekly') {
+          return created.isSame(now, 'week');
+        }
+        if (dateFilter === 'monthly') {
+          return created.isSame(now, 'month');
+        }
+        if (dateFilter === 'yearly') {
+          return created.isSame(now, 'year');
+        }
+        if (dateFilter === 'custom' && customDateRange && customDateRange[0] && customDateRange[1]) {
+          return (
+            (created.isAfter(customDateRange[0].startOf('day')) || created.isSame(customDateRange[0].startOf('day'))) &&
+            (created.isBefore(customDateRange[1].endOf('day')) || created.isSame(customDateRange[1].endOf('day')))
+          );
+        }
+        return true;
+      });
+    }
+
+    // Sort: Due appointments climb to the top!
+    return [...list].sort((a, b) => {
+      const aDue = dueProspectMap[a.id];
+      const bDue = dueProspectMap[b.id];
+
+      if (aDue && !bDue) return -1;
+      if (!aDue && bDue) return 1;
+      if (aDue && bDue) {
+        return dayjs(aDue.scheduledFor).valueOf() - dayjs(bDue.scheduledFor).valueOf();
+      }
+      return dayjs(b.createdAt || 0).valueOf() - dayjs(a.createdAt || 0).valueOf();
+    });
+  }, [prospectList, dateFilter, customDateRange, dueProspectMap]);
 
   const handleAddProspect = async (values: any) => {
     try {
@@ -205,12 +252,42 @@ export const ProspectsPage: React.FC = () => {
     {
       title: 'Name',
       key: 'name',
-      width: 120,
-      render: (_: any, record: Prospect) => (
-        <Text strong style={{ fontSize: 'clamp(12px, 1vw, 14px)' }}>
-          {record.firstName} {record.lastName}
-        </Text>
-      ),
+      width: 170,
+      render: (_: any, record: Prospect) => {
+        const dueApt = dueProspectMap[record.id];
+        return (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+              <Text strong style={{ fontSize: 'clamp(12px, 1vw, 14px)' }}>
+                {record.firstName} {record.lastName}
+              </Text>
+              {dueApt && (
+                <Tooltip
+                  title={`🚩 APPOINTMENT DUE: ${dayjs(dueApt.scheduledFor).format('MMM D, YYYY h:mm A')} (${dayjs(dueApt.scheduledFor).fromNow()}). Reason: ${dueApt.reason || 'Client follow-up'}`}
+                >
+                  <Tag
+                    color="red"
+                    icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
+                    style={{
+                      margin: 0,
+                      fontWeight: 700,
+                      fontSize: 10,
+                      padding: '0 5px',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      border: '1px solid #ffa39e',
+                      background: '#fff1f0',
+                      color: '#cf1322',
+                    }}
+                  >
+                    DUE {dayjs(dueApt.scheduledFor).isBefore(dayjs().startOf('day')) ? 'OVERDUE' : dayjs(dueApt.scheduledFor).format('h:mm A')}
+                  </Tag>
+                </Tooltip>
+              )}
+            </div>
+          </div>
+        );
+      },
     },
     {
       title: 'Phone',
@@ -306,7 +383,7 @@ export const ProspectsPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
+    <div style={{ maxWidth: '100%', padding: '0 4px' }}>
       <PageHeader
         title="Marketing Prospects"
         actions={[

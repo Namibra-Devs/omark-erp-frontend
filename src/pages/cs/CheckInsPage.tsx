@@ -1,9 +1,9 @@
 // src/pages/cs/CheckInsPage.tsx
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Space, Button,
   Modal, Form, Input, Select, DatePicker, message, Tooltip, Popconfirm,
-  Drawer, Descriptions, Badge, Divider, Alert, AutoComplete
+  Drawer, Descriptions, Badge, Divider, Alert, AutoComplete, QRCode
 } from 'antd';
 import {
   UserAddOutlined,
@@ -26,6 +26,15 @@ import {
   EnvironmentOutlined,
   InfoCircleOutlined,
   TagOutlined,
+  SendOutlined,
+  WhatsAppOutlined,
+  ShareAltOutlined,
+  CopyOutlined,
+  QrcodeOutlined,
+  TikTokOutlined,
+  FacebookOutlined,
+  InstagramOutlined,
+  YoutubeOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
@@ -34,6 +43,7 @@ import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { getUserBranchId } from '@/utils/branchIsolation';
 import { tokens } from '@/constants/tokens';
+import { PhoneInput } from '@/components/shared/PhoneInput';
 import { markSeen } from '@/utils/seenTracker';
 import {
   useCheckIns,
@@ -89,6 +99,8 @@ export const CheckInsPage: React.FC = () => {
   const [selectedRecord, setSelectedRecord] = useState<CheckInRecord | null>(null);
   const [checkOutModalOpen, setCheckOutModalOpen] = useState(false);
   const [recordToCheckOut, setRecordToCheckOut] = useState<CheckInRecord | null>(null);
+  const [visitorPassModalOpen, setVisitorPassModalOpen] = useState(false);
+  const [recordForPass, setRecordForPass] = useState<CheckInRecord | null>(null);
 
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
@@ -168,6 +180,51 @@ export const CheckInsPage: React.FC = () => {
     };
   }, [records]);
 
+  // ── Visitor Pass Dispatch Handler ─────────────────────────────────────────
+  const handleSendPassToVisitor = (record: CheckInRecord | null) => {
+    if (!record) return;
+
+    const summaryText = `*OMARK REAL ESTATE & CONSTRUCTION*
+Thank you for visiting Omark Real Estate & Construction
+We appreciate your time and trust.
+─────────────────────────────
+• Pass ID: ${record.code}
+• Visitor: ${record.visitorName}
+• Phone: ${record.phoneNumber}
+• Category: ${visitorCategoryLabels[record.category]?.label || record.category}
+• Person to See: ${record.hostStaffName || 'General Reception'} ${record.hostDepartment ? `(${record.hostDepartment})` : ''}
+• Purpose: ${record.purpose}
+• Check-In Time: ${dayjs(record.checkInTime).format('MMM D, YYYY · h:mm A')}
+${record.badgeNumber ? `• Badge Tag: ${record.badgeNumber}\n` : ''}• Issued By: ${record.handledByName || 'Front Desk'}
+─────────────────────────────
+*Omark renders the following services:*
+• Genuine Land Documentation
+• Building and Construction
+• Architectural Services
+• Project Management
+• Genuine Land Sales
+─────────────────────────────
+*Reach out to US:*
+• Tiktok: omark.group.of.companies
+• Facebook: Omark Prop
+• Instagram: omark_real_estate
+• YouTube: @omark2
+• call or whatsapp: 054 602 9075
+─────────────────────────────
+Please retain this pass reference on your phone. Have a wonderful visit!`;
+
+    // Strip non-digits for phone link
+    const cleanPhone = record.phoneNumber.replace(/[^\d]/g, '');
+    if (cleanPhone) {
+      const waUrl = `https://wa.me/${cleanPhone}?text=${encodeURIComponent(summaryText)}`;
+      window.open(waUrl, '_blank');
+      message.success(`Opening WhatsApp dispatch for ${record.visitorName} (${record.phoneNumber})`);
+    } else {
+      navigator.clipboard.writeText(summaryText);
+      message.success('Visitor check-in pass details copied to clipboard to send manually!');
+    }
+  };
+
   // ── Check-in Submission ───────────────────────────────────────────────────
   const handleCheckInSubmit = async (values: any) => {
     try {
@@ -176,7 +233,7 @@ export const CheckInsPage: React.FC = () => {
       const receptionistName = user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Front Desk';
       const branchId = values.branchId || currentBranchId || 'b2';
 
-      addCheckIn({
+      const newRecord = addCheckIn({
         branchId,
         visitorName: values.visitorName.trim(),
         phoneNumber: values.phoneNumber.trim(),
@@ -197,6 +254,10 @@ export const CheckInsPage: React.FC = () => {
       message.success(`Client ${values.visitorName} checked in successfully!`);
       setCheckInModalOpen(false);
       form.resetFields();
+
+      // Automatically open the printable / shareable Visitor Pass modal
+      setRecordForPass(newRecord);
+      setVisitorPassModalOpen(true);
     } catch (err: any) {
       message.error(err.message || 'Failed to check in visitor');
     }
@@ -356,7 +417,7 @@ export const CheckInsPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 170,
+      width: 210,
       fixed: 'right' as const,
       render: (_: any, record: CheckInRecord) => (
         <Space size="small">
@@ -373,6 +434,17 @@ export const CheckInsPage: React.FC = () => {
               </Button>
             </Tooltip>
           )}
+          <Tooltip title="Print / Send Visitor Pass">
+            <Button
+              type="text"
+              size="small"
+              icon={<PrinterOutlined style={{ color: '#1890ff' }} />}
+              onClick={() => {
+                setRecordForPass(record);
+                setVisitorPassModalOpen(true);
+              }}
+            />
+          </Tooltip>
           <Tooltip title="View Details">
             <Button
               type="text"
@@ -413,7 +485,7 @@ export const CheckInsPage: React.FC = () => {
   ];
 
   return (
-    <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
+    <div style={{ maxWidth: '100%', padding: '0 4px' }}>
       <PageHeader
         title="Client & Visitor Check-Ins"
         actions={[
@@ -427,7 +499,7 @@ export const CheckInsPage: React.FC = () => {
 
       {/* ── METRIC STAT CARDS ────────────────────────────────────────────── */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} lg={6}>
           <Card style={{ borderRadius: 8, borderLeft: '4px solid #52c41a' }}>
             <Statistic
               title="Currently on Premises"
@@ -437,7 +509,7 @@ export const CheckInsPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} lg={6}>
           <Card style={{ borderRadius: 8, borderLeft: '4px solid #faad14' }}>
             <Statistic
               title="Waiting in Reception"
@@ -447,7 +519,7 @@ export const CheckInsPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} lg={6}>
           <Card style={{ borderRadius: 8, borderLeft: '4px solid #1890ff' }}>
             <Statistic
               title="Checked Out Today"
@@ -457,7 +529,7 @@ export const CheckInsPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} md={6}>
+        <Col xs={24} sm={12} lg={6}>
           <Card style={{ borderRadius: 8, borderLeft: '4px solid #722ed1' }}>
             <Statistic
               title="Total Visitors This Month"
@@ -472,7 +544,7 @@ export const CheckInsPage: React.FC = () => {
       {/* ── FILTERS BAR ──────────────────────────────────────────────────── */}
       <Card style={{ marginBottom: 16, borderRadius: 8 }}>
         <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} sm={12} md={6}>
+          <Col xs={24} sm={12} lg={6}>
             <Input
               placeholder="Search visitor, phone, purpose, badge..."
               prefix={<SearchOutlined />}
@@ -482,7 +554,7 @@ export const CheckInsPage: React.FC = () => {
               size="middle"
             />
           </Col>
-          <Col xs={24} sm={12} md={4}>
+          <Col xs={12} sm={6} lg={4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Filter by Status"
@@ -497,7 +569,7 @@ export const CheckInsPage: React.FC = () => {
               <Option value="canceled">⚪ Canceled</Option>
             </Select>
           </Col>
-          <Col xs={24} sm={12} md={4}>
+          <Col xs={12} sm={6} lg={4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Visitor Category"
@@ -515,7 +587,7 @@ export const CheckInsPage: React.FC = () => {
               <Option value="other">Other</Option>
             </Select>
           </Col>
-          <Col xs={24} sm={12} md={4}>
+          <Col xs={12} sm={6} lg={4}>
             <Select
               style={{ width: '100%' }}
               value={dateFilter}
@@ -535,7 +607,7 @@ export const CheckInsPage: React.FC = () => {
             </Select>
           </Col>
           {dateFilter === 'custom' && (
-            <Col xs={24} sm={12} md={4}>
+            <Col xs={24} sm={12} lg={6}>
               <DatePicker.RangePicker
                 style={{ width: '100%' }}
                 value={customDateRange}
@@ -545,7 +617,7 @@ export const CheckInsPage: React.FC = () => {
             </Col>
           )}
           {hasRole(['admin']) && (
-            <Col xs={24} sm={12} md={2}>
+            <Col xs={12} sm={6} lg={dateFilter === 'custom' ? 4 : 3}>
               <Select
                 style={{ width: '100%' }}
                 value={selectedBranchId}
@@ -559,10 +631,12 @@ export const CheckInsPage: React.FC = () => {
               </Select>
             </Col>
           )}
-          <Col xs={24} sm={24} md={dateFilter === 'custom' ? 2 : (hasRole(['admin']) ? 4 : 6)}>
-            <Text type="secondary" style={{ display: 'block', textAlign: 'right', fontWeight: 500 }}>
-              Showing {filteredRecords.length} records
-            </Text>
+          <Col xs={24} sm={12} lg={hasRole(['admin']) ? (dateFilter === 'custom' ? 2 : 3) : (dateFilter === 'custom' ? 6 : 6)}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', height: '100%' }}>
+              <Tag color="blue" style={{ fontSize: 12, padding: '2px 8px' }}>
+                Showing {filteredRecords.length} records
+              </Tag>
+            </div>
           </Col>
         </Row>
       </Card>
@@ -574,7 +648,7 @@ export const CheckInsPage: React.FC = () => {
           dataSource={filteredRecords}
           rowKey="id"
           size="middle"
-          scroll={{ x: 950 }}
+          scroll={{ x: 1000 }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
@@ -597,8 +671,10 @@ export const CheckInsPage: React.FC = () => {
           form.resetFields();
         }}
         footer={null}
-        width={620}
+        width={640}
         style={{ top: 20 }}
+        styles={{ body: { maxHeight: 'calc(85vh - 120px)', overflowY: 'auto', padding: '16px 24px' } }}
+        destroyOnClose
       >
         <Alert
           message="Record incoming client or visitor arriving at the branch premises."
@@ -608,7 +684,7 @@ export const CheckInsPage: React.FC = () => {
         />
         <Form form={form} layout="vertical" onFinish={handleCheckInSubmit}>
           <Row gutter={12}>
-            <Col xs={24} sm={14}>
+            <Col xs={24} sm={12}>
               <Form.Item
                 name="visitorName"
                 label="Client / Visitor Full Name"
@@ -617,13 +693,13 @@ export const CheckInsPage: React.FC = () => {
                 <Input placeholder="e.g. Kwame Mensah" />
               </Form.Item>
             </Col>
-            <Col xs={24} sm={10}>
+            <Col xs={24} sm={12}>
               <Form.Item
                 name="phoneNumber"
                 label="Phone Number"
                 rules={[{ required: true, message: 'Please enter phone number' }]}
               >
-                <Input placeholder="e.g. +233 24 000 0000" />
+                <PhoneInput />
               </Form.Item>
             </Col>
           </Row>
@@ -751,6 +827,9 @@ export const CheckInsPage: React.FC = () => {
         onCancel={() => setCheckOutModalOpen(false)}
         footer={null}
         width={480}
+        style={{ top: 24 }}
+        styles={{ body: { maxHeight: 'calc(80vh - 100px)', overflowY: 'auto', padding: '16px 20px' } }}
+        destroyOnClose
       >
         <Form form={checkOutForm} layout="vertical" onFinish={confirmCheckOut}>
           <Paragraph>
@@ -776,18 +855,21 @@ export const CheckInsPage: React.FC = () => {
         open={Boolean(editingRecord)}
         onCancel={() => setEditingRecord(null)}
         footer={null}
-        width={600}
+        width={620}
+        style={{ top: 20 }}
+        styles={{ body: { maxHeight: 'calc(85vh - 120px)', overflowY: 'auto', padding: '16px 20px' } }}
+        destroyOnClose
       >
         <Form form={editForm} layout="vertical" onFinish={handleEditSubmit}>
           <Row gutter={12}>
-            <Col xs={24} sm={14}>
+            <Col xs={24} sm={12}>
               <Form.Item name="visitorName" label="Visitor Name" rules={[{ required: true }]}>
                 <Input />
               </Form.Item>
             </Col>
-            <Col xs={24} sm={10}>
+            <Col xs={24} sm={12}>
               <Form.Item name="phoneNumber" label="Phone" rules={[{ required: true }]}>
-                <Input />
+                <PhoneInput />
               </Form.Item>
             </Col>
           </Row>
@@ -893,6 +975,17 @@ export const CheckInsPage: React.FC = () => {
             </Descriptions>
 
             <div style={{ marginTop: 24, textAlign: 'right' }}>
+              <Button
+                block
+                icon={<PrinterOutlined />}
+                style={{ marginBottom: 8 }}
+                onClick={() => {
+                  setRecordForPass(selectedRecord);
+                  setVisitorPassModalOpen(true);
+                }}
+              >
+                Print / Send Visitor Pass
+              </Button>
               {(selectedRecord.status === 'in_premises' || selectedRecord.status === 'waiting') && (
                 <Button
                   type="primary"
@@ -914,6 +1007,271 @@ export const CheckInsPage: React.FC = () => {
           </div>
         )}
       </Drawer>
+
+      {/* ── PRINT / SEND VISITOR CHECK-IN PASS MODAL ───────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <IdcardOutlined style={{ color: tokens.primary }} />
+            <span>Official Visitor Check-In Pass</span>
+          </Space>
+        }
+        open={visitorPassModalOpen}
+        onCancel={() => {
+          setVisitorPassModalOpen(false);
+          setRecordForPass(null);
+        }}
+        width={580}
+        style={{ top: 20 }}
+        styles={{ body: { maxHeight: 'calc(85vh - 120px)', overflowY: 'auto', padding: '16px' } }}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <Button
+              onClick={() => {
+                setVisitorPassModalOpen(false);
+                setRecordForPass(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Space>
+              <Button
+                icon={<PrinterOutlined />}
+                onClick={() => {
+                  window.print();
+                }}
+              >
+                Print Pass
+              </Button>
+              <Button
+                type="primary"
+                icon={<SendOutlined />}
+                style={{ background: '#25D366', borderColor: '#25D366' }}
+                onClick={() => handleSendPassToVisitor(recordForPass)}
+              >
+                Send to Visitor
+              </Button>
+            </Space>
+          </div>
+        }
+      >
+        {recordForPass && (
+          <div>
+            <div
+              id="visitor-pass-print-card"
+              style={{
+                background: '#ffffff',
+                border: '2px dashed #2E5E8C',
+                borderRadius: 12,
+                padding: '20px 24px',
+                position: 'relative',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.05)',
+              }}
+            >
+              {/* Top Logo */}
+              <div style={{ textAlign: 'center', marginBottom: 10 }}>
+                <img
+                  src="/images/logo.webp"
+                  alt="Omark Real Estate & Construction"
+                  style={{ maxHeight: 60, maxWidth: 220, objectFit: 'contain', display: 'block', margin: '0 auto' }}
+                />
+              </div>
+
+              {/* Header / Thank You & Appreciation */}
+              <div style={{ textAlign: 'center', borderBottom: '2px solid #2E5E8C', paddingBottom: 12, marginBottom: 16 }}>
+                <div style={{ fontSize: 17, fontWeight: 800, color: '#1a365d', letterSpacing: 0.3, lineHeight: 1.3 }}>
+                  Thank you for visiting Omark Real Estate & Construction
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#c49a45', marginTop: 4, letterSpacing: 0.5 }}>
+                  We appreciate your time and trust
+                </div>
+              </div>
+
+              {/* Pass Title & Barcode Reference */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div>
+                  <Tag color="#2E5E8C" style={{ fontSize: 12, fontWeight: 700, padding: '2px 8px' }}>
+                    GATE CLEARANCE PASS
+                  </Tag>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#262626', marginTop: 4 }}>
+                    {recordForPass.code}
+                  </div>
+                  {recordForPass.badgeNumber && (
+                    <div style={{ fontSize: 12, color: '#096dd9', fontWeight: 600 }}>
+                      Badge Tag: {recordForPass.badgeNumber}
+                    </div>
+                  )}
+                </div>
+                <div style={{ textAlign: 'center' }}>
+                  <QRCode value={recordForPass.code} size={84} style={{ padding: 4 }} />
+                </div>
+              </div>
+
+              {/* Visitor & Visit Information Grid */}
+              <Descriptions size="small" column={2} bordered style={{ marginBottom: 16 }}>
+                <Descriptions.Item label={<Text strong>Visitor Name</Text>} span={2}>
+                  <Text strong style={{ fontSize: 14, color: '#2E5E8C' }}>{recordForPass.visitorName}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="Contact Phone">
+                  <Text>{recordForPass.phoneNumber}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="Category">
+                  <Tag color={visitorCategoryLabels[recordForPass.category]?.color || 'blue'}>
+                    {visitorCategoryLabels[recordForPass.category]?.label || recordForPass.category}
+                  </Tag>
+                </Descriptions.Item>
+                <Descriptions.Item label="Person to See" span={2}>
+                  <Text strong>{recordForPass.hostStaffName || 'Front Desk Staff'}</Text>
+                  {recordForPass.hostDepartment ? ` (${recordForPass.hostDepartment})` : ''}
+                </Descriptions.Item>
+                <Descriptions.Item label="Visit Purpose" span={2}>
+                  <Text>{recordForPass.purpose}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="Check-In Time">
+                  {dayjs(recordForPass.checkInTime).format('MMM D, YYYY · h:mm A')}
+                </Descriptions.Item>
+                <Descriptions.Item label="Issued By">
+                  {recordForPass.handledByName || 'Front Desk Reception'}
+                </Descriptions.Item>
+              </Descriptions>
+
+              {/* Services Rendered by Omark */}
+              <div
+                style={{
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 8,
+                  padding: '12px 14px',
+                  marginBottom: 14,
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#1a365d', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                  <span>Omark renders the following services:</span>
+                </div>
+                <Row gutter={[12, 6]}>
+                  {[
+                    'Genuine Land Documentation',
+                    'Building and Construction',
+                    'Architectural Services',
+                    'Project Management',
+                    'Genuine Land Sales',
+                  ].map((service, idx) => (
+                    <Col xs={24} sm={12} key={idx}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#334155' }}>
+                        <span style={{ color: '#c49a45', fontWeight: 'bold' }}>•</span>
+                        <span style={{ fontWeight: 600 }}>{service}</span>
+                      </div>
+                    </Col>
+                  ))}
+                </Row>
+              </div>
+
+              {/* Reach out to US Section */}
+              <div
+                style={{
+                  background: '#f0f7ff',
+                  border: '1px solid #bae0ff',
+                  borderRadius: 8,
+                  padding: '12px 14px',
+                  marginBottom: 14,
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#003eb3', marginBottom: 8 }}>
+                  Reach out to US:
+                </div>
+                <Row gutter={[12, 8]}>
+                  <Col xs={24} sm={12}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <TikTokOutlined style={{ color: '#000000', fontSize: 15 }} />
+                      <span style={{ color: '#595959' }}>Tiktok:</span>
+                      <Text strong style={{ color: '#262626' }}>omark.group.of.companies</Text>
+                    </div>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <FacebookOutlined style={{ color: '#1877F2', fontSize: 15 }} />
+                      <span style={{ color: '#595959' }}>Facebook:</span>
+                      <Text strong style={{ color: '#262626' }}>Omark Prop</Text>
+                    </div>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <InstagramOutlined style={{ color: '#E1306C', fontSize: 15 }} />
+                      <span style={{ color: '#595959' }}>Instagram:</span>
+                      <Text strong style={{ color: '#262626' }}>omark_real_estate</Text>
+                    </div>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
+                      <YoutubeOutlined style={{ color: '#FF0000', fontSize: 15 }} />
+                      <span style={{ color: '#595959' }}>YouTube:</span>
+                      <Text strong style={{ color: '#262626' }}>@omark2</Text>
+                    </div>
+                  </Col>
+                  <Col xs={24}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        fontSize: 12,
+                        marginTop: 4,
+                        background: '#ffffff',
+                        padding: '6px 12px',
+                        borderRadius: 6,
+                        border: '1px solid #91d5ff',
+                      }}
+                    >
+                      <WhatsAppOutlined style={{ color: '#25D366', fontSize: 16 }} />
+                      <PhoneOutlined style={{ color: '#096dd9', fontSize: 14 }} />
+                      <span style={{ color: '#595959' }}>call or whatsapp:</span>
+                      <a href="tel:0546029075" style={{ fontWeight: 700, color: '#096dd9', textDecoration: 'none' }}>
+                        054 602 9075
+                      </a>
+                    </div>
+                  </Col>
+                </Row>
+              </div>
+
+              {/* Security & Premises Safety Notice */}
+              <div
+                style={{
+                  background: '#f6ffed',
+                  border: '1px solid #b7eb8f',
+                  borderRadius: 6,
+                  padding: '8px 12px',
+                  fontSize: 11,
+                  color: '#389e0d',
+                  textAlign: 'center',
+                }}
+              >
+                🔒 <strong>Premises Policy:</strong> Please wear visitor badge visibly at all times. Return pass upon checkout.
+              </div>
+            </div>
+
+            {/* Print Styling Helper */}
+            <style>{`
+              @media print {
+                body * {
+                  visibility: hidden;
+                }
+                #visitor-pass-print-card, #visitor-pass-print-card * {
+                  visibility: visible;
+                }
+                #visitor-pass-print-card {
+                  position: absolute;
+                  left: 0;
+                  top: 0;
+                  width: 100%;
+                  border: 1px solid #2E5E8C !important;
+                  box-shadow: none !important;
+                }
+              }
+            `}</style>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

@@ -89,6 +89,7 @@ export interface Appointment {
   source: AppointmentSource;
   scheduledFor: string;
   status: AppointmentStatus;
+  reason?: string;
   feedback?: string;
   createdByUserId?: string;
   createdAt: string;
