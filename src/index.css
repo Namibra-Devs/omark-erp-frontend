@@ -64,14 +64,22 @@ p {
   letter-spacing: 0.5px !important;
   padding: 12px 16px !important;
   border-bottom: 1px solid #e2e8f0 !important;
-  white-space: nowrap;
+  white-space: nowrap !important;
+  word-break: normal !important;
+}
+
+.ant-table-wrapper .ant-table-thead th .ant-table-column-title,
+.ant-table-wrapper .ant-table-thead th .ant-table-column-sorters {
+  white-space: nowrap !important;
+  word-break: normal !important;
 }
 
 .ant-table-wrapper .ant-table-tbody > tr > td {
   padding: 12px 16px !important;
-  vertical-align: middle !important;
+  vertical-align: top !important;
   border-bottom: 1px solid #f1f5f9 !important;
   color: #1e293b;
+  word-break: normal;
 }
 
 .ant-table-wrapper .ant-table-tbody > tr:hover > td {
@@ -156,5 +164,76 @@ p {
   .quick-action-btn {
     height: 60px !important;
     font-size: 12px !important;
+  }
+}
+
+/* ──────────────────────────────────────────────────────────────────────────
+   CN811-U 80mm ESC/POS Thermal Receipt Printer Specifications
+   ────────────────────────────────────────────────────────────────────────── */
+@media screen {
+  .thermal-receipt-container {
+    display: none !important;
+  }
+}
+
+/* Thermal Receipt Print Styles for 80mm ESC/POS Roll Printers (e.g. CN811-U) */
+#thermal-receipt-slip {
+  display: none;
+}
+
+@media print {
+  @page {
+    size: auto;
+    margin: 0;
+  }
+
+  html, body {
+    width: 72mm !important;
+    max-width: 72mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    height: auto !important;
+  }
+
+  /* Exclusively hide all direct children of body EXCEPT #thermal-receipt-slip */
+  body > *:not(#thermal-receipt-slip) {
+    display: none !important;
+    height: 0 !important;
+    max-height: 0 !important;
+    overflow: hidden !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+  }
+
+  /* Exclusively reveal the dedicated thermal receipt slip */
+  #thermal-receipt-slip,
+  .thermal-receipt-container {
+    display: block !important;
+    visibility: visible !important;
+    width: 70mm !important;
+    max-width: 70mm !important;
+    margin: 0 auto !important;
+    padding: 1mm 1mm 1mm 1mm !important;
+    box-sizing: border-box !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, monospace, sans-serif !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-before: avoid !important;
+    break-before: avoid !important;
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+  }
+
+  #thermal-receipt-slip *,
+  .thermal-receipt-container * {
+    visibility: visible !important;
+    color: #000000 !important;
   }
 }
