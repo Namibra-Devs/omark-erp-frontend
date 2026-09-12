@@ -117,9 +117,10 @@ export const PayrollPage: React.FC = () => {
   const rawPayroll = payrollData?.items ?? [];
   const staffUserIds = useMemo(() => new Set(staffUsers.map((u: any) => u.id)), [staffUsers]);
   const payroll = useMemo(() => {
-    // Only display statements tied to active registered staff members in the system
-    return rawPayroll.filter((p: any) => p.staffUserId && staffUserIds.has(p.staffUserId));
-  }, [rawPayroll, staffUserIds]);
+    // Display statements tied to registered staff members; fallback to all raw records if staff list is loading
+    if (staffUsers.length === 0) return rawPayroll;
+    return rawPayroll.filter((p: any) => !p.staffUserId || staffUserIds.has(p.staffUserId));
+  }, [rawPayroll, staffUsers.length, staffUserIds]);
 
   const createPayroll = useCreatePayrollMutation();
   const bulkPayrollRun = useBulkPayrollRunMutation();
@@ -369,17 +370,23 @@ export const PayrollPage: React.FC = () => {
     const selectedStaff = staffUsers.find((u) => u.id === values.staffUserId);
     if (!selectedStaff) return;
     try {
+      const amountGHS = Number(values.amountGHS) || 0;
       await awardBonusMutation.mutateAsync({
         userId: values.staffUserId,
-        amountGHS: values.amountGHS,
+        staffUserId: values.staffUserId,
+        staffName: getUserFullName(selectedStaff),
+        branchId: (selectedStaff as any).branchId || branchId || (selectedBranch !== 'all' ? selectedBranch : undefined),
+        amountGHS,
+        amountMinor: Math.round(amountGHS * 100),
         reason: values.reason,
         bonusType: values.bonusType || 'monthly_target_met',
       });
-      message.success(`Bonus of GH₵ ${values.amountGHS} successfully awarded to ${getUserFullName(selectedStaff)}!`);
+      message.success(`Bonus of GH₵ ${amountGHS.toFixed(2)} successfully awarded to ${getUserFullName(selectedStaff)}!`);
       setAwardBonusModalOpen(false);
       awardBonusForm.resetFields();
+      refetch();
     } catch (err: any) {
-      message.error('Failed to award bonus');
+      message.error(err?.message || 'Failed to award bonus');
     }
   };
 

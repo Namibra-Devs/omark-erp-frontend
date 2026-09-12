@@ -29,7 +29,7 @@ import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useComplaintsQuery } from '@/api/complaints';
 import { useApprovalsQuery, approvalsKeys } from '@/api/approvals';
-import { usePayrollQuery } from '@/api/payroll';
+import { usePayrollQuery, payrollKeys } from '@/api/payroll';
 import { useCheckIns } from '@/utils/visitorCheckIns';
 import { useUnseenCount } from '@/utils/seenTracker';
 
@@ -93,14 +93,19 @@ export const NavMenu: React.FC = () => {
     (p: any) => String(p?.status || '').trim().toLowerCase() === 'pending'
   ).length;
 
-  // Listen for real-time approval decisions/creations across tabs & components
+  // Listen for real-time approval decisions/creations & payroll changes across tabs & components
   useEffect(() => {
     const handleApprovalsChange = () => {
       queryClient.invalidateQueries({ queryKey: approvalsKeys.all });
     };
+    const handlePayrollChange = () => {
+      queryClient.invalidateQueries({ queryKey: payrollKeys.all });
+    };
     window.addEventListener('omark-approvals-changed', handleApprovalsChange);
+    window.addEventListener('omark-payroll-changed', handlePayrollChange);
     return () => {
       window.removeEventListener('omark-approvals-changed', handleApprovalsChange);
+      window.removeEventListener('omark-payroll-changed', handlePayrollChange);
     };
   }, [queryClient]);
 
@@ -136,11 +141,11 @@ export const NavMenu: React.FC = () => {
   // Real-time counter metrics with live query priority
   const newComplaintsCount = apiUnseenCounts?.complaints ?? (canSeeComplaints ? fallbackComplaintsCount : 0);
   const pendingApprovalsCount = canSeeHeadOffice
-    ? (pendingApprovalsFromApi > 0 ? pendingApprovalsFromApi : (apiUnseenCounts?.approvals || 0))
+    ? (approvalsData !== undefined && Array.isArray(approvalsData) ? pendingApprovalsFromApi : (apiUnseenCounts?.approvals || 0))
     : (apiUnseenCounts?.approvals || 0);
 
   const pendingPayrollCount = canSeePayroll
-    ? (pendingPayrollFromApi > 0 ? pendingPayrollFromApi : (apiUnseenCounts?.payroll || 0))
+    ? (payrollData !== undefined ? pendingPayrollFromApi : (apiUnseenCounts?.payroll || 0))
     : (apiUnseenCounts?.payroll || 0);
 
   // Total pending items requiring Head Office action (Approvals + Escalated Payroll)
@@ -270,7 +275,7 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    if (hasRole(['customer_service', 'admin', 'branch_manager'])) {
+    if (hasRole(['customer_service', 'admin', 'branch_manager', 'secretary', 'accounts'])) {
       items.push({
         key: '/cs/prospects',
         icon: <TeamOutlined />,
@@ -361,14 +366,12 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    // Customers section
-    if (hasRole(['secretary', 'accounts', 'admin', 'branch_manager'])) {
-      items.push({
-        key: '/customers',
-        icon: <TeamOutlined />,
-        label: 'Customers',
-      });
-    }
+    // Customers section (available to all staff)
+    items.push({
+      key: '/customers',
+      icon: <TeamOutlined />,
+      label: 'Customers',
+    });
 
     // Payment Plans
     if (hasRole(['secretary', 'accounts', 'admin', 'branch_manager'])) {

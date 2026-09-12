@@ -12,6 +12,17 @@ import { AppShell } from '@/components/layout/AppShell';
 import { ScrollToTop } from '@/components/layout/ScrollToTop';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { tokens } from '@/constants/tokens';
+import type { Role } from '@/types';
+
+export const ALL_STAFF_ROLES: Role[] = [
+  'admin',
+  'branch_manager',
+  'marketing_staff',
+  'marketing_director',
+  'customer_service',
+  'secretary',
+  'accounts',
+];
 
 // Fast initial load for Login
 import { LoginPage } from '@/pages/LoginPage';
@@ -210,7 +221,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/marketing/prospects" 
           element={
-            <ProtectedRoute allowedRoles={['marketing_staff', 'marketing_director', 'admin']}>
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
               <ProspectsPage />
             </ProtectedRoute>
           } 
@@ -220,7 +231,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/marketing/prospects/:id" 
           element={
-            <ProtectedRoute allowedRoles={['marketing_staff', 'marketing_director', 'admin']}>
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
               <ProspectDetailPage />
             </ProtectedRoute>
           } 
@@ -230,8 +241,18 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/cs/prospects" 
           element={
-            <ProtectedRoute allowedRoles={['customer_service', 'admin']}>
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
               <CSProspectsPage />
+            </ProtectedRoute>
+          } 
+        />
+
+        {/* CS Prospect Detail - /cs/prospects/:id */}
+        <Route 
+          path="/cs/prospects/:id" 
+          element={
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
+              <ProspectDetailPage />
             </ProtectedRoute>
           } 
         />
@@ -242,10 +263,16 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/cs/appointments" 
           element={
-            <ProtectedRoute allowedRoles={['customer_service', 'admin', 'secretary', 'branch_manager']}>
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
               <AppointmentsPage />
             </ProtectedRoute>
           } 
+        />
+
+        {/* Alias /appointments -> /cs/appointments */}
+        <Route 
+          path="/appointments" 
+          element={<Navigate to="/cs/appointments" replace />} 
         />
 
         {/* Client & Visitor Check-Ins - /cs/check-ins */}
@@ -264,7 +291,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/customers" 
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin', 'branch_manager']}>
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
               <CustomersPage />
             </ProtectedRoute>
           } 
@@ -274,7 +301,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/customers/:id" 
           element={
-            <ProtectedRoute allowedRoles={['secretary', 'accounts', 'admin', 'branch_manager']}>
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
               <CustomerDetailPage />
             </ProtectedRoute>
           } 

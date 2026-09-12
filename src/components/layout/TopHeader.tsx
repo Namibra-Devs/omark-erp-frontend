@@ -117,6 +117,7 @@ export const TopHeader: React.FC = () => {
   // ── Filtered Notifications ────────────────────────────────────────────────
   const filteredNotifications = systemNotifications.filter((n) => {
     if (activeCategory === 'all') return true;
+    if (activeCategory === 'defaulter') return n.category === 'defaulter';
     if (activeCategory === 'attendance') return n.category === 'attendance';
     if (activeCategory === 'payroll') return n.category === 'payroll';
     if (activeCategory === 'payment') return n.category === 'payment' || n.category === 'deed';
@@ -125,8 +126,10 @@ export const TopHeader: React.FC = () => {
   });
 
   const unreadCount = systemNotifications.filter((n) => !n.read).length;
+  const defaultersCount = systemNotifications.filter((n) => n.category === 'defaulter').length;
 
   const getCategoryIcon = (category: string, type: string) => {
+    if (category === 'defaulter') return <WarningOutlined style={{ color: '#ff4d4f', fontSize: 18 }} />;
     if (category === 'attendance') return <ClockCircleOutlined style={{ color: '#0284c7', fontSize: 18 }} />;
     if (category === 'payroll') return <DollarOutlined style={{ color: '#52c41a', fontSize: 18 }} />;
     if (category === 'payment') return <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 18 }} />;
@@ -181,6 +184,7 @@ export const TopHeader: React.FC = () => {
           size="small"
           items={[
             { key: 'all', label: `All (${systemNotifications.length})` },
+            { key: 'defaulter', label: defaultersCount > 0 ? `Defaulters (${defaultersCount})` : 'Defaulters' },
             { key: 'attendance', label: 'Attendance' },
             { key: 'payroll', label: 'Payroll & Bonuses' },
             { key: 'payment', label: 'Sales & Deeds' },

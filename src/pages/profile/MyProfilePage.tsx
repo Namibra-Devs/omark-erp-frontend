@@ -1,6 +1,6 @@
 // src/pages/profile/MyProfilePage.tsx
 import React, { useMemo, useState } from 'react';
-import { Button, Card, Col, Descriptions, Empty, Form, Input, List, Modal, Row, Space, Statistic, Table, Tag, Typography, message, Spin } from 'antd';
+import { Alert, Button, Card, Col, Descriptions, Empty, Form, Input, List, Modal, Row, Space, Statistic, Table, Tag, Typography, message, Spin } from 'antd';
 import {
   AuditOutlined, CalendarOutlined, EditOutlined, FileTextOutlined,
   IdcardOutlined, MailOutlined, PhoneOutlined, UserAddOutlined, DollarOutlined,
@@ -12,7 +12,7 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
-import { useUpdateUserMutation, useUserActivityQuery } from '@/api/users';
+import { useUpdateUserMutation, useUserActivityQuery, type UpdateUserPayload } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
@@ -192,27 +192,32 @@ export const MyProfilePage: React.FC = () => {
   }, [myPayroll]);
 
   const openEdit = () => {
-    if (!isAdmin) {
-      message.warning('Staff profiles are view-only. Profile modifications must be performed by an Administrator.');
-      return;
-    }
     form.setFieldsValue({
+      id: user?.id,
       firstName: user?.firstName,
       lastName: user?.lastName,
       email: user?.email,
-      phoneNumber: user?.phoneNumber,
+      phoneNumber: user?.phoneNumber || '',
     });
     setEditModal(true);
   };
 
   const handleSave = async (values: any) => {
     if (!user?.id) return;
-    if (!isAdmin) {
-      message.error('Unauthorized: Profile editing is restricted to administrators.');
-      return;
-    }
     try {
-      await updateUser.mutateAsync({ id: user.id, payload: values });
+      // Staffs can edit their profile image (via PhotoUpload) and phone number only.
+      // Staff ID and Email cannot be edited. Admins can additionally edit names.
+      const payload: UpdateUserPayload = isAdmin
+        ? {
+            firstName: values.firstName,
+            lastName: values.lastName,
+            phoneNumber: values.phoneNumber,
+          }
+        : {
+            phoneNumber: values.phoneNumber,
+          };
+
+      await updateUser.mutateAsync({ id: user.id, payload });
       await refreshUser();
       message.success('Profile updated successfully');
       setEditModal(false);
@@ -242,7 +247,7 @@ export const MyProfilePage: React.FC = () => {
     <div>
       <PageHeader
         title="My Profile"
-        actions={isAdmin ? [{ label: 'Edit Info', onClick: openEdit, icon: <EditOutlined /> }] : []}
+        actions={[{ label: 'Edit Profile', onClick: openEdit, icon: <EditOutlined /> }]}
       />
 
       <Card style={{ marginBottom: 24 }}>
@@ -252,10 +257,9 @@ export const MyProfilePage: React.FC = () => {
               entityType="staff"
               entityId={user.id}
               size={80}
-              editable={isAdmin}
+              editable={true}
               src={user.avatarUrl || user.photoUrl}
               onPhotoChange={async (url) => {
-                if (!isAdmin) return;
                 try {
                   await updateUser.mutateAsync({
                     id: user.id,
@@ -273,18 +277,21 @@ export const MyProfilePage: React.FC = () => {
             <Space size={12} style={{ marginTop: 4, flexWrap: 'wrap' }}>
               <Tag color="blue" style={{ fontSize: 13, padding: '4px 12px', borderRadius: 12 }}>{branchRoleTitle}</Tag>
               <Text type="secondary" style={{ fontSize: 12 }}>Staff since {dayjs(user.createdAt).format('MMM YYYY')}</Text>
-              {!isAdmin && (
-                <Tag color="default" style={{ borderRadius: 6, fontSize: 11, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
-                  <LockOutlined style={{ marginRight: 4, color: '#64748b' }} />
-                  View-Only Profile (Managed by Administrator)
-                </Tag>
-              )}
+              <Tag color="default" style={{ borderRadius: 6, fontSize: 11, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+                <IdcardOutlined style={{ marginRight: 4, color: '#64748b' }} />
+                ID: {user.id ? `${user.id.slice(0, 8)}...` : '—'}
+              </Tag>
             </Space>
-            <Descriptions column={{ xs: 1, sm: 2 }} style={{ marginTop: 16 }} contentStyle={{ wordBreak: 'break-word' }}>
+            <Descriptions column={{ xs: 1, sm: 3 }} style={{ marginTop: 16 }} contentStyle={{ wordBreak: 'break-word' }}>
+              <Descriptions.Item label={<span><IdcardOutlined /> Staff ID</span>}>
+                <Text code copyable={{ text: user.id }}>{user.id ? `${user.id.slice(0, 8)}...` : '—'}</Text>
+              </Descriptions.Item>
               <Descriptions.Item label={<span><MailOutlined /> Email</span>}>
                 <a href={`mailto:${user.email}`} style={{ wordBreak: 'break-all' }}>{user.email}</a>
               </Descriptions.Item>
-              <Descriptions.Item label={<span><PhoneOutlined /> Phone</span>}>{user.phoneNumber || '—'}</Descriptions.Item>
+              <Descriptions.Item label={<span><PhoneOutlined /> Phone</span>}>
+                {user.phoneNumber || <Text type="secondary">Not set (Click Edit Profile)</Text>}
+              </Descriptions.Item>
             </Descriptions>
           </Col>
         </Row>
@@ -353,24 +360,122 @@ export const MyProfilePage: React.FC = () => {
         )}
       </Card>
 
-      <Modal title="Edit Profile" open={editModal} onCancel={() => setEditModal(false)} footer={null} destroyOnClose>
+      <Modal
+        title="Edit Profile"
+        open={editModal}
+        onCancel={() => setEditModal(false)}
+        footer={null}
+        destroyOnClose
+        width={520}
+      >
+        {!isAdmin && (
+          <Alert
+            type="info"
+            showIcon
+            message="Staff Profile Edit Policy"
+            description="Staff members can update their profile image and contact phone number. Staff ID, legal name, and official company email are locked and cannot be edited by staff."
+            style={{ marginBottom: 18 }}
+          />
+        )}
+
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            padding: '16px',
+            marginBottom: 20,
+            background: '#f8fafc',
+            borderRadius: 8,
+            border: '1px solid #e2e8f0',
+          }}
+        >
+          <PhotoUpload
+            entityType="staff"
+            entityId={user.id}
+            size={84}
+            editable={true}
+            src={user.avatarUrl || user.photoUrl}
+            onPhotoChange={async (url) => {
+              try {
+                await updateUser.mutateAsync({
+                  id: user.id,
+                  payload: { avatarUrl: url, photoUrl: url, profilePictureUrl: url },
+                });
+                await refreshUser();
+              } catch {
+                // Persistent storage is synchronized
+              }
+            }}
+          />
+          <Text strong style={{ marginTop: 10, fontSize: 13 }}>Profile Picture</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Click the camera icon on the photo to upload or take a new picture
+          </Text>
+        </div>
+
         <Form form={form} layout="vertical" onFinish={handleSave}>
-          <Form.Item name="firstName" label="First Name" rules={[{ required: true, message: 'Required' }]}>
-            <Input />
+          <Form.Item
+            name="id"
+            label={<span><IdcardOutlined style={{ marginRight: 6 }} />Staff ID (System ID)</span>}
+            tooltip="Fixed unique account identifier. Cannot be edited."
+          >
+            <Input disabled prefix={<IdcardOutlined style={{ color: '#8c8c8c' }} />} style={{ backgroundColor: '#f8fafc', color: '#64748b' }} />
           </Form.Item>
-          <Form.Item name="lastName" label="Last Name" rules={[{ required: true, message: 'Required' }]}>
-            <Input />
+
+          <Form.Item
+            name="email"
+            label={<span><MailOutlined style={{ marginRight: 6 }} />Email Address</span>}
+            tooltip="Official corporate email is locked and cannot be changed by staff."
+            extra={<Text type="secondary" style={{ fontSize: 11 }}>Official company email (read-only for staff).</Text>}
+          >
+            <Input disabled prefix={<MailOutlined style={{ color: '#8c8c8c' }} />} style={{ backgroundColor: '#f8fafc', color: '#64748b' }} />
           </Form.Item>
-          <Form.Item name="email" label="Email" rules={[{ required: true, type: 'email', message: 'Enter a valid email' }]}>
-            <Input />
+
+          <Row gutter={16}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="firstName"
+                label="First Name"
+                rules={isAdmin ? [{ required: true, message: 'Required' }] : []}
+                tooltip={!isAdmin ? 'Staff legal names are managed by administrators.' : undefined}
+              >
+                <Input disabled={!isAdmin} style={!isAdmin ? { backgroundColor: '#f8fafc', color: '#64748b' } : undefined} />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="lastName"
+                label="Last Name"
+                rules={isAdmin ? [{ required: true, message: 'Required' }] : []}
+                tooltip={!isAdmin ? 'Staff legal names are managed by administrators.' : undefined}
+              >
+                <Input disabled={!isAdmin} style={!isAdmin ? { backgroundColor: '#f8fafc', color: '#64748b' } : undefined} />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="phoneNumber"
+            label={<span><PhoneOutlined style={{ marginRight: 6 }} />Phone Number</span>}
+            rules={[
+              { required: true, message: 'Please enter your phone number' },
+              { pattern: /^[0-9+\s\-()]{7,20}$/, message: 'Please enter a valid phone number (e.g. 054 602 9075)' },
+            ]}
+            extra={<Text type="secondary" style={{ fontSize: 11 }}>This phone number will be used for SMS notifications, team contact, and visitor communications.</Text>}
+          >
+            <Input
+              prefix={<PhoneOutlined style={{ color: tokens.primary }} />}
+              placeholder="e.g. 054 602 9075 or +233 54 602 9075"
+            />
           </Form.Item>
-          <Form.Item name="phoneNumber" label="Phone Number" rules={[{ required: true, message: 'Required' }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item>
-            <Space>
-              <Button type="primary" htmlType="submit" loading={updateUser.isPending}>Save</Button>
+
+          <Form.Item style={{ marginBottom: 0, marginTop: 20 }}>
+            <Space style={{ width: '100%', justifyContent: 'flex-end' }}>
               <Button onClick={() => setEditModal(false)}>Cancel</Button>
+              <Button type="primary" htmlType="submit" loading={updateUser.isPending} icon={<EditOutlined />}>
+                Save Changes
+              </Button>
             </Space>
           </Form.Item>
         </Form>

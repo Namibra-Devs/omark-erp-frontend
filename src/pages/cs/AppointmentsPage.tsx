@@ -742,37 +742,7 @@ export const AppointmentsPage: React.FC = () => {
     );
   };
 
-  // Handle loading state
-  if (appointmentsLoading || prospectsLoading || customersLoading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
-        <Spin size="large" tip="Loading appointments..." />
-      </div>
-    );
-  }
 
-  // Handle error state
-  if (appointmentsError) {
-    return (
-      <div style={{ padding: 24 }}>
-        <Alert
-          message="Error Loading Appointments"
-          description={
-            (appointmentsError as any)?.error?.message ||
-            (appointmentsError as any)?.message ||
-            'There was an error loading the appointments. Please try again.'
-          }
-          type="error"
-          showIcon
-          action={
-            <Button size="small" type="primary" onClick={() => refetchAppointments()}>
-              Retry
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
 
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>

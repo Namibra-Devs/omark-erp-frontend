@@ -18,6 +18,8 @@ interface QuickActionsProps {
   onAddUser: () => void;
   onManageUsers: () => void;
   onExport: () => void;
+  onAddProspect?: () => void;
+  onAddCustomer?: () => void;
   onRefresh?: () => void;
   onSettings?: () => void;
   onViewNotifications?: () => void;
@@ -29,6 +31,8 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
   onAddUser,
   onManageUsers,
   onExport,
+  onAddProspect,
+  onAddCustomer,
   onRefresh,
   onSettings,
   onViewNotifications,
@@ -45,6 +49,24 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
       bg: '#e6f7ff',
       onClick: onAddUser,
     },
+    ...(onAddProspect ? [{
+      key: 'add-prospect',
+      icon: <UserAddOutlined style={{ fontSize: 20 }} />,
+      label: 'Add Prospect',
+      description: 'Register new lead',
+      color: '#fa8c16',
+      bg: '#fff7e6',
+      onClick: onAddProspect,
+    }] : []),
+    ...(onAddCustomer ? [{
+      key: 'add-customer',
+      icon: <PlusOutlined style={{ fontSize: 20 }} />,
+      label: 'Add Customer',
+      description: 'Register new buyer',
+      color: '#13c2c2',
+      bg: '#e6fffb',
+      onClick: onAddCustomer,
+    }] : []),
     {
       key: 'manage-users',
       icon: <TeamOutlined style={{ fontSize: 20 }} />,

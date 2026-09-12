@@ -57,7 +57,15 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
     const currAmount = rule.rewardAmountGHS ?? rule.amountGHS;
     if (newAmount === undefined || newAmount === currAmount) return;
     try {
-      await updateRuleMutation.mutateAsync({ id: rule.id, payload: { rewardAmountGHS: newAmount, rewardAmountMinor: Math.round(newAmount * 100) } });
+      await updateRuleMutation.mutateAsync({
+        id: rule.id,
+        payload: {
+          rewardAmountGHS: newAmount,
+          rewardAmountMinor: Math.round(newAmount * 100),
+          amountGHS: newAmount,
+          amountMinor: Math.round(newAmount * 100),
+        },
+      });
       message.success(`Updated ${rule.ruleName || rule.name} to GH₵ ${newAmount.toFixed(2)}`);
       setEditingAmounts((prev) => {
         const next = { ...prev };
@@ -71,17 +79,23 @@ export const BonusRulesModal: React.FC<BonusRulesModalProps> = ({ open, onClose 
 
   const handleCreateRule = async (values: any) => {
     try {
+      const amountGHS = Number(values.amountGHS) || 0;
       await createRuleMutation.mutateAsync({
         bonusType: values.bonusType,
         ruleName: values.name,
+        name: values.name,
         triggerEvent: values.eventType || 'custom',
+        eventType: values.eventType || 'custom',
         rewardType: 'FIXED_GHS',
-        rewardAmountGHS: values.amountGHS,
-        rewardAmountMinor: Math.round(values.amountGHS * 100),
+        rewardAmountGHS: amountGHS,
+        amountGHS: amountGHS,
+        rewardAmountMinor: Math.round(amountGHS * 100),
+        amountMinor: Math.round(amountGHS * 100),
         applicableRoles: values.applicableRoles || ['marketing_staff', 'customer_service'],
         isActive: true,
         description: values.description,
         qualificationCriteria: values.criteria,
+        criteria: values.criteria,
       });
       message.success('New bonus rule created successfully');
       setCreateModalOpen(false);

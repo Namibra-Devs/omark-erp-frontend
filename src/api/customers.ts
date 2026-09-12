@@ -69,7 +69,11 @@ export const useCustomersQuery = (filter?: CustomersFilter) => {
     queryKey: customerKeys.list(filter),
     queryFn: async () => {
       try {
-        const response = await apiClient.get<ApiResponse<Customer[]>>('/customers', { params: filter });
+        const params = {
+          pageSize: 10000,
+          ...filter,
+        };
+        const response = await apiClient.get<ApiResponse<Customer[]>>('/customers', { params });
         return unwrapList(response) as CustomersListResult;
       } catch (error) {
         if (error instanceof AxiosError) {

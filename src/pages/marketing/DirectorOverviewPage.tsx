@@ -52,12 +52,16 @@ const { Title, Text } = Typography;
 const COLORS = ['#1890ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2'];
 
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
-import { SettingOutlined } from '@ant-design/icons';
+import { SettingOutlined, PlusOutlined, UserAddOutlined } from '@ant-design/icons';
+import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 
 export const DirectorOverviewPage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const navigate = useNavigate();
   const [bonusModalOpen, setBonusModalOpen] = useState(false);
+  const [addProspectModal, setAddProspectModal] = useState(false);
+  const [addCustomerModal, setAddCustomerModal] = useState(false);
   const { data, isLoading, isFetching, isError, error, refetch } = useMarketingDashboardQuery();
 
   // GET /dashboard/analytics — admin / accounts / marketing_director only,
@@ -316,6 +320,16 @@ export const DirectorOverviewPage: React.FC = () => {
       <PageHeader
         title="Marketing Director Overview"
         actions={[
+          {
+            label: 'Add Prospect',
+            onClick: () => setAddProspectModal(true),
+            icon: <UserAddOutlined />,
+          },
+          {
+            label: 'Add Customer',
+            onClick: () => setAddCustomerModal(true),
+            icon: <PlusOutlined />,
+          },
           ...(hasRole(['admin', 'marketing_director'])
             ? [{
                 label: 'Bonus Rules',
@@ -775,6 +789,22 @@ export const DirectorOverviewPage: React.FC = () => {
       <BonusRulesModal
         open={bonusModalOpen}
         onClose={() => setBonusModalOpen(false)}
+      />
+
+      <AddProspectModal
+        open={addProspectModal}
+        onClose={() => setAddProspectModal(false)}
+        onSuccess={() => {
+          handleRefresh();
+        }}
+      />
+
+      <AddCustomerModal
+        open={addCustomerModal}
+        onClose={() => setAddCustomerModal(false)}
+        onSuccess={() => {
+          handleRefresh();
+        }}
       />
     </div>
   );

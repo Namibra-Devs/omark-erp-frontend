@@ -250,18 +250,22 @@ export const StaffProfilePage: React.FC = () => {
 
   const handleManualBonus = async (values: any) => {
     try {
+      const amountGHS = Number(values.amountGHS) || 0;
       await awardBonusMutation.mutateAsync({
         userId: staffMember.id,
+        staffUserId: staffMember.id,
+        staffName: fullName,
         branchId: assignedBranch?.id,
-        amountGHS: Number(values.amountGHS),
+        amountGHS,
+        amountMinor: Math.round(amountGHS * 100),
         bonusType: values.bonusType || 'custom_award',
         reason: values.reason,
       });
-      message.success(`Bonus of GH₵ ${values.amountGHS} awarded to ${fullName}!`);
+      message.success(`Bonus of GH₵ ${amountGHS.toFixed(2)} awarded to ${fullName}!`);
       setAddBonusModal(false);
       bonusForm.resetFields();
     } catch (err: any) {
-      message.error('Failed to award bonus');
+      message.error(err?.message || 'Failed to award bonus');
     }
   };
 

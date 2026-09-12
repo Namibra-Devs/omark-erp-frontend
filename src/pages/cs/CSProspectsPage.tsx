@@ -1,5 +1,5 @@
 // src/pages/cs/CSProspectsPage.tsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Button, Space, Modal, Form, Input, Select, Row, Col, Table, 
@@ -71,7 +71,8 @@ import {
   useCreateProspectMutation,
   useUpdateProspectMutation,
   useDeleteProspectMutation,
-  useInteractionsQuery
+  useInteractionsQuery,
+  prospectKeys,
 } from '@/api/prospects';
 import {
   useAppointmentsQuery,
@@ -82,6 +83,8 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
+import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
+import { customerKeys } from '@/api/customers';
 
 dayjs.extend(relativeTime);
 
@@ -101,11 +104,14 @@ export const CSProspectsPage: React.FC = () => {
   const [editForm] = Form.useForm();
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'customer_service' | 'marketing'>('all');
+  const [addCustomerModal, setAddCustomerModal] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [logInteractionModal, setLogInteractionModal] = useState(false);
   const [bookAppointmentModal, setBookAppointmentModal] = useState(false);
+  const [appointmentTargetProspect, setAppointmentTargetProspect] = useState<Prospect | null>(null);
   const [appointmentForm] = Form.useForm();
   const queryClient = useQueryClient();
 
@@ -121,10 +127,40 @@ export const CSProspectsPage: React.FC = () => {
     refetch: refetchProspects,
     error: prospectsError
   } = useProspectsQuery({
-    source: 'customer_service',
+    source: sourceFilter !== 'all' ? sourceFilter : undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
     q: searchText || undefined,
+    pageSize: 100,
   });
+
+  // Query all prospects so user can choose from all prospects with a search filter
+  const { data: allProspectsData, isLoading: allProspectsLoading } = useProspectsQuery({ pageSize: 100 });
+  const allProspectsList = useMemo(() => {
+    const list = allProspectsData?.items ?? [];
+    const map = new Map<string, Prospect>();
+    list.forEach((p) => map.set(p.id, p));
+    (prospectsData?.items ?? []).forEach((p) => map.set(p.id, p));
+    return Array.from(map.values());
+  }, [allProspectsData, prospectsData]);
+
+  const handleOpenBookAppointment = (target?: Prospect | null) => {
+    if (target) {
+      setAppointmentTargetProspect(target);
+      appointmentForm.setFieldsValue({
+        prospectId: target.id,
+        scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+        reason: 'Site inspection and payment plan discussion',
+      });
+    } else {
+      setAppointmentTargetProspect(null);
+      appointmentForm.resetFields();
+      appointmentForm.setFieldsValue({
+        scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+        reason: 'Site inspection and payment plan discussion',
+      });
+    }
+    setBookAppointmentModal(true);
+  };
 
   const {
     data: selectedProspectInteractions,
@@ -268,9 +304,8 @@ export const CSProspectsPage: React.FC = () => {
       setIsModalOpen(false);
       form.resetFields();
       
-      setTimeout(() => {
-        refetchProspects();
-      }, 500);
+      queryClient.invalidateQueries({ queryKey: prospectKeys.all });
+      refetchProspects();
     } catch (error: any) {
       message.error(error?.message || 'Failed to add prospect');
     }
@@ -429,33 +464,7 @@ export const CSProspectsPage: React.FC = () => {
     }, 1000);
   };
 
-  // ── Loading state ─────────────────────────────────────────────────────────
-  if (prospectsLoading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
-        <Spin size="large" tip="Loading prospects..." />
-      </div>
-    );
-  }
 
-  // ── Error state ───────────────────────────────────────────────────────────
-  if (prospectsError) {
-    return (
-      <div style={{ padding: 24 }}>
-        <Alert
-          message="Error Loading Prospects"
-          description="There was an error loading the prospects. Please try again."
-          type="error"
-          showIcon
-          action={
-            <Button size="small" type="primary" onClick={() => refetchProspects()}>
-              Retry
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
 
   // ── Table Columns ─────────────────────────────────────────────────────────
   const columns = [
@@ -560,10 +569,16 @@ export const CSProspectsPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 200,
+      width: 220,
       fixed: 'right' as const,
       render: (_: any, record: Prospect) => (
         <Space>
+          <Tooltip title="Book Appointment">
+            <Button 
+              icon={<CalendarOutlined style={{ color: '#001529' }} />} 
+              onClick={() => handleOpenBookAppointment(record)}
+            />
+          </Tooltip>
           <Tooltip title="View Details">
             <Button 
               type="primary"
@@ -886,9 +901,10 @@ export const CSProspectsPage: React.FC = () => {
                 <Button
                   type="primary"
                   size="small"
-                  icon={<PlusOutlined />}
-                  onClick={() => setBookAppointmentModal(true)}
-                  style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                  icon={<CalendarOutlined />}
+                  onClick={() => handleOpenBookAppointment(selectedProspect)}
+                  style={{ background: '#001529', borderColor: '#001529', color: '#fff' }}
+                  className="btn-blue-black"
                 >
                   Book Appointment
                 </Button>
@@ -950,8 +966,8 @@ export const CSProspectsPage: React.FC = () => {
                       type="primary"
                       ghost
                       size="small"
-                      icon={<PlusOutlined />}
-                      onClick={() => setBookAppointmentModal(true)}
+                      icon={<CalendarOutlined />}
+                      onClick={() => handleOpenBookAppointment(selectedProspect)}
                     >
                       Schedule Follow-up Meeting
                     </Button>
@@ -992,9 +1008,28 @@ export const CSProspectsPage: React.FC = () => {
 
   return (
     <div style={{ maxWidth: '100%', padding: '0 4px' }}>
+      <style>{`
+        .btn-blue-black {
+          background-color: #001529 !important;
+          border-color: #001529 !important;
+          color: #ffffff !important;
+        }
+        .btn-blue-black:hover, .btn-blue-black:focus {
+          background-color: #0c2742 !important;
+          border-color: #0c2742 !important;
+          color: #ffffff !important;
+        }
+      `}</style>
       <PageHeader
         title="Customer Service Prospects"
         actions={[
+          {
+            label: 'Book Appointment',
+            onClick: () => handleOpenBookAppointment(),
+            icon: <CalendarOutlined />,
+            style: { background: '#001529', borderColor: '#001529', color: '#fff' },
+            className: 'btn-blue-black',
+          },
           {
             label: 'Client Check-Ins',
             onClick: () => navigate('/cs/check-ins'),
@@ -1004,6 +1039,12 @@ export const CSProspectsPage: React.FC = () => {
             label: 'Add Prospect',
             onClick: () => setIsModalOpen(true),
             icon: <PlusOutlined />,
+          },
+          {
+            label: 'Add Customer',
+            onClick: () => setAddCustomerModal(true),
+            icon: <PlusOutlined />,
+            style: { background: '#52c41a', borderColor: '#52c41a', color: '#fff' },
           },
           {
             label: 'Export',
@@ -1087,8 +1128,8 @@ export const CSProspectsPage: React.FC = () => {
 
       {/* Tabs and Filters */}
       <Card style={{ marginBottom: 16 }}>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={8}>
+        <Row gutter={[16, 16]} align="middle">
+          <Col xs={24} md={7}>
             <Input
               placeholder="Search by name, phone, or address"
               prefix={<SearchOutlined />}
@@ -1098,7 +1139,7 @@ export const CSProspectsPage: React.FC = () => {
               size="middle"
             />
           </Col>
-          <Col xs={12} md={6}>
+          <Col xs={12} md={5}>
             <Select
               style={{ width: '100%' }}
               placeholder="Filter by status"
@@ -1117,7 +1158,19 @@ export const CSProspectsPage: React.FC = () => {
               <Option value="purchased">Purchased</Option>
             </Select>
           </Col>
-          <Col xs={12} md={6}>
+          <Col xs={12} md={4}>
+            <Select
+              style={{ width: '100%' }}
+              value={sourceFilter}
+              onChange={setSourceFilter}
+              size="middle"
+            >
+              <Option value="all">All Sources</Option>
+              <Option value="customer_service">Customer Service</Option>
+              <Option value="marketing">Marketing</Option>
+            </Select>
+          </Col>
+          <Col xs={12} md={4}>
             <Select
               style={{ width: '100%' }}
               value={activeTab}
@@ -1149,7 +1202,8 @@ export const CSProspectsPage: React.FC = () => {
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
-            showTotal: (total) => `Total ${total} prospects`,
+            pageSizeOptions: ['10', '20', '50', '100', '250', '500'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} prospects`,
             responsive: true,
           }}
         />
@@ -1515,44 +1569,113 @@ export const CSProspectsPage: React.FC = () => {
       <Modal
         title={
           <Space>
-            <CalendarOutlined style={{ color: '#1890ff' }} />
-            <span>Book Appointment for {selectedProspect?.firstName} {selectedProspect?.lastName}</span>
+            <CalendarOutlined style={{ color: '#001529' }} />
+            <Text strong>
+              {appointmentTargetProspect 
+                ? `Book Appointment: ${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}`
+                : 'Book Prospect Appointment'}
+            </Text>
           </Space>
         }
         open={bookAppointmentModal}
         onCancel={() => {
           setBookAppointmentModal(false);
+          setAppointmentTargetProspect(null);
           appointmentForm.resetFields();
         }}
         footer={null}
-        width={500}
-        style={{ top: 24 }}
+        width={560}
+        style={{ top: 24, maxWidth: '95%' }}
         destroyOnClose
       >
         <Form
           form={appointmentForm}
           layout="vertical"
           onFinish={async (values) => {
-            if (!selectedProspect) return;
+            if (!values.prospectId) {
+              message.error('Please select a prospect for this appointment');
+              return;
+            }
             try {
               await createAppointment.mutateAsync({
-                prospectId: selectedProspect.id,
+                prospectId: values.prospectId,
                 scheduledFor: values.scheduledFor.toISOString(),
                 reason: values.reason?.trim() || 'Prospect consultation / site visit',
               });
               queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
               window.dispatchEvent(new Event('omark-appointments-changed'));
-              message.success(`Appointment booked for ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`);
+              const target = allProspectsList.find((p) => p.id === values.prospectId) || appointmentTargetProspect;
+              message.success(`Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`);
               setBookAppointmentModal(false);
+              setAppointmentTargetProspect(null);
               appointmentForm.resetFields();
+              refetchAppointments();
             } catch (err: any) {
               message.error(err?.message || 'Failed to book appointment');
             }
           }}
           initialValues={{
+            scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
             reason: 'Site inspection and payment plan discussion',
           }}
         >
+          <Form.Item
+            name="prospectId"
+            label={<span><UserOutlined style={{ marginRight: 6 }} />Select Prospect</span>}
+            rules={[{ required: true, message: 'Please search and select a prospect' }]}
+            extra={<Text type="secondary" style={{ fontSize: 11 }}>Choose from all prospects or type to search by name, phone, or address</Text>}
+          >
+            <Select
+              showSearch
+              placeholder="Type name, phone, or location to filter all prospects..."
+              optionFilterProp="label"
+              filterOption={(input, option) => {
+                const text = String(option?.label ?? '').toLowerCase();
+                return text.includes(input.toLowerCase().trim());
+              }}
+              onChange={(val) => {
+                const p = allProspectsList.find((item) => item.id === val);
+                setAppointmentTargetProspect(p || null);
+              }}
+              options={allProspectsList.map((p) => ({
+                value: p.id,
+                label: `${p.firstName} ${p.lastName} · 📞 ${p.phoneNumber || 'No phone'}${p.address ? ` · 📍 ${p.address}` : ''} [${prospectStatusLabels[p.status] || p.status}]`,
+              }))}
+              allowClear
+              loading={allProspectsLoading}
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+
+          {appointmentTargetProspect && (
+            <Card
+              size="small"
+              style={{
+                marginBottom: 16,
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <Avatar size={42} icon={<UserOutlined />} style={{ background: tokens.primary }} />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap' }}>
+                    <Text strong style={{ fontSize: 14 }}>
+                      {appointmentTargetProspect.firstName} {appointmentTargetProspect.lastName}
+                    </Text>
+                    <StatusTag status={appointmentTargetProspect.status} type="prospect" />
+                  </div>
+                  <Space size={16} style={{ marginTop: 2, fontSize: 12, color: '#64748b', flexWrap: 'wrap' }}>
+                    <span><PhoneOutlined /> {appointmentTargetProspect.phoneNumber || '—'}</span>
+                    {appointmentTargetProspect.address && <span><HomeOutlined /> {appointmentTargetProspect.address}</span>}
+                    <span>Source: {prospectSourceLabels[appointmentTargetProspect.source] || appointmentTargetProspect.source}</span>
+                  </Space>
+                </div>
+              </div>
+            </Card>
+          )}
+
           <Form.Item
             name="scheduledFor"
             label="Appointment Date & Time"
@@ -1574,10 +1697,23 @@ export const CSProspectsPage: React.FC = () => {
             <Input placeholder="e.g. Site visit to Prampram, office meeting for deed signing" />
           </Form.Item>
 
-          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right', marginTop: 16 }}>
             <Space>
-              <Button onClick={() => setBookAppointmentModal(false)}>Cancel</Button>
-              <Button type="primary" htmlType="submit" loading={createAppointment.isPending} icon={<CheckCircleOutlined />}>
+              <Button onClick={() => {
+                setBookAppointmentModal(false);
+                setAppointmentTargetProspect(null);
+                appointmentForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={createAppointment.isPending}
+                icon={<CheckCircleOutlined />}
+                style={{ background: '#001529', borderColor: '#001529', color: '#fff' }}
+                className="btn-blue-black"
+              >
                 Confirm Appointment
               </Button>
             </Space>
@@ -1601,6 +1737,16 @@ export const CSProspectsPage: React.FC = () => {
         onLogged={() => {
           refetchInteractions();
           refetchAppointments();
+        }}
+      />
+
+      <AddCustomerModal
+        open={addCustomerModal}
+        onClose={() => setAddCustomerModal(false)}
+        onSuccess={() => {
+          refetchProspects();
+          queryClient.invalidateQueries({ queryKey: prospectKeys.all });
+          queryClient.invalidateQueries({ queryKey: customerKeys.all });
         }}
       />
     </div>

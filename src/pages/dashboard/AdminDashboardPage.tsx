@@ -12,6 +12,7 @@ import {
   BarChartOutlined,
   TrophyOutlined,
   SettingOutlined,
+  UserAddOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdminDashboard } from './admin/hooks/useAdminDashboard';
@@ -26,6 +27,8 @@ import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { CrossSystemActivity } from './admin/components/CrossSystemActivity';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
+import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 
 const { Title, Text } = Typography;
 
@@ -114,6 +117,8 @@ export const AdminDashboardPage: React.FC = () => {
   const [selectedUser, setSelectedUser] = useState<any>(null);
   const [exportModal, setExportModal] = useState(false);
   const [bonusRulesModal, setBonusRulesModal] = useState(false);
+  const [addProspectModal, setAddProspectModal] = useState(false);
+  const [addCustomerModal, setAddCustomerModal] = useState(false);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleExport = (format: 'excel' | 'csv' | 'pdf' | 'json') => {
@@ -315,6 +320,22 @@ export const AdminDashboardPage: React.FC = () => {
             </Tooltip>
 
             <Button
+              icon={<UserAddOutlined />}
+              onClick={() => setAddProspectModal(true)}
+              style={{ borderRadius: 8 }}
+            >
+              Add Prospect
+            </Button>
+
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() => setAddCustomerModal(true)}
+              style={{ borderRadius: 8, background: '#52c41a', borderColor: '#52c41a', color: '#fff' }}
+            >
+              Add Customer
+            </Button>
+
+            <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => setAddUserModal(true)}
@@ -337,6 +358,8 @@ export const AdminDashboardPage: React.FC = () => {
           onAddUser={() => setAddUserModal(true)}
           onManageUsers={() => setActiveTab('2')}
           onExport={() => setExportModal(true)}
+          onAddProspect={() => setAddProspectModal(true)}
+          onAddCustomer={() => setAddCustomerModal(true)}
         />
       </div>
 
@@ -380,6 +403,22 @@ export const AdminDashboardPage: React.FC = () => {
       <BonusRulesModal
         open={bonusRulesModal}
         onClose={() => setBonusRulesModal(false)}
+      />
+
+      <AddProspectModal
+        open={addProspectModal}
+        onClose={() => setAddProspectModal(false)}
+        onSuccess={() => {
+          refreshDashboard();
+        }}
+      />
+
+      <AddCustomerModal
+        open={addCustomerModal}
+        onClose={() => setAddCustomerModal(false)}
+        onSuccess={() => {
+          refreshDashboard();
+        }}
       />
     </div>
   );

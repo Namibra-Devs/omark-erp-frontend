@@ -14,6 +14,7 @@ import {
   PhoneOutlined,
   MailOutlined,
   UserOutlined,
+  UserAddOutlined,
   IdcardOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
@@ -28,6 +29,7 @@ import { roleLabels, progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
+import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
@@ -70,6 +72,7 @@ export const SecretaryDashboardPage: React.FC = () => {
   const updateCustomer = useUpdateCustomerMutation();
 
   // ── UI State ──────────────────────────────────────────────────────────────
+  const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
   const [addPaymentModal, setAddPaymentModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
@@ -357,17 +360,24 @@ export const SecretaryDashboardPage: React.FC = () => {
         </div>
         <Space wrap>
           <Button 
-            icon={<IdcardOutlined />} 
-            onClick={() => navigate('/cs/check-ins')}
+            icon={<UserAddOutlined />} 
+            onClick={() => setAddProspectModal(true)}
           >
-            Client Check-Ins
+            Add Prospect
           </Button>
           <Button 
             icon={<PlusOutlined />} 
             type="primary"
             onClick={() => setAddCustomerModal(true)}
+            style={{ background: '#52c41a', borderColor: '#52c41a' }}
           >
             Add Customer
+          </Button>
+          <Button 
+            icon={<IdcardOutlined />} 
+            onClick={() => navigate('/cs/check-ins')}
+          >
+            Client Check-Ins
           </Button>
           <Button 
             icon={<ReloadOutlined />} 
@@ -765,6 +775,14 @@ export const SecretaryDashboardPage: React.FC = () => {
           </Form.Item>
         </Form>
       </Modal>
+
+      <AddProspectModal
+        open={addProspectModal}
+        onClose={() => setAddProspectModal(false)}
+        onSuccess={() => {
+          handleRefresh();
+        }}
+      />
     </div>
   );
 };

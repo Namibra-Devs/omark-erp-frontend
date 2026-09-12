@@ -153,6 +153,7 @@ export const NotificationsPage: React.FC = () => {
   const filteredSystemNotifications = systemNotifications.filter((n) => {
     const matchesCategory =
       sysCategory === 'all' ||
+      (sysCategory === 'defaulter' && n.category === 'defaulter') ||
       (sysCategory === 'attendance' && n.category === 'attendance') ||
       (sysCategory === 'payroll' && n.category === 'payroll') ||
       (sysCategory === 'payment' && (n.category === 'payment' || n.category === 'deed')) ||
@@ -193,6 +194,7 @@ export const NotificationsPage: React.FC = () => {
   const sysStats = {
     total: systemNotifications.length,
     unread: systemNotifications.filter((n) => !n.read).length,
+    defaulters: systemNotifications.filter((n) => n.category === 'defaulter').length,
     attendance: systemNotifications.filter((n) => n.category === 'attendance').length,
     payroll: systemNotifications.filter((n) => n.category === 'payroll').length,
     payments: systemNotifications.filter((n) => n.category === 'payment' || n.category === 'deed').length,
@@ -328,14 +330,14 @@ export const NotificationsPage: React.FC = () => {
       render: (type: NotificationType) => {
         const config: Record<NotificationType, { color: string; icon: any; label: string }> = {
           contribution_due_soon: { color: 'blue', icon: <BellOutlined />, label: 'Due Soon' },
-          contribution_overdue: { color: 'red', icon: <WarningOutlined />, label: 'Overdue' },
+          contribution_overdue: { color: 'red', icon: <WarningOutlined />, label: 'Defaulter Notice (Overdue)' },
         };
         const configs = config[type];
         return <Tag color={configs.color} icon={configs.icon}>{configs.label}</Tag>;
       },
       filters: [
         { text: 'Due Soon', value: 'contribution_due_soon' },
-        { text: 'Overdue', value: 'contribution_overdue' },
+        { text: 'Overdue (Defaulters)', value: 'contribution_overdue' },
       ],
       onFilter: (value: any, record: NotificationLog) => record.type === value,
     },
@@ -432,33 +434,7 @@ export const NotificationsPage: React.FC = () => {
     },
   ];
 
-  // ── Loading state ─────────────────────────────────────────────────────────
-  if (notificationsLoading || customersLoading) {
-    return (
-      <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '80vh' }}>
-        <Spin size="large" tip="Loading notifications..." />
-      </div>
-    );
-  }
 
-  // ── Error state ───────────────────────────────────────────────────────────
-  if (notificationsError) {
-    return (
-      <div style={{ padding: 24 }}>
-        <Alert
-          message="Error Loading Notifications"
-          description="There was an error loading the notifications. Please try again."
-          type="error"
-          showIcon
-          action={
-            <Button size="small" type="primary" onClick={() => refetchNotifications()}>
-              Retry
-            </Button>
-          }
-        />
-      </div>
-    );
-  }
 
   // ── Render Drawer Content ─────────────────────────────────────────────────
   const renderDrawerContent = () => {
@@ -630,13 +606,15 @@ export const NotificationsPage: React.FC = () => {
                   ? 'cyan'
                   : r.category === 'payroll'
                   ? 'green'
+                  : r.category === 'defaulter'
+                  ? 'red'
                   : r.category === 'payment' || r.category === 'deed'
                   ? 'purple'
                   : 'orange'
               }
               style={{ borderRadius: 6, fontWeight: 600, textTransform: 'uppercase', fontSize: 10 }}
             >
-              {r.category}
+              {r.category === 'defaulter' ? '⚠️ DEFAULTER' : r.category}
             </Tag>
             <Tag
               color={r.type === 'error' ? 'error' : r.type === 'warning' ? 'warning' : r.type === 'success' ? 'success' : 'processing'}
@@ -813,7 +791,7 @@ export const NotificationsPage: React.FC = () => {
 
           {/* Stats Cards for System Notifications */}
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-            <Col xs={24} sm={12} md={4}>
+            <Col xs={12} sm={8} md={3}>
               <Card size="small">
                 <Statistic
                   title="Total Events"
@@ -823,7 +801,7 @@ export const NotificationsPage: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col xs={24} sm={12} md={4}>
+            <Col xs={12} sm={8} md={3}>
               <Card size="small">
                 <Statistic
                   title="Unread Alerts"
@@ -833,17 +811,27 @@ export const NotificationsPage: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col xs={24} sm={12} md={4}>
+            <Col xs={12} sm={8} md={4}>
+              <Card size="small" style={{ borderColor: '#ff4d4f33', background: '#fff1f033' }}>
+                <Statistic
+                  title="Defaulters (Overdue)"
+                  value={sysStats.defaulters}
+                  prefix={<WarningOutlined />}
+                  valueStyle={{ color: '#cf1322', fontWeight: 600 }}
+                />
+              </Card>
+            </Col>
+            <Col xs={12} sm={8} md={3}>
               <Card size="small">
                 <Statistic
-                  title="Attendance & Shifts"
+                  title="Attendance"
                   value={sysStats.attendance}
                   prefix={<ClockCircleOutlined />}
                   valueStyle={{ color: '#0284c7' }}
                 />
               </Card>
             </Col>
-            <Col xs={24} sm={12} md={4}>
+            <Col xs={12} sm={8} md={4}>
               <Card size="small">
                 <Statistic
                   title="Payroll & Bonuses"
@@ -853,7 +841,7 @@ export const NotificationsPage: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col xs={24} sm={12} md={4}>
+            <Col xs={12} sm={8} md={4}>
               <Card size="small">
                 <Statistic
                   title="Sales & Deeds"
@@ -863,10 +851,10 @@ export const NotificationsPage: React.FC = () => {
                 />
               </Card>
             </Col>
-            <Col xs={24} sm={12} md={4}>
+            <Col xs={12} sm={8} md={3}>
               <Card size="small">
                 <Statistic
-                  title="Security Sentinel"
+                  title="Security"
                   value={sysStats.security}
                   prefix={<SafetyCertificateOutlined />}
                   valueStyle={{ color: '#faad14' }}
@@ -892,6 +880,9 @@ export const NotificationsPage: React.FC = () => {
                 <Space wrap>
                   <Tag.CheckableTag checked={sysCategory === 'all'} onChange={() => setSysCategory('all')}>
                     All ({systemNotifications.length})
+                  </Tag.CheckableTag>
+                  <Tag.CheckableTag checked={sysCategory === 'defaulter'} onChange={() => setSysCategory('defaulter')}>
+                    🚨 Defaulters ({sysStats.defaulters})
                   </Tag.CheckableTag>
                   <Tag.CheckableTag checked={sysCategory === 'attendance'} onChange={() => setSysCategory('attendance')}>
                     🕒 Attendance ({sysStats.attendance})
@@ -948,6 +939,21 @@ export const NotificationsPage: React.FC = () => {
               },
             ]}
           />
+
+          {notificationsError && (
+            <Alert
+              message="Remote SMS Gateway Notice"
+              description="Unable to sync live SMS provider logs at this moment. You can still send test SMS messages or monitor system activities."
+              type="warning"
+              showIcon
+              style={{ marginBottom: 16 }}
+              action={
+                <Button size="small" onClick={() => refetchNotifications()}>
+                  Retry
+                </Button>
+              }
+            />
+          )}
 
           {/* Stats Cards */}
           <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>

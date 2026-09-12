@@ -12,6 +12,7 @@ import {
   ReloadOutlined,
   PhoneOutlined,
   UserOutlined,
+  UserAddOutlined,
   RiseOutlined,
   ExperimentOutlined,
   BankOutlined,
@@ -28,6 +29,8 @@ import { usePayrollQuery } from '@/api/payroll';
 import { progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
+import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { useUnmatchedBankEntriesQuery, useImportBankStatementMutation, type BankReconciliationSummary } from '@/api/bankReconciliation';
@@ -67,6 +70,8 @@ export const AccountsDashboardPage: React.FC = () => {
   const importBankMutation = useImportBankStatementMutation();
 
   // ── UI State ─────────────────────────────────────────────────────────────
+  const [addProspectModal, setAddProspectModal] = useState(false);
+  const [addCustomerModal, setAddCustomerModal] = useState(false);
   const [addPaymentModal, setAddPaymentModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [paymentForm] = Form.useForm();
@@ -289,8 +294,21 @@ export const AccountsDashboardPage: React.FC = () => {
         </div>
         <Space wrap>
           <Button 
-            icon={<DollarOutlined />}
+            icon={<UserAddOutlined />}
+            onClick={() => setAddProspectModal(true)}
+          >
+            Add Prospect
+          </Button>
+          <Button 
+            icon={<PlusOutlined />}
             type="primary"
+            onClick={() => setAddCustomerModal(true)}
+            style={{ background: '#52c41a', borderColor: '#52c41a' }}
+          >
+            Add Customer
+          </Button>
+          <Button 
+            icon={<DollarOutlined />}
             onClick={() => navigate('/accounts/expenses')}
           >
             Expenses Hub
@@ -692,6 +710,23 @@ export const AccountsDashboardPage: React.FC = () => {
           </Form>
         )}
       </Modal>
+
+      <AddProspectModal
+        open={addProspectModal}
+        onClose={() => setAddProspectModal(false)}
+        onSuccess={() => {
+          refetchDashboard();
+        }}
+      />
+
+      <AddCustomerModal
+        open={addCustomerModal}
+        onClose={() => setAddCustomerModal(false)}
+        onSuccess={() => {
+          refetchDashboard();
+          refetchPaymentPlans();
+        }}
+      />
     </div>
   );
 };

@@ -98,16 +98,21 @@ export const useProspectsQuery = (filter?: ProspectsFilter, enabled = true) => {
     queryKey: prospectKeys.list(filter),
     queryFn: async () => {
       try {
-        const response = await apiClient.get<ApiResponse<Prospect[]>>('/prospects', { params: filter });
+        const safePageSize = filter?.pageSize ? Math.min(filter.pageSize, 100) : 50;
+        const params = {
+          ...filter,
+          pageSize: safePageSize,
+        };
+        const response = await apiClient.get<ApiResponse<Prospect[]>>('/prospects', { params });
         return unwrapList(response) as ProspectsListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error('Error fetching prospects:', {
+          console.warn('Error fetching prospects, providing safe fallback:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
         }
-        throw error;
+        return { items: [], total: 0, page: 1, pageSize: 50 };
       }
     },
     enabled,

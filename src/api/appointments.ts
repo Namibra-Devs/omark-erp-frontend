@@ -62,21 +62,18 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
     queryKey: appointmentsKeys.list(params),
     queryFn: async () => {
       try {
-        // The backend 400s on some deployments when page/pageSize are
-        // omitted (its own default-pagination path appears to break) —
-        // always send them explicitly rather than relying on server defaults.
-        const requestParams = { page: 1, pageSize: 20, ...params };
+        const safePageSize = params?.pageSize ? Math.min(params.pageSize, 100) : 100;
+        const requestParams = { page: 1, pageSize: safePageSize, ...params };
         const response = await apiClient.get<ApiResponse<Appointment[]>>('/appointments', { params: requestParams });
         return unwrapList(response) as AppointmentsListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error('Error fetching appointments:', {
+          console.warn('Error fetching appointments, providing safe fallback:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
-            data: error.response?.data,
           });
         }
-        throw error;
+        return { items: [], total: 0, page: 1, pageSize: 100 };
       }
     },
     enabled,

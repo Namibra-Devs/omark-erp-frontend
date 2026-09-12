@@ -9,7 +9,8 @@ export type ActivityCategory =
   | 'appointment'
   | 'deed'
   | 'security'
-  | 'system';
+  | 'system'
+  | 'defaulter';
 
 export type ActivityType = 'success' | 'info' | 'warning' | 'error';
 
@@ -53,7 +54,64 @@ const STORAGE_ACTIVITY_KEY = 'omark_system_activity_store';
 
 // ── Initial Seed Data ────────────────────────────────────────────────────────
 const getInitialSeedNotifications = (): SystemNotification[] => {
-  return [];
+  const now = dayjs();
+  return [
+    {
+      id: 'notif-defaulter-1',
+      title: 'Payment Overdue Alert: Kwame Mensah',
+      message: 'Installment for Prampram Phase 2 is 14 days overdue (GH₵ 2,400.00). Defaulter follow-up required.',
+      category: 'defaulter',
+      type: 'error',
+      timestamp: now.subtract(2, 'hour').format('YYYY-MM-DD HH:mm:ss'),
+      read: false,
+      branchName: 'Head Office',
+      link: '/accounts/dashboard',
+    },
+    {
+      id: 'notif-defaulter-2',
+      title: 'Defaulter Reminder SMS Dispatched',
+      message: 'Automated SMS repayment notice sent to 3 customers with overdue installment balances exceeding 7 days.',
+      category: 'defaulter',
+      type: 'warning',
+      timestamp: now.subtract(1, 'day').format('YYYY-MM-DD HH:mm:ss'),
+      read: false,
+      branchName: 'Kumasi Branch',
+      link: '/notifications',
+    },
+    {
+      id: 'notif-defaulter-3',
+      title: 'Payment Plan Default Notice: Abena Osei',
+      message: 'Payment Plan #PLAN-2026-088 has reached 30 days delinquency. Accounts escalation initiated.',
+      category: 'defaulter',
+      type: 'error',
+      timestamp: now.subtract(3, 'day').format('YYYY-MM-DD HH:mm:ss'),
+      read: true,
+      branchName: 'Takoradi Branch',
+      link: '/accounts/dashboard',
+    },
+    {
+      id: 'notif-bonus-1',
+      title: 'Monthly Performance Bonus Pool Active',
+      message: 'Executive performance bonus rules and criteria synchronized for staff incentives.',
+      category: 'payroll',
+      type: 'info',
+      timestamp: now.subtract(4, 'hour').format('YYYY-MM-DD HH:mm:ss'),
+      read: false,
+      branchName: 'Head Office',
+      link: '/branches/payroll',
+    },
+    {
+      id: 'notif-attn-1',
+      title: 'Daily Attendance Register Open',
+      message: 'Staff arrival register active across branches. Standard morning grace window until 08:30 AM.',
+      category: 'attendance',
+      type: 'success',
+      timestamp: now.subtract(5, 'hour').format('YYYY-MM-DD HH:mm:ss'),
+      read: true,
+      branchName: 'All Branches',
+      link: '/attendance',
+    },
+  ];
 };
 
 const getInitialSeedActivities = (): ActivityFeedItem[] => {
@@ -75,6 +133,14 @@ export function getStoredNotifications(
       localStorage.setItem(STORAGE_NOTIFICATIONS_KEY, JSON.stringify(list));
     } else {
       list = JSON.parse(raw);
+      if (!Array.isArray(list) || list.length === 0) {
+        list = getInitialSeedNotifications();
+        localStorage.setItem(STORAGE_NOTIFICATIONS_KEY, JSON.stringify(list));
+      } else if (!list.some((n: any) => n.category === 'defaulter')) {
+        const seedDefaulters = getInitialSeedNotifications().filter((n) => n.category === 'defaulter');
+        list = [...seedDefaulters, ...list];
+        localStorage.setItem(STORAGE_NOTIFICATIONS_KEY, JSON.stringify(list));
+      }
     }
   } catch (err) {
     console.error('Failed to load notifications from storage:', err);

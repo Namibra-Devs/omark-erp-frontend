@@ -14,6 +14,8 @@ interface PageHeaderProps {
     icon?: React.ReactNode;
     disabled?: boolean;
     danger?: boolean;
+    style?: React.CSSProperties;
+    className?: string;
   }>;
 }
 
@@ -33,6 +35,8 @@ export const PageHeader: React.FC<PageHeaderProps> = ({ title, actions }) => {
               icon={action.icon}
               disabled={action.disabled}
               danger={action.danger}
+              style={action.style}
+              className={action.className}
             >
               {action.label}
             </Button>
