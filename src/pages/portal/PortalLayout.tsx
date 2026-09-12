@@ -4,11 +4,12 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Avatar, Badge, Button, Layout, Menu, Typography } from 'antd';
 import {
   DashboardOutlined, HomeOutlined, DollarOutlined, MessageOutlined,
-  LogoutOutlined, UserOutlined,
+  LogoutOutlined, UserOutlined, FileTextOutlined,
 } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
 import { useCustomerPortalAuth } from '@/contexts/CustomerPortalAuthContext';
 import { useComplaintsQuery } from '@/api/complaints';
+import { useCustomerDocumentsQuery } from '@/api/customerDocuments';
 import { useUnseenCount } from '@/utils/seenTracker';
 
 const { Header, Content } = Layout;
@@ -27,10 +28,38 @@ export const PortalLayout: React.FC = () => {
     myComplaints.map((c) => c.updatedAt)
   );
 
+  const { data: documentsData } = useCustomerDocumentsQuery({
+    customerId: customer?.id,
+    visibleToCustomerOnly: true,
+  });
+  const myDocuments = documentsData?.items ?? [];
+  const { count: newDocumentsCount } = useUnseenCount(
+    'documents-customer',
+    customer?.id,
+    myDocuments.map((d) => d.uploadedAt)
+  );
+
   const NAV_ITEMS = [
     { key: '/portal', icon: <DashboardOutlined />, label: 'Dashboard' },
     { key: '/portal/property', icon: <HomeOutlined />, label: 'My Property' },
     { key: '/portal/payments', icon: <DollarOutlined />, label: 'Payments' },
+    {
+      key: '/portal/documents',
+      icon: <FileTextOutlined />,
+      label: (
+        <span>
+          My Documents
+          {newDocumentsCount > 0 && (
+            <Badge
+              count={newDocumentsCount}
+              size="small"
+              title={`${newDocumentsCount} new document(s) uploaded for you`}
+              style={{ marginLeft: 6, backgroundColor: '#1890ff' }}
+            />
+          )}
+        </span>
+      ),
+    },
     {
       key: '/portal/complaints',
       icon: <MessageOutlined />,
@@ -130,7 +159,11 @@ export const PortalLayout: React.FC = () => {
                 {item.icon}
               </div>
               <span style={{ fontSize: 11, marginTop: 2, fontWeight: isActive ? 600 : 400 }}>
-                {item.key === '/portal/complaints' ? 'Complaints' : item.label}
+                {item.key === '/portal/complaints'
+                  ? 'Complaints'
+                  : item.key === '/portal/documents'
+                  ? 'Documents'
+                  : item.label}
               </span>
             </button>
           );

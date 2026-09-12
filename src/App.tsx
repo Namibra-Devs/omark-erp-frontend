@@ -82,6 +82,7 @@ const PortalLayout = React.lazy(() => import('@/pages/portal/PortalLayout').then
 const PortalDashboardPage = React.lazy(() => import('@/pages/portal/PortalDashboardPage').then(m => ({ default: m.PortalDashboardPage })));
 const PortalPropertyPage = React.lazy(() => import('@/pages/portal/PortalPropertyPage').then(m => ({ default: m.PortalPropertyPage })));
 const PortalPaymentsPage = React.lazy(() => import('@/pages/portal/PortalPaymentsPage').then(m => ({ default: m.PortalPaymentsPage })));
+const PortalDocumentsPage = React.lazy(() => import('@/pages/portal/PortalDocumentsPage').then(m => ({ default: m.PortalDocumentsPage })));
 const PortalComplaintsPage = React.lazy(() => import('@/pages/portal/PortalComplaintsPage').then(m => ({ default: m.PortalComplaintsPage })));
 
 const RouteLoadingFallback = () => (
@@ -162,6 +163,7 @@ const AppRoutes: React.FC = () => {
         <Route path="/portal" element={<PortalDashboardPage />} />
         <Route path="/portal/property" element={<PortalPropertyPage />} />
         <Route path="/portal/payments" element={<PortalPaymentsPage />} />
+        <Route path="/portal/documents" element={<PortalDocumentsPage />} />
         <Route path="/portal/complaints" element={<PortalComplaintsPage />} />
       </Route>
 

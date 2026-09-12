@@ -5,7 +5,8 @@ import {
   Card, Row, Col, Typography, Tag, Button, Space, Tabs, Table,
   Descriptions, Avatar, Badge, Progress, Timeline, Modal, Form,
   Input, Select, DatePicker, message, Divider, Empty, Spin,
-  Statistic, List, Tooltip, Popconfirm, InputNumber, Alert
+  Statistic, List, Tooltip, Popconfirm, InputNumber, Alert,
+  Upload, Switch
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -29,7 +30,16 @@ import {
   EnvironmentOutlined,
   IdcardOutlined,
   ReloadOutlined,
-  CreditCardOutlined
+  CreditCardOutlined,
+  UploadOutlined,
+  InboxOutlined,
+  FilePdfOutlined,
+  FileImageOutlined,
+  FileWordOutlined,
+  EyeOutlined,
+  GlobalOutlined,
+  LockOutlined,
+  SearchOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
@@ -49,6 +59,17 @@ import {
   getPaymentMethodConfig,
 } from '@/api/payments';
 import { useDeedsQuery, useGenerateDeedMutation } from '@/api/deeds';
+import {
+  useCustomerDocumentsQuery,
+  useUploadCustomerDocumentMutation,
+  useUpdateCustomerDocumentMutation,
+  useDeleteCustomerDocumentMutation,
+  documentCategoryMeta,
+  formatBytes,
+  downloadFile,
+  CustomerDocument,
+  CustomerDocumentCategory,
+} from '@/api/customerDocuments';
 import { printDeedWithPhoto } from '@/components/shared/printDeedWithPhoto';
 import { cacheCustomerDetail } from '@/utils/customerPortalCache';
 import dayjs from 'dayjs';
@@ -69,7 +90,7 @@ export const CustomerDetailPage: React.FC = () => {
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
 
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'overview');
   const [recordPaymentModal, setRecordPaymentModal] = useState(false);
   const [paystackModal, setPaystackModal] = useState(false);
   const [generateDeedModal, setGenerateDeedModal] = useState(false);
@@ -80,6 +101,27 @@ export const CustomerDetailPage: React.FC = () => {
     { name: '', contact: '' },
     { name: '', contact: '' },
   ]);
+
+  // ── Customer Documents State & Hooks ─────────────────────────────────────
+  const {
+    data: customerDocsData,
+    isLoading: customerDocsLoading,
+    refetch: refetchCustomerDocs,
+  } = useCustomerDocumentsQuery({ customerId: id });
+
+  const customerDocs: CustomerDocument[] = customerDocsData?.items ?? [];
+
+  const uploadDocMutation = useUploadCustomerDocumentMutation();
+  const updateDocMutation = useUpdateCustomerDocumentMutation();
+  const deleteDocMutation = useDeleteCustomerDocumentMutation();
+
+  const [uploadDocModalOpen, setUploadDocModalOpen] = useState(false);
+  const [uploadDocForm] = Form.useForm();
+  const [selectedDocFile, setSelectedDocFile] = useState<File | null>(null);
+  const [previewDoc, setPreviewDoc] = useState<CustomerDocument | null>(null);
+  const [docSearch, setDocSearch] = useState('');
+  const [docCategoryFilter, setDocCategoryFilter] = useState<string>('all');
+  const [docVisibilityFilter, setDocVisibilityFilter] = useState<'all' | 'visible' | 'hidden'>('all');
 
   const paystackVerifyAttempted = useRef(false);
   const { data: deedPolicy } = useDeedPolicyQuery();
@@ -491,8 +533,227 @@ export const CustomerDetailPage: React.FC = () => {
     },
   ];
 
+  // ── Customer Documents Handlers & Columns ─────────────────────────────────
+  const handleUploadDocument = async (values: any) => {
+    if (!selectedDocFile) {
+      message.error('Please select or drop a file to upload');
+      return;
+    }
+    const customerFullName = `${customer?.firstName || ''} ${customer?.lastName || ''}`.trim() || 'Customer';
+    try {
+      await uploadDocMutation.mutateAsync({
+        customerId: id || '',
+        customerName: customerFullName,
+        title: values.title,
+        category: values.category as CustomerDocumentCategory,
+        file: selectedDocFile,
+        description: values.description,
+        visibleToCustomer: values.visibleToCustomer !== false,
+        uploadedByStaffId: user?.id,
+        uploadedByStaffName: user?.name || user?.email || 'Staff Member',
+      });
+      message.success('Document uploaded successfully and synchronized with customer portal!');
+      setUploadDocModalOpen(false);
+      uploadDocForm.resetFields();
+      setSelectedDocFile(null);
+      refetchCustomerDocs();
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to upload document');
+    }
+  };
+
+  const handleToggleDocVisibility = async (doc: CustomerDocument, checked: boolean) => {
+    try {
+      await updateDocMutation.mutateAsync({
+        id: doc.id,
+        payload: {
+          visibleToCustomer: checked,
+        },
+      });
+      message.success(
+        checked
+          ? `"${doc.title}" is now visible to the customer in their portal`
+          : `"${doc.title}" is now hidden from the customer portal`
+      );
+      refetchCustomerDocs();
+    } catch (error: any) {
+      message.error('Failed to update document visibility');
+    }
+  };
+
+  const handleDeleteDoc = async (docId: string) => {
+    try {
+      await deleteDocMutation.mutateAsync(docId);
+      message.success('Document removed successfully');
+      refetchCustomerDocs();
+    } catch (error: any) {
+      message.error('Failed to delete document');
+    }
+  };
+
+  const getDocFileIcon = (fileType?: string, fileName?: string) => {
+    const type = (fileType || '').toLowerCase();
+    const name = (fileName || '').toLowerCase();
+    if (type.includes('pdf') || name.endsWith('.pdf')) {
+      return <FilePdfOutlined style={{ fontSize: 24, color: '#f5222d' }} />;
+    }
+    if (type.includes('image') || name.match(/\.(png|jpe?g|webp|gif|svg)$/)) {
+      return <FileImageOutlined style={{ fontSize: 24, color: '#52c41a' }} />;
+    }
+    if (type.includes('word') || name.match(/\.(doc|docx)$/)) {
+      return <FileWordOutlined style={{ fontSize: 24, color: '#1677ff' }} />;
+    }
+    return <FileOutlined style={{ fontSize: 24, color: '#fa8c16' }} />;
+  };
+
+  const documentColumns = [
+    {
+      title: 'Document',
+      key: 'document',
+      render: (_: any, record: CustomerDocument) => (
+        <Space align="start" size={12}>
+          <div style={{ marginTop: 2 }}>{getDocFileIcon(record.fileType, record.fileName)}</div>
+          <div>
+            <Text strong style={{ fontSize: 14 }}>{record.title}</Text>
+            <div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {record.fileName} · {formatBytes(record.fileSize)}
+              </Text>
+            </div>
+            {record.description && (
+              <Text type="secondary" style={{ fontSize: 12, display: 'block', maxWidth: 300 }}>
+                {record.description}
+              </Text>
+            )}
+          </div>
+        </Space>
+      ),
+    },
+    {
+      title: 'Category',
+      dataIndex: 'category',
+      key: 'category',
+      width: 175,
+      render: (category: CustomerDocumentCategory) => {
+        const meta = documentCategoryMeta[category] || documentCategoryMeta.other;
+        return (
+          <Tag color={meta.color} style={{ fontSize: 12, padding: '2px 8px' }}>
+            <span style={{ marginRight: 4 }}>{meta.iconEmoji}</span>
+            {meta.label}
+          </Tag>
+        );
+      },
+      filters: Object.entries(documentCategoryMeta).map(([cat, meta]) => ({
+        text: meta.label,
+        value: cat,
+      })),
+      onFilter: (value: any, record: CustomerDocument) => record.category === value,
+    },
+    {
+      title: 'Customer Portal Visibility',
+      key: 'visibleToCustomer',
+      width: 180,
+      render: (_: any, record: CustomerDocument) => (
+        <Space direction="vertical" size={2}>
+          <Switch
+            checked={record.visibleToCustomer}
+            loading={updateDocMutation.isPending}
+            onChange={(checked) => handleToggleDocVisibility(record, checked)}
+            checkedChildren={<Space size={4}><GlobalOutlined /> Visible</Space>}
+            unCheckedChildren={<Space size={4}><LockOutlined /> Hidden</Space>}
+          />
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {record.visibleToCustomer ? 'Available in Portal' : 'Restricted (Staff Only)'}
+          </Text>
+        </Space>
+      ),
+      filters: [
+        { text: 'Visible to Customer', value: true },
+        { text: 'Hidden (Staff Only)', value: false },
+      ],
+      onFilter: (value: any, record: CustomerDocument) => record.visibleToCustomer === value,
+    },
+    {
+      title: 'Uploaded',
+      key: 'uploaded',
+      width: 170,
+      render: (_: any, record: CustomerDocument) => (
+        <div>
+          <div>{dayjs(record.uploadedAt).format('MMM DD, YYYY')}</div>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            by {record.uploadedByStaffName || 'Staff'}
+          </Text>
+        </div>
+      ),
+      sorter: (a: CustomerDocument, b: CustomerDocument) =>
+        dayjs(a.uploadedAt).unix() - dayjs(b.uploadedAt).unix(),
+      defaultSortOrder: 'descend' as const,
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 130,
+      render: (_: any, record: CustomerDocument) => (
+        <Space size="small">
+          <Tooltip title="Preview">
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => setPreviewDoc(record)}
+            />
+          </Tooltip>
+          <Tooltip title="Download">
+            <Button
+              size="small"
+              icon={<DownloadOutlined />}
+              onClick={() => downloadFile(record)}
+            />
+          </Tooltip>
+          <Popconfirm
+            title="Delete Document"
+            description="Are you sure you want to delete this document? It will also be removed from the customer portal."
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            cancelText="Cancel"
+            onConfirm={() => handleDeleteDoc(record.id)}
+          >
+            <Tooltip title="Delete">
+              <Button
+                size="small"
+                danger
+                icon={<DeleteOutlined />}
+                loading={deleteDocMutation.isPending}
+              />
+            </Tooltip>
+          </Popconfirm>
+        </Space>
+      ),
+    },
+  ];
+
+  const filteredCustomerDocs = customerDocs.filter((doc) => {
+    if (docSearch) {
+      const q = docSearch.toLowerCase();
+      const match =
+        doc.title.toLowerCase().includes(q) ||
+        doc.fileName.toLowerCase().includes(q) ||
+        (doc.description && doc.description.toLowerCase().includes(q));
+      if (!match) return false;
+    }
+    if (docCategoryFilter !== 'all' && doc.category !== docCategoryFilter) {
+      return false;
+    }
+    if (docVisibilityFilter === 'visible' && !doc.visibleToCustomer) {
+      return false;
+    }
+    if (docVisibilityFilter === 'hidden' && doc.visibleToCustomer) {
+      return false;
+    }
+    return true;
+  });
+
   return (
-    <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
+    <div style={{ maxWidth: '100%', overflowX: 'hidden', padding: '0 8px' }}>
       <PageHeader
         title={`${customer.firstName} ${customer.lastName}`}
         actions={[
@@ -502,16 +763,17 @@ export const CustomerDetailPage: React.FC = () => {
             icon: <ArrowLeftOutlined />,
           },
           {
-            label: 'Record Payment',
-            onClick: () => setRecordPaymentModal(true),
-            icon: <PlusOutlined />,
-            disabled: isFullyPaid || !planId,
-          },
-          {
-            label: 'Pay Online (Paystack)',
-            onClick: () => setPaystackModal(true),
-            icon: <CreditCardOutlined />,
-            disabled: isFullyPaid || !planId,
+            label: 'Upload Document',
+            onClick: () => {
+              uploadDocForm.resetFields();
+              uploadDocForm.setFieldsValue({
+                visibleToCustomer: true,
+                category: 'sales_agreement',
+              });
+              setSelectedDocFile(null);
+              setUploadDocModalOpen(true);
+            },
+            icon: <UploadOutlined />,
           },
           {
             label: 'Generate Deed',
@@ -524,6 +786,7 @@ export const CustomerDetailPage: React.FC = () => {
               refetchCustomer();
               refetchPaymentPlan();
               refetchInstallments();
+              refetchCustomerDocs();
               message.success('Refreshed!');
             },
             icon: <ReloadOutlined />,
@@ -535,18 +798,22 @@ export const CustomerDetailPage: React.FC = () => {
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={16}>
           <Card>
-            <Row gutter={16}>
-              <Col xs={24} sm={8}>
-                <PhotoUpload entityType="customer" entityId={customer.id} size={64} />
-                <div style={{ marginTop: 8 }}>
-                  <Title level={4} style={{ margin: 0 }}>{customer.firstName} {customer.lastName}</Title>
-                  <Tag color={isFullyPaid ? 'green' : 'blue'}>
-                    {isFullyPaid ? 'Fully Paid' : 'Payment Plan'}
-                  </Tag>
+            <Row gutter={[16, 16]} align="middle">
+              <Col xs={24} sm={10} md={8}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <PhotoUpload entityType="customer" entityId={customer.id} size={64} />
+                  <div>
+                    <Title level={4} style={{ margin: 0, fontSize: 18, wordBreak: 'break-word' }}>
+                      {customer.firstName} {customer.lastName}
+                    </Title>
+                    <Tag color={isFullyPaid ? 'green' : 'blue'} style={{ marginTop: 4 }}>
+                      {isFullyPaid ? 'Fully Paid' : 'Payment Plan'}
+                    </Tag>
+                  </div>
                 </div>
               </Col>
-              <Col xs={24} sm={16}>
-                <Descriptions column={2} size="small">
+              <Col xs={24} sm={14} md={16}>
+                <Descriptions column={{ xs: 1, sm: 2, md: 2 }} size="small">
                   <Descriptions.Item label={<PhoneOutlined />}>
                     <a href={`tel:${customer.phoneNumber}`}>{customer.phoneNumber}</a>
                   </Descriptions.Item>
@@ -568,31 +835,31 @@ export const CustomerDetailPage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={24} lg={8}>
-          <Card>
-            <div style={{ display: 'flex', justifyContent: 'space-around' }}>
-              <div>
-                <Text type="secondary">Total Paid</Text>
-                <div style={{ fontSize: 20, fontWeight: 'bold' }}>
+          <Card bodyStyle={{ padding: '24px 16px' }}>
+            <Row gutter={[8, 12]} style={{ textAlign: 'center' }}>
+              <Col xs={8}>
+                <Text type="secondary" style={{ fontSize: 12 }}>Total Paid</Text>
+                <div style={{ fontSize: 17, fontWeight: 'bold', marginTop: 4, wordBreak: 'break-word' }}>
                   {paymentPlan ? (
                     <MoneyText minor={paymentPlan.totalAmountMinor - paymentPlan.balanceMinor} />
                   ) : 'GHS 0.00'}
                 </div>
-              </div>
-              <div>
-                <Text type="secondary">Balance</Text>
-                <div style={{ fontSize: 20, fontWeight: 'bold', color: paymentPlan?.balanceMinor > 0 ? '#ff4d4f' : '#52c41a' }}>
+              </Col>
+              <Col xs={8}>
+                <Text type="secondary" style={{ fontSize: 12 }}>Balance</Text>
+                <div style={{ fontSize: 17, fontWeight: 'bold', marginTop: 4, color: paymentPlan?.balanceMinor > 0 ? '#ff4d4f' : '#52c41a', wordBreak: 'break-word' }}>
                   {paymentPlan ? (
                     <MoneyText minor={paymentPlan.balanceMinor} />
                   ) : 'GHS 0.00'}
                 </div>
-              </div>
-              <div>
-                <Text type="secondary">Progress</Text>
-                <div style={{ fontSize: 20, fontWeight: 'bold' }}>
+              </Col>
+              <Col xs={8}>
+                <Text type="secondary" style={{ fontSize: 12 }}>Progress</Text>
+                <div style={{ fontSize: 17, fontWeight: 'bold', marginTop: 4 }}>
                   {isFullyPaid ? '100%' : paymentPlan ? `${paymentPlan.progressPercent}%` : '0%'}
                 </div>
-              </div>
-            </div>
+              </Col>
+            </Row>
           </Card>
         </Col>
       </Row>
@@ -601,6 +868,7 @@ export const CustomerDetailPage: React.FC = () => {
       <Tabs
         activeKey={activeTab}
         onChange={setActiveTab}
+        style={{ maxWidth: '100%' }}
         items={[
           {
             key: 'overview',
@@ -620,7 +888,7 @@ export const CustomerDetailPage: React.FC = () => {
                         <div style={{ marginBottom: 16 }}>
                           <ProgressCell percent={paymentPlan.progressPercent} band={paymentPlan.progressBand} />
                         </div>
-                        <Descriptions column={2} size="small" bordered>
+                        <Descriptions column={{ xs: 1, sm: 2, md: 2 }} size="small" bordered>
                           <Descriptions.Item label="Total Amount" span={2}>
                             <MoneyText minor={paymentPlan.totalAmountMinor} />
                           </Descriptions.Item>
@@ -664,27 +932,13 @@ export const CustomerDetailPage: React.FC = () => {
                             icon={<DownloadOutlined />}
                             onClick={handleGeneratePlanPdf}
                           >
-                            Generate PDF
+                            Generate PDF Statement
                           </Button>
                           <Button
                             icon={<FileOutlined />}
                             onClick={() => openGenerateDeedModal()}
                           >
                             Generate Deed
-                          </Button>
-                          <Button
-                            icon={<PlusOutlined />}
-                            onClick={() => setRecordPaymentModal(true)}
-                            disabled={isFullyPaid || !planId}
-                          >
-                            Record Payment
-                          </Button>
-                          <Button
-                            icon={<CreditCardOutlined />}
-                            onClick={() => setPaystackModal(true)}
-                            disabled={isFullyPaid || !planId}
-                          >
-                            Pay Online (Paystack)
                           </Button>
                         </div>
                       </div>
@@ -727,7 +981,7 @@ export const CustomerDetailPage: React.FC = () => {
             children: (
               <Card>
                 <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                  <Space>
+                  <Space wrap>
                     <Text type="secondary">
                       Total: {installments.length} installments
                     </Text>
@@ -738,23 +992,14 @@ export const CustomerDetailPage: React.FC = () => {
                       Pending: {installments.filter((i: any) => !i.isPaid).length}
                     </Text>
                   </Space>
-                  {installments.filter((i: any) => !i.isPaid).length > 0 && (
-                    <Button
-                      type="primary"
-                      icon={<PlusOutlined />}
-                      onClick={() => setRecordPaymentModal(true)}
-                      disabled={!planId}
-                    >
-                      Record Payment
-                    </Button>
-                  )}
                 </div>
                 <Spin spinning={installmentsLoading}>
                   <Table
                     columns={installmentsColumns}
                     dataSource={installments}
                     rowKey="id"
-                    pagination={{ pageSize: 10 }}
+                    scroll={{ x: 650 }}
+                    pagination={{ pageSize: 10, responsive: true }}
                     locale={{ emptyText: paymentPlan ? 'No installments found' : 'No payment plan attached' }}
                   />
                 </Spin>
@@ -767,7 +1012,7 @@ export const CustomerDetailPage: React.FC = () => {
             children: (
               <Card>
                 <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                  <Space>
+                  <Space wrap>
                     <Text type="secondary">
                       Total Payments: {recentPayments.length}
                     </Text>
@@ -775,30 +1020,14 @@ export const CustomerDetailPage: React.FC = () => {
                       Total Amount: <MoneyText minor={recentPayments.reduce((sum: number, p: any) => sum + p.amountMinor, 0)} />
                     </Text>
                   </Space>
-                  <Space>
-                    <Button
-                      icon={<PlusOutlined />}
-                      onClick={() => setRecordPaymentModal(true)}
-                      disabled={isFullyPaid || !planId}
-                    >
-                      Record Payment
-                    </Button>
-                    <Button
-                      type="primary"
-                      icon={<CreditCardOutlined />}
-                      onClick={() => setPaystackModal(true)}
-                      disabled={isFullyPaid || !planId}
-                    >
-                      Pay Online (Paystack)
-                    </Button>
-                  </Space>
                 </div>
                 <Spin spinning={paymentPlanLoading}>
                   <Table
                     columns={paymentsColumns}
                     dataSource={recentPayments}
                     rowKey="id"
-                    pagination={{ pageSize: 10 }}
+                    scroll={{ x: 650 }}
+                    pagination={{ pageSize: 10, responsive: true }}
                     locale={{
                       emptyText: 'No payment history to show. The API does not expose a full payment history endpoint — only the most recent payments embedded in the payment plan (if any) appear here.'
                     }}
@@ -827,6 +1056,7 @@ export const CustomerDetailPage: React.FC = () => {
                       dataSource={deeds}
                       renderItem={(deed: any) => (
                         <List.Item
+                          style={{ flexWrap: 'wrap', gap: 12 }}
                           actions={[
                             <Button key="download" icon={<DownloadOutlined />} onClick={() => handleDownloadDeed(deed.id)}>
                               Download
@@ -852,196 +1082,120 @@ export const CustomerDetailPage: React.FC = () => {
               </Card>
             ),
           },
+          {
+            key: 'documents',
+            label: (
+              <span>
+                <FileOutlined style={{ marginRight: 6 }} />
+                Documents
+                <Badge
+                  count={customerDocs.length}
+                  style={{
+                    marginLeft: 6,
+                    backgroundColor: customerDocs.length > 0 ? tokens.primary : '#d9d9d9',
+                  }}
+                />
+              </span>
+            ),
+            children: (
+              <Card>
+                <div
+                  style={{
+                    marginBottom: 16,
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                  }}
+                >
+                  <Space wrap style={{ flex: 1, minWidth: 260 }}>
+                    <Input
+                      placeholder="Search documents..."
+                      prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
+                      value={docSearch}
+                      onChange={(e) => setDocSearch(e.target.value)}
+                      allowClear
+                      style={{ width: '100%', maxWidth: 220, minWidth: 150 }}
+                    />
+                    <Select
+                      value={docCategoryFilter}
+                      onChange={setDocCategoryFilter}
+                      style={{ width: '100%', maxWidth: 200, minWidth: 150 }}
+                    >
+                      <Option value="all">All Categories</Option>
+                      {Object.entries(documentCategoryMeta).map(([cat, meta]) => (
+                        <Option key={cat} value={cat}>
+                          {meta.iconEmoji} {meta.label}
+                        </Option>
+                      ))}
+                    </Select>
+                    <Select
+                      value={docVisibilityFilter}
+                      onChange={setDocVisibilityFilter}
+                      style={{ width: '100%', maxWidth: 190, minWidth: 150 }}
+                    >
+                      <Option value="all">All Visibility</Option>
+                      <Option value="visible">Visible in Customer Portal</Option>
+                      <Option value="hidden">Hidden (Staff Only)</Option>
+                    </Select>
+                  </Space>
+
+                  <Button
+                    type="primary"
+                    icon={<UploadOutlined />}
+                    onClick={() => {
+                      uploadDocForm.resetFields();
+                      uploadDocForm.setFieldsValue({
+                        visibleToCustomer: true,
+                        category: 'sales_agreement',
+                      });
+                      setSelectedDocFile(null);
+                      setUploadDocModalOpen(true);
+                    }}
+                  >
+                    Upload Document
+                  </Button>
+                </div>
+
+                <Spin spinning={customerDocsLoading}>
+                  <Table
+                    columns={documentColumns}
+                    dataSource={filteredCustomerDocs}
+                    rowKey="id"
+                    scroll={{ x: 700 }}
+                    pagination={{ pageSize: 10, responsive: true }}
+                    locale={{
+                      emptyText: (
+                        <Empty
+                          description="No documents uploaded for this customer yet"
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        >
+                          <Button
+                            type="primary"
+                            icon={<UploadOutlined />}
+                            onClick={() => {
+                              uploadDocForm.resetFields();
+                              uploadDocForm.setFieldsValue({
+                                visibleToCustomer: true,
+                                category: 'sales_agreement',
+                              });
+                              setSelectedDocFile(null);
+                              setUploadDocModalOpen(true);
+                            }}
+                          >
+                            Upload First Document
+                          </Button>
+                        </Empty>
+                      ),
+                    }}
+                  />
+                </Spin>
+              </Card>
+            ),
+          },
         ]}
       />
-
-      {/* Record Payment Modal */}
-      <Modal
-        title={
-          <Space>
-            <PlusOutlined style={{ color: tokens.primary }} />
-            <Text strong>Record Payment</Text>
-          </Space>
-        }
-        open={recordPaymentModal}
-        onCancel={() => {
-          setRecordPaymentModal(false);
-          form.resetFields();
-        }}
-        footer={null}
-        width={500}
-        style={{ maxWidth: '95%', top: 20 }}
-        bodyStyle={{ padding: '16px' }}
-      >
-        <Form form={form} layout="vertical" onFinish={handleRecordPayment}>
-          <Alert
-            message={`Recording payment for ${customer.firstName} ${customer.lastName}`}
-            description={
-              paymentPlan ? (
-                <>
-                  Balance: <MoneyText minor={paymentPlan.balanceMinor} />
-                  <br />
-                  Next due: {installments.filter((i: any) => !i.isPaid).length > 0 ?
-                    dayjs(installments.filter((i: any) => !i.isPaid)[0].dueDate).format('MMMM DD, YYYY') :
-                    'All paid'
-                  }
-                </>
-              ) : 'No active payment plan'
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-
-          <Form.Item
-            name="amountGHS"
-            label="Amount (GHS)"
-            rules={[
-              { required: true, message: 'Please enter amount' },
-              { type: 'number', min: 0.01, message: 'Amount must be greater than 0' }
-            ]}
-          >
-            <InputNumber
-              style={{ width: '100%' }}
-              prefix="GHS"
-              precision={2}
-              min={0.01}
-              placeholder="Enter amount in GHS"
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="paidOn"
-            label="Payment Date"
-            rules={[{ required: true, message: 'Please select payment date' }]}
-          >
-            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-          </Form.Item>
-
-          <Form.Item
-            name="method"
-            label="Payment Method"
-            rules={[{ required: true, message: 'Please select payment method' }]}
-          >
-            <Select>
-              <Option value="cash">Cash</Option>
-              <Option value="bank_transfer">Bank Transfer</Option>
-              <Option value="mobile_money">Mobile Money</Option>
-              <Option value="cheque">Cheque</Option>
-              <Option value="other">Other</Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item
-            name="reference"
-            label="Reference (Optional)"
-          >
-            <Input placeholder="Enter reference number" />
-          </Form.Item>
-
-          <Form.Item>
-            <Space>
-              <Button
-                type="primary"
-                htmlType="submit"
-                loading={recordPayment.isPending}
-              >
-                Record Payment
-              </Button>
-              <Button onClick={() => {
-                setRecordPaymentModal(false);
-                form.resetFields();
-              }}>
-                Cancel
-              </Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
-
-      {/* Pay Online (Paystack) Modal */}
-      <Modal
-        title={
-          <Space>
-            <CreditCardOutlined style={{ color: tokens.primary }} />
-            <Text strong>Pay Online (Paystack)</Text>
-          </Space>
-        }
-        open={paystackModal}
-        onCancel={() => {
-          setPaystackModal(false);
-          paystackForm.resetFields();
-        }}
-        footer={null}
-        width={500}
-        style={{ maxWidth: '95%', top: 20 }}
-        bodyStyle={{ padding: '16px' }}
-      >
-        <Form form={paystackForm} layout="vertical" onFinish={handlePaystackPay}>
-          <Alert
-            message={`Paying online for ${customer.firstName} ${customer.lastName}`}
-            description={
-              paymentPlan ? (
-                <>
-                  Balance: <MoneyText minor={paymentPlan.balanceMinor} />
-                  <br />
-                  You will be redirected to Paystack to complete this payment securely.
-                </>
-              ) : 'No active payment plan'
-            }
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-
-          <Form.Item
-            name="amountGHS"
-            label="Amount (GHS)"
-            rules={[
-              { required: true, message: 'Please enter amount' },
-              { type: 'number', min: 0.01, message: 'Amount must be greater than 0' }
-            ]}
-          >
-            <InputNumber
-              style={{ width: '100%' }}
-              prefix="GHS"
-              precision={2}
-              min={0.01}
-              placeholder="Enter amount in GHS"
-            />
-          </Form.Item>
-
-          <Form.Item
-            name="email"
-            label="Customer Email"
-            rules={[
-              { required: true, message: 'Please enter an email for the Paystack receipt' },
-              { type: 'email', message: 'Please enter a valid email address' },
-            ]}
-          >
-            <Input placeholder="customer@example.com" />
-          </Form.Item>
-
-          <Form.Item>
-            <Space>
-              <Button
-                type="primary"
-                htmlType="submit"
-                loading={paystackInitialize.isPending}
-                icon={<CreditCardOutlined />}
-              >
-                Continue to Paystack
-              </Button>
-              <Button onClick={() => {
-                setPaystackModal(false);
-                paystackForm.resetFields();
-              }}>
-                Cancel
-              </Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
 
       {/* Generate Deed Modal */}
       <Modal
@@ -1085,7 +1239,7 @@ export const CustomerDetailPage: React.FC = () => {
           <Divider>Witnesses ({deedPolicy?.defaultWitnessCount ?? 2} required by policy, minimum 1)</Divider>
 
           {witnesses.map((witness, index) => (
-            <Row key={index} gutter={[8, 8]} style={{ marginBottom: 8 }}>
+            <Row key={index} gutter={[8, 8]} style={{ marginBottom: 8 }} align="middle">
               <Col xs={24} sm={10}>
                 <Form.Item
                   label={index === 0 ? 'Witness Name' : ''}
@@ -1100,7 +1254,7 @@ export const CustomerDetailPage: React.FC = () => {
                   />
                 </Form.Item>
               </Col>
-              <Col xs={24} sm={10}>
+              <Col xs={19} sm={10}>
                 <Form.Item
                   label={index === 0 ? 'Contact' : ''}
                   required={index === 0}
@@ -1114,8 +1268,8 @@ export const CustomerDetailPage: React.FC = () => {
                   />
                 </Form.Item>
               </Col>
-              <Col xs={24} sm={4}>
-                <Form.Item label={index === 0 ? 'Action' : ''} style={{ marginBottom: 0 }}>
+              <Col xs={5} sm={4} style={{ textAlign: 'right' }}>
+                <Form.Item label={index === 0 ? ' ' : ''} style={{ marginBottom: 0 }}>
                   <Button
                     type="text"
                     danger
@@ -1167,6 +1321,219 @@ export const CustomerDetailPage: React.FC = () => {
             </Space>
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* Upload Customer Document Modal */}
+      <Modal
+        title={
+          <Space>
+            <UploadOutlined style={{ color: tokens.primary }} />
+            <Text strong>Upload Document for Customer</Text>
+          </Space>
+        }
+        open={uploadDocModalOpen}
+        onCancel={() => {
+          setUploadDocModalOpen(false);
+          uploadDocForm.resetFields();
+          setSelectedDocFile(null);
+        }}
+        footer={null}
+        width={600}
+        style={{ maxWidth: '95vw', top: 20 }}
+        destroyOnClose
+      >
+        <Form
+          form={uploadDocForm}
+          layout="vertical"
+          initialValues={{
+            category: 'sales_agreement',
+            visibleToCustomer: true,
+          }}
+          onFinish={handleUploadDocument}
+        >
+          <Alert
+            message={`Uploading document for ${customer.firstName} ${customer.lastName}`}
+            description="Documents marked as visible to customer will automatically appear in their Customer Portal account in real-time."
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+          />
+
+          <Form.Item
+            name="title"
+            label="Document Title"
+            rules={[{ required: true, message: 'Please enter a document title' }]}
+          >
+            <Input placeholder="e.g. Sales Agreement - House 42, Land Title Deed, etc." />
+          </Form.Item>
+
+          <Row gutter={16}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="category"
+                label="Category"
+                rules={[{ required: true, message: 'Please select category' }]}
+              >
+                <Select placeholder="Select document category">
+                  {Object.entries(documentCategoryMeta).map(([cat, meta]) => (
+                    <Option key={cat} value={cat}>
+                      {meta.iconEmoji} {meta.label}
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="visibleToCustomer"
+                label="Customer Portal Visibility"
+                valuePropName="checked"
+                extra="Customer can view and download this file from portal"
+              >
+                <Switch
+                  checkedChildren={<Space size={2}><GlobalOutlined /> Visible</Space>}
+                  unCheckedChildren={<Space size={2}><LockOutlined /> Hidden</Space>}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item label="Upload File (PDF, Images, Word docs up to 25MB)" required>
+            <Upload.Dragger
+              name="file"
+              multiple={false}
+              maxCount={1}
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"
+              beforeUpload={(file) => {
+                if (file.size > 25 * 1024 * 1024) {
+                  message.error('File size exceeds the 25MB limit.');
+                  return Upload.LIST_IGNORE;
+                }
+                setSelectedDocFile(file);
+                // Auto-fill title if empty
+                const currentTitle = uploadDocForm.getFieldValue('title');
+                if (!currentTitle) {
+                  const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+                  uploadDocForm.setFieldsValue({ title: nameWithoutExt });
+                }
+                return false;
+              }}
+              onRemove={() => {
+                setSelectedDocFile(null);
+              }}
+              fileList={selectedDocFile ? [selectedDocFile as any] : []}
+            >
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined style={{ fontSize: 36, color: tokens.primary }} />
+              </p>
+              <p className="ant-upload-text">Click or drag file to this area to upload</p>
+              <p className="ant-upload-hint">
+                Supported: PDF, Word (DOC/DOCX), Excel (XLS/XLSX), Images (PNG/JPG). Max: 25MB
+              </p>
+            </Upload.Dragger>
+          </Form.Item>
+
+          <Form.Item name="description" label="Notes / Description (Optional)">
+            <TextArea
+              rows={3}
+              placeholder="Add optional notes, version details, or instructions..."
+            />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button
+                onClick={() => {
+                  setUploadDocModalOpen(false);
+                  uploadDocForm.resetFields();
+                  setSelectedDocFile(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={uploadDocMutation.isPending}
+                icon={<UploadOutlined />}
+                disabled={!selectedDocFile}
+              >
+                Upload & Share
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Document Preview Modal */}
+      <Modal
+        title={
+          previewDoc && (
+            <Space>
+              {getDocFileIcon(previewDoc.fileType, previewDoc.fileName)}
+              <div>
+                <Text strong>{previewDoc.title}</Text>
+                <div>
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    {previewDoc.fileName} · {formatBytes(previewDoc.fileSize)}
+                  </Text>
+                </div>
+              </div>
+            </Space>
+          )
+        }
+        open={!!previewDoc}
+        onCancel={() => setPreviewDoc(null)}
+        width={850}
+        style={{ maxWidth: '95vw', top: 20 }}
+        footer={[
+          <Button key="close" onClick={() => setPreviewDoc(null)}>
+            Close
+          </Button>,
+          <Button
+            key="download"
+            type="primary"
+            icon={<DownloadOutlined />}
+            onClick={() => previewDoc && downloadFile(previewDoc)}
+          >
+            Download
+          </Button>,
+        ]}
+      >
+        {previewDoc && (
+          <div style={{ minHeight: 350, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+            {previewDoc.fileType.includes('pdf') || previewDoc.fileName.toLowerCase().endsWith('.pdf') ? (
+              <iframe
+                src={previewDoc.fileUrl}
+                title={previewDoc.title}
+                style={{ width: '100%', height: 'clamp(350px, 60vh, 550px)', border: 'none', borderRadius: 8 }}
+              />
+            ) : previewDoc.fileType.includes('image') || previewDoc.fileName.match(/\.(png|jpe?g|webp|gif)$/i) ? (
+              <img
+                src={previewDoc.fileUrl}
+                alt={previewDoc.title}
+                style={{ maxWidth: '100%', maxHeight: '550px', objectFit: 'contain', borderRadius: 8 }}
+              />
+            ) : (
+              <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+                <FileOutlined style={{ fontSize: 64, color: tokens.primary, marginBottom: 16 }} />
+                <Title level={4}>{previewDoc.title}</Title>
+                <Text type="secondary" style={{ display: 'block', marginBottom: 20 }}>
+                  This file format ({previewDoc.fileType || previewDoc.fileName.split('.').pop()}) cannot be rendered directly in-browser.
+                  Click below to download and view it locally.
+                </Text>
+                <Button
+                  type="primary"
+                  icon={<DownloadOutlined />}
+                  onClick={() => downloadFile(previewDoc)}
+                  size="large"
+                >
+                  Download {previewDoc.fileName}
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
       </Modal>
     </div>
   );

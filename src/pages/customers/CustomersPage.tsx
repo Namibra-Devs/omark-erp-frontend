@@ -247,6 +247,233 @@ export const CustomersPage: React.FC = () => {
     return propertyMap[propertyId] || null;
   };
 
+  // Print customer profile summary record
+  const handlePrintCustomer = () => {
+    if (!selectedCustomer) return;
+
+    const plan = getPaymentPlan(selectedCustomer.id);
+    const prop = getPropertyDetails(selectedCustomer.propertyId);
+
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Customer Record — ${selectedCustomer.firstName} ${selectedCustomer.lastName}</title>
+        <style>
+          @media print {
+            body { padding: 0; margin: 0; }
+            @page { margin: 15mm; }
+          }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            color: #1a1a2e;
+            padding: 32px;
+            max-width: 800px;
+            margin: 0 auto;
+            line-height: 1.5;
+          }
+          .header {
+            display: flex;
+            justifyContent: space-between;
+            align-items: flex-start;
+            border-bottom: 2px solid #1677ff;
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+          }
+          .company-name {
+            font-size: 22px;
+            font-weight: 700;
+            color: #1677ff;
+            letter-spacing: 0.5px;
+          }
+          .sub-title {
+            font-size: 13px;
+            color: #666;
+            margin-top: 4px;
+          }
+          .badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+          }
+          .badge-green { background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f; }
+          .badge-blue { background: #e6f7ff; color: #1677ff; border: 1px solid #91d5ff; }
+          .section {
+            margin-bottom: 24px;
+          }
+          .section-title {
+            font-size: 14px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #555;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 6px;
+            margin-bottom: 12px;
+          }
+          .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px 24px;
+          }
+          .item {
+            font-size: 13px;
+          }
+          .item-label {
+            color: #777;
+            font-size: 11.5px;
+            text-transform: uppercase;
+            margin-bottom: 2px;
+          }
+          .item-value {
+            font-weight: 600;
+            color: #222;
+          }
+          .plan-box {
+            background: #fafafa;
+            border: 1px solid #f0f0f0;
+            border-radius: 6px;
+            padding: 16px;
+          }
+          .footer {
+            margin-top: 40px;
+            padding-top: 16px;
+            border-top: 1px solid #eee;
+            font-size: 11px;
+            color: #999;
+            display: flex;
+            justifyContent: space-between;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <div class="company-name">OMARK REAL ESTATE</div>
+            <div class="sub-title">Customer Profile Summary Record</div>
+          </div>
+          <div>
+            <span class="badge ${selectedCustomer.type === 'fully_paid' ? 'badge-green' : 'badge-blue'}">
+              ${selectedCustomer.type === 'fully_paid' ? 'Fully Paid Customer' : 'Payment Plan Customer'}
+            </span>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Personal Information</div>
+          <div class="grid">
+            <div class="item">
+              <div class="item-label">Full Name</div>
+              <div class="item-value">${selectedCustomer.firstName} ${selectedCustomer.lastName}</div>
+            </div>
+            <div class="item">
+              <div class="item-label">Customer ID</div>
+              <div class="item-value">${selectedCustomer.id}</div>
+            </div>
+            <div class="item">
+              <div class="item-label">Phone Number</div>
+              <div class="item-value">${selectedCustomer.phoneNumber}</div>
+            </div>
+            <div class="item">
+              <div class="item-label">Address</div>
+              <div class="item-value">${selectedCustomer.address || 'N/A'}</div>
+            </div>
+            <div class="item">
+              <div class="item-label">Registered On</div>
+              <div class="item-value">${dayjs(selectedCustomer.createdAt).format('MMMM DD, YYYY HH:mm')}</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-title">Property Details</div>
+          <div class="grid">
+            <div class="item">
+              <div class="item-label">House Number / Unit</div>
+              <div class="item-value">${prop?.houseNumber || 'N/A'}</div>
+            </div>
+            <div class="item">
+              <div class="item-label">Offer Number</div>
+              <div class="item-value">${prop?.offerNumber || 'N/A'}</div>
+            </div>
+            <div class="item">
+              <div class="item-label">Property Value</div>
+              <div class="item-value">GHS ${prop ? (prop.priceMinor / 100).toLocaleString() : '0.00'}</div>
+            </div>
+            ${prop?.description ? `
+            <div class="item" style="grid-column: span 2;">
+              <div class="item-label">Description</div>
+              <div class="item-value">${prop.description}</div>
+            </div>
+            ` : ''}
+          </div>
+        </div>
+
+        ${plan ? `
+        <div class="section">
+          <div class="section-title">Payment Plan Details</div>
+          <div class="plan-box">
+            <div class="grid">
+              <div class="item">
+                <div class="item-label">Plan Status</div>
+                <div class="item-value" style="text-transform: capitalize;">${plan.status} (${plan.progressPercent}% Completed)</div>
+              </div>
+              <div class="item">
+                <div class="item-label">Start Date</div>
+                <div class="item-value">${dayjs(plan.startDate).format('MMMM DD, YYYY')}</div>
+              </div>
+              <div class="item">
+                <div class="item-label">Total Plan Amount</div>
+                <div class="item-value">GHS ${(plan.totalAmountMinor / 100).toLocaleString()}</div>
+              </div>
+              <div class="item">
+                <div class="item-label">Down Payment</div>
+                <div class="item-value">GHS ${(plan.downPaymentMinor / 100).toLocaleString()}</div>
+              </div>
+              <div class="item">
+                <div class="item-label">Current Balance</div>
+                <div class="item-value" style="color: ${plan.balanceMinor > 0 ? '#cf1322' : '#389e0d'};">GHS ${(plan.balanceMinor / 100).toLocaleString()}</div>
+              </div>
+              <div class="item">
+                <div class="item-label">Monthly Installment</div>
+                <div class="item-value">GHS ${(plan.monthlyAmountMinor / 100).toLocaleString()}</div>
+              </div>
+              <div class="item">
+                <div class="item-label">Duration</div>
+                <div class="item-value">${plan.numMonths} Months</div>
+              </div>
+            </div>
+          </div>
+        </div>
+        ` : ''}
+
+        <div class="footer">
+          <div>Printed by: ${user?.name || user?.email || 'Staff Member'}</div>
+          <div>Printed on: ${dayjs().format('MMMM DD, YYYY HH:mm')}</div>
+        </div>
+
+        <script>
+          window.onload = function() {
+            window.print();
+          };
+        </script>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      message.error('Please allow pop-ups to print customer profile');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
+  };
+
 
 
 // ── Add Customer ──────────────────────────────────────────────────────────
@@ -1664,14 +1891,14 @@ const handleAddCustomer = async (values: any) => {
                     Edit Customer
                   </Button>
                 )}
-                <Button icon={<PhoneOutlined />}>
-                  Call
-                </Button>
-                <Button icon={<MessageOutlined />}>
-                  Message
-                </Button>
-                {selectedCustomer.type === 'payment_plan' && getPaymentPlan(selectedCustomer.id) && (
-                  <Button icon={<FileOutlined />}>
+                {getPaymentPlan(selectedCustomer.id) && (
+                  <Button
+                    icon={<FileOutlined />}
+                    onClick={() => {
+                      setViewDrawerOpen(false);
+                      navigate(`/customers/${selectedCustomer.id}?tab=overview`);
+                    }}
+                  >
                     View Plan
                   </Button>
                 )}
@@ -1776,8 +2003,7 @@ const handleAddCustomer = async (values: any) => {
               justifyContent: 'space-between'
             }}>
               <Space>
-                <Button icon={<PrinterOutlined />}>Print</Button>
-                <Button icon={<ShareAltOutlined />}>Share</Button>
+                <Button icon={<PrinterOutlined />} onClick={handlePrintCustomer}>Print</Button>
               </Space>
               <Button 
                 type="primary" 

@@ -2,15 +2,27 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button, Card, Col, Progress, Row, Spin, Statistic, Tag, Typography } from 'antd';
-import { CalendarOutlined, DollarOutlined, HomeOutlined, MessageOutlined } from '@ant-design/icons';
+import { CalendarOutlined, DollarOutlined, HomeOutlined, MessageOutlined, FileTextOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
 import { usePortalMeQuery } from '@/api/portal';
+import { useCustomerDocumentsQuery, formatBytes, downloadFile } from '@/api/customerDocuments';
+import { Space } from 'antd';
 
 const { Title, Text } = Typography;
 
 export const PortalDashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: portalData, isLoading } = usePortalMeQuery();
+
+  const customer = portalData?.customer;
+  const property = portalData?.property;
+  const plan = portalData?.paymentPlan;
+
+  const { data: documentsData } = useCustomerDocumentsQuery({
+    customerId: customer?.id,
+    visibleToCustomerOnly: true,
+  });
+  const documents = documentsData?.items ?? [];
 
   if (isLoading) {
     return (
@@ -19,10 +31,6 @@ export const PortalDashboardPage: React.FC = () => {
       </div>
     );
   }
-
-  const customer = portalData?.customer;
-  const property = portalData?.property;
-  const plan = portalData?.paymentPlan;
 
   return (
     <div>
@@ -64,12 +72,12 @@ export const PortalDashboardPage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={12} sm={12} lg={6}>
-          <Card size="small" bodyStyle={{ padding: 12 }}>
+          <Card size="small" bodyStyle={{ padding: 12 }} style={{ cursor: 'pointer' }} onClick={() => navigate('/portal/documents')}>
             <Statistic
-              title="Support"
-              value="Active"
-              prefix={<MessageOutlined />}
-              valueStyle={{ fontSize: 16, color: '#52c41a' }}
+              title="My Documents"
+              value={documents.length}
+              prefix={<FileTextOutlined />}
+              valueStyle={{ fontSize: 16, color: tokens.primary }}
             />
           </Card>
         </Col>
@@ -118,6 +126,52 @@ export const PortalDashboardPage: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      <Card
+        title={
+          <Space>
+            <FileTextOutlined style={{ color: tokens.primary }} />
+            <span>My Documents & Property Records</span>
+          </Space>
+        }
+        extra={<Button type="link" onClick={() => navigate('/portal/documents')}>View all documents</Button>}
+        style={{ marginBottom: 16 }}
+      >
+        {documents.length > 0 ? (
+          <Row gutter={[12, 12]}>
+            {documents.slice(0, 3).map((doc) => (
+              <Col xs={24} sm={8} key={doc.id}>
+                <Card
+                  size="small"
+                  style={{ background: '#f8fafc', borderRadius: 8, border: '1px solid #e2e8f0' }}
+                  actions={[
+                    <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => navigate('/portal/documents')}>
+                      Preview
+                    </Button>,
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<DownloadOutlined />}
+                      onClick={() => downloadFile(doc.fileUrl, doc.fileName)}
+                    >
+                      Download
+                    </Button>,
+                  ]}
+                >
+                  <Text strong ellipsis style={{ display: 'block', fontSize: 13, marginBottom: 2 }}>
+                    {doc.title}
+                  </Text>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    {doc.fileName} · {formatBytes(doc.fileSize)}
+                  </Text>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        ) : (
+          <Text type="secondary">No documents uploaded yet. When Omark Real Estate uploads your agreements, site plans, or receipts, they will appear here.</Text>
+        )}
+      </Card>
 
       <Card>
         <Row gutter={[12, 12]} align="middle" justify="space-between">

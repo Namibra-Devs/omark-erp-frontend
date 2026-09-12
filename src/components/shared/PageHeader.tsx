@@ -21,12 +21,12 @@ interface PageHeaderProps {
 
 export const PageHeader: React.FC<PageHeaderProps> = ({ title, actions }) => {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-      <Title level={2} style={{ margin: 0 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+      <Title level={2} style={{ margin: 0, fontSize: 'clamp(20px, 4vw, 28px)' }}>
         {title}
       </Title>
       {actions && actions.length > 0 && (
-        <Space>
+        <Space wrap size={[8, 8]}>
           {actions.map((action, index) => (
             <Button
               key={index}
