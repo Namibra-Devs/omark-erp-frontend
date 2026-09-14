@@ -29,6 +29,7 @@ import { useBranchContext } from '@/contexts/BranchContext';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
+import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 
 const { Title, Text } = Typography;
 
@@ -162,6 +163,9 @@ export const AdminDashboardPage: React.FC = () => {
       ),
       children: (
         <>
+          <div style={{ marginBottom: 20 }}>
+            <ProspectsSourcePieChart />
+          </div>
           <CrossSystemActivity stats={mockActivityStats} branchName={myBranchName} />
           <RecentActivity
             activities={activityLogs}

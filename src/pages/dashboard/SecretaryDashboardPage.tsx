@@ -42,7 +42,6 @@ import {
   IdcardOutlined,
   RiseOutlined,
   PieChartOutlined,
-  BarChartOutlined,
   CalendarOutlined,
   FilterOutlined,
   ArrowUpOutlined,
@@ -66,6 +65,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation } from '@/api/customers';
+import { useProspectsQuery } from '@/api/prospects';
 import { usePaymentPlansQuery, getProgressBand } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
 import { usePropertiesQuery } from '@/api/properties';
@@ -73,11 +73,17 @@ import { useBranchesQuery } from '@/api/branches';
 import { buildPaymentPlanSchedule, getPlanPaymentOverrides, usePaymentPlanScheduleListener } from '@/utils/paymentPlanSchedule';
 import type { PaymentPlan, PaymentPlanStatus } from '@/types';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
+import {
+  createDuplicatePhoneRule,
+  createDuplicateNameRule,
+  assertNoCustomerDuplicates,
+} from '@/utils/duplicateValidation';
 import { roleLabels, progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
@@ -173,6 +179,10 @@ export const SecretaryDashboardPage: React.FC = () => {
     isLoading: customersLoading,
     refetch: refetchCustomers
   } = useCustomersQuery({ pageSize: 100 });
+
+  const { data: prospectsData } = useProspectsQuery();
+  const existingCustomersList = customersData?.items ?? [];
+  const existingProspectsList = prospectsData?.items ?? [];
 
   const {
     data: paymentPlansData,
@@ -800,6 +810,20 @@ export const SecretaryDashboardPage: React.FC = () => {
   const handleAddCustomer = async (values: any) => {
     try {
       setLoading(true);
+
+      // Hard pre-submission rejection guard
+      assertNoCustomerDuplicates(
+        {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+        },
+        {
+          existingCustomers: existingCustomersList,
+          existingProspects: existingProspectsList,
+        }
+      );
+
       // POST /customers requires a `createPlan` object when type is
       // 'payment_plan' — omitting it (as this used to) fails validation on
       // every submission.
@@ -1366,6 +1390,13 @@ export const SecretaryDashboardPage: React.FC = () => {
             </Card>
           </Col>
         </Row>
+
+        {/* Row 3: Marketing vs CS Prospects Distribution */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col xs={24}>
+            <ProspectsSourcePieChart prospects={existingProspectsList} />
+          </Col>
+        </Row>
       </div>
 
       {/* ── Progress Band Summary ──────────────────────────────────────────── */}
@@ -1503,7 +1534,16 @@ export const SecretaryDashboardPage: React.FC = () => {
               <Form.Item
                 name="firstName"
                 label="First Name"
-                rules={[{ required: true, message: 'First name is required' }]}
+                rules={[
+                  { required: true, message: 'First name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'customer',
+                    isFirstName: true,
+                    getOtherName: () => form.getFieldValue('lastName'),
+                    getExistingCustomers: () => existingCustomersList,
+                    getExistingProspects: () => existingProspectsList,
+                  }),
+                ]}
               >
                 <Input placeholder="First name" />
               </Form.Item>
@@ -1512,7 +1552,16 @@ export const SecretaryDashboardPage: React.FC = () => {
               <Form.Item
                 name="lastName"
                 label="Last Name"
-                rules={[{ required: true, message: 'Last name is required' }]}
+                rules={[
+                  { required: true, message: 'Last name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'customer',
+                    isFirstName: false,
+                    getOtherName: () => form.getFieldValue('firstName'),
+                    getExistingCustomers: () => existingCustomersList,
+                    getExistingProspects: () => existingProspectsList,
+                  }),
+                ]}
               >
                 <Input placeholder="Last name" />
               </Form.Item>
@@ -1522,7 +1571,14 @@ export const SecretaryDashboardPage: React.FC = () => {
           <Form.Item
             name="phoneNumber"
             label="Phone Number"
-            rules={[{ required: true, message: 'Phone number is required' }]}
+            rules={[
+              { required: true, message: 'Phone number is required' },
+              createDuplicatePhoneRule({
+                entityType: 'customer',
+                getExistingCustomers: () => existingCustomersList,
+                getExistingProspects: () => existingProspectsList,
+              }),
+            ]}
           >
             <PhoneInput />
           </Form.Item>

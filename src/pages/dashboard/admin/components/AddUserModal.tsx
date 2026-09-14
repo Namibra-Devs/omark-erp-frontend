@@ -14,6 +14,13 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/api/branches';
+import { useUsersQuery } from '@/api/users';
+import {
+  createDuplicatePhoneRule,
+  createDuplicateEmailRule,
+  createDuplicateNameRule,
+  assertNoUserDuplicates,
+} from '@/utils/duplicateValidation';
 
 const { Text, Title } = Typography;
 const { Option } = Select;
@@ -307,6 +314,8 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
     firstName?: string; lastName?: string; role?: string; branchId?: string;
   }>({});
   const { branches } = useBranchContext();
+  const { data: usersData } = useUsersQuery({ pageSize: 1000 });
+  const existingUsers = usersData?.items ?? [];
 
   const reset = () => {
     form.resetFields();
@@ -380,7 +389,16 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
         photo: values.photo,
       };
 
-      console.log('📤 AddUserModal - Payload being sent to addUser:', payload);
+      // Hard pre-submission duplicate rejection guard
+      assertNoUserDuplicates(
+        {
+          firstName: payload.firstName,
+          lastName: payload.lastName,
+          email: payload.email,
+          phoneNumber: payload.phoneNumber,
+        },
+        { existingUsers }
+      );
 
       // Validate required fields
       if (!payload.firstName) {
@@ -438,7 +456,15 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             <Form.Item
               name="firstName"
               label="First Name"
-              rules={[{ required: true, message: 'First name is required' }]}
+              rules={[
+                { required: true, message: 'First name is required' },
+                createDuplicateNameRule({
+                  entityType: 'user',
+                  isFirstName: true,
+                  getOtherName: () => form.getFieldValue('lastName'),
+                  getExistingUsers: () => existingUsers,
+                }),
+              ]}
             >
               <Input
                 prefix={<UserOutlined style={{ color: '#bbb' }} />}
@@ -451,7 +477,15 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
             <Form.Item
               name="lastName"
               label="Last Name"
-              rules={[{ required: true, message: 'Last name is required' }]}
+              rules={[
+                { required: true, message: 'Last name is required' },
+                createDuplicateNameRule({
+                  entityType: 'user',
+                  isFirstName: false,
+                  getOtherName: () => form.getFieldValue('firstName'),
+                  getExistingUsers: () => existingUsers,
+                }),
+              ]}
             >
               <Input
                 prefix={<UserOutlined style={{ color: '#bbb' }} />}
@@ -468,6 +502,10 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           rules={[
             { required: true, message: 'Email is required' },
             { type: 'email', message: 'Enter a valid email address' },
+            createDuplicateEmailRule({
+              entityType: 'user',
+              getExistingUsers: () => existingUsers,
+            }),
           ]}
         >
           <Input
@@ -479,7 +517,13 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
         <Form.Item
           name="phoneNumber"
           label="Phone Number"
-          rules={[{ required: true, message: 'Phone number is required' }]}
+          rules={[
+            { required: true, message: 'Phone number is required' },
+            createDuplicatePhoneRule({
+              entityType: 'user',
+              getExistingUsers: () => existingUsers,
+            }),
+          ]}
         >
           <PhoneInput placeholder="+233 XX XXX XXXX" />
         </Form.Item>

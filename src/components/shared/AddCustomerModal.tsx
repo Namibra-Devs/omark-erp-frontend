@@ -8,10 +8,16 @@ import { UserAddOutlined, PlusOutlined, HomeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
 import { PhoneInput } from '@/components/shared/PhoneInput';
-import { useCreateCustomerMutation } from '@/api/customers';
+import { useCreateCustomerMutation, useCustomersQuery } from '@/api/customers';
+import { useProspectsQuery } from '@/api/prospects';
 import { usePropertiesQuery } from '@/api/properties';
 import { tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { tokens } from '@/constants/tokens';
+import {
+  createDuplicatePhoneRule,
+  createDuplicateNameRule,
+  assertNoCustomerDuplicates,
+} from '@/utils/duplicateValidation';
 
 const { Option } = Select;
 const { Text } = Typography;
@@ -33,8 +39,23 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 100 });
   const properties = propertiesData?.items ?? [];
 
+  const { data: customersData } = useCustomersQuery();
+  const { data: prospectsData } = useProspectsQuery();
+  const existingCustomers = customersData?.items ?? [];
+  const existingProspects = prospectsData?.items ?? [];
+
   const handleFinish = async (values: any) => {
     try {
+      // Hard pre-submission rejection guard
+      assertNoCustomerDuplicates(
+        {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+        },
+        { existingCustomers, existingProspects }
+      );
+
       const customerData: any = {
         firstName: values.firstName,
         lastName: values.lastName,
@@ -116,7 +137,16 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
             <Form.Item
               name="firstName"
               label="First Name"
-              rules={[{ required: true, message: 'First name is required' }]}
+              rules={[
+                { required: true, message: 'First name is required' },
+                createDuplicateNameRule({
+                  entityType: 'customer',
+                  isFirstName: true,
+                  getOtherName: () => form.getFieldValue('lastName'),
+                  getExistingCustomers: () => existingCustomers,
+                  getExistingProspects: () => existingProspects,
+                }),
+              ]}
             >
               <Input placeholder="First name" />
             </Form.Item>
@@ -125,7 +155,16 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
             <Form.Item
               name="lastName"
               label="Last Name"
-              rules={[{ required: true, message: 'Last name is required' }]}
+              rules={[
+                { required: true, message: 'Last name is required' },
+                createDuplicateNameRule({
+                  entityType: 'customer',
+                  isFirstName: false,
+                  getOtherName: () => form.getFieldValue('firstName'),
+                  getExistingCustomers: () => existingCustomers,
+                  getExistingProspects: () => existingProspects,
+                }),
+              ]}
             >
               <Input placeholder="Last name" />
             </Form.Item>
@@ -135,7 +174,14 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
         <Form.Item
           name="phoneNumber"
           label="Phone Number"
-          rules={[{ required: true, message: 'Phone number is required' }]}
+          rules={[
+            { required: true, message: 'Phone number is required' },
+            createDuplicatePhoneRule({
+              entityType: 'customer',
+              getExistingCustomers: () => existingCustomers,
+              getExistingProspects: () => existingProspects,
+            }),
+          ]}
         >
           <PhoneInput />
         </Form.Item>

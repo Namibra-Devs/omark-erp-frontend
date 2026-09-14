@@ -31,7 +31,10 @@ import {
   ExportOutlined,
   FileTextOutlined,
   CreditCardOutlined,
-  PercentageOutlined
+  PercentageOutlined,
+  ThunderboltOutlined,
+  SearchOutlined,
+  FileDoneOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
@@ -55,6 +58,7 @@ import {
 import { usePayrollQuery, useCreatePayrollMutation, useUpdatePayrollMutation, type PayrollRecord } from '@/api/payroll';
 import { useAttendanceQuery, useStaffAttendanceStatsQuery, type AttendanceRecord, type AttendanceStatus } from '@/api/attendance';
 import { ATTENDANCE_STATUS_META } from '@/constants/attendance';
+import { useStaffLeaveRequestsQuery } from '@/api/leaves';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
@@ -116,16 +120,42 @@ export const StaffProfilePage: React.FC = () => {
   const updatePayrollMutation = useUpdatePayrollMutation();
 
   // Related Activity & Records
-  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ assignedUserId: id, pageSize: 100 });
-  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 100 });
-  const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 100 });
+  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ assignedUserId: id, pageSize: 500 });
+  const { data: allProspectsData } = useProspectsQuery({ pageSize: 500 });
+  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 500 });
+  const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 500 });
 
-  const staffProspects = prospectsData?.items ?? [];
-  const staffAppointments = (appointmentsData?.items ?? []).filter((a) => a.createdByUserId === id);
-  const staffDeeds = (deedsData?.items ?? []).filter((d) => d.generatedByUserId === id);
+  // Merge and deduplicate prospects assigned to this staff member
+  const staffProspects = useMemo(() => {
+    const direct = prospectsData?.items ?? [];
+    const list = allProspectsData?.items ?? [];
+    const combined = [...direct];
+    list.forEach((p) => {
+      if ((p.assignedUserId === id || (p as any).assignedStaffId === id) && !combined.some((c) => c.id === p.id)) {
+        combined.push(p);
+      }
+    });
+    return combined;
+  }, [allProspectsData, prospectsData, id]);
+
+  const staffAppointments = useMemo(() => {
+    return (appointmentsData?.items ?? []).filter(
+      (a) => a.createdByUserId === id || (a as any).assignedStaffId === id || (a as any).userId === id
+    );
+  }, [appointmentsData, id]);
+
+  const staffDeeds = useMemo(() => {
+    return (deedsData?.items ?? []).filter((d) => d.generatedByUserId === id);
+  }, [deedsData, id]);
+
   // Attendance & Time Tracking
-  const { data: staffAttendance = [], isLoading: attendanceLoading } = useAttendanceQuery({ userId: id });
+  const { data: rawStaffAttendance = [], isLoading: attendanceLoading } = useAttendanceQuery({ userId: id });
+  const staffAttendance = useMemo(() => Array.isArray(rawStaffAttendance) ? rawStaffAttendance : [], [rawStaffAttendance]);
   const { data: attendanceStats } = useStaffAttendanceStatsQuery(id);
+
+  // Leave Requests
+  const { data: rawStaffLeaves = [] } = useStaffLeaveRequestsQuery({ userId: id });
+  const staffLeaves = useMemo(() => Array.isArray(rawStaffLeaves) ? rawStaffLeaves : [], [rawStaffLeaves]);
 
   // ── UI States ─────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('overview');
@@ -140,13 +170,81 @@ export const StaffProfilePage: React.FC = () => {
   const [payslipModalOpen, setPayslipModalOpen] = useState(false);
   const [payslipRecord, setPayslipRecord] = useState<PayrollRecord | null>(null);
 
+  // Quick Operational Summary Drill-Down Modal State
+  const [summaryModalType, setSummaryModalType] = useState<
+    'prospects' | 'appointments' | 'attendance' | 'leaves' | 'bonuses' | 'payroll' | null
+  >(null);
+  const [modalSearch, setModalSearch] = useState('');
+
   const [form] = Form.useForm();
   const [assignForm] = Form.useForm();
   const [bonusForm] = Form.useForm();
   const [payrollForm] = Form.useForm();
   const [editPayrollForm] = Form.useForm();
 
-  // Activity stream combining prospects, appointments, deeds, and bonuses
+  // Filtered dataset for Quick Operational Summary drill-down modal
+  const filteredModalData = useMemo(() => {
+    const q = modalSearch.trim().toLowerCase();
+    switch (summaryModalType) {
+      case 'prospects':
+        return staffProspects.filter((p) => {
+          if (!q) return true;
+          return (
+            `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
+            p.phoneNumber?.toLowerCase().includes(q) ||
+            p.address?.toLowerCase().includes(q) ||
+            p.status?.toLowerCase().includes(q) ||
+            p.source?.toLowerCase().includes(q)
+          );
+        });
+      case 'appointments':
+        return staffAppointments.filter((a) => {
+          if (!q) return true;
+          return (
+            a.reason?.toLowerCase().includes(q) ||
+            a.status?.toLowerCase().includes(q) ||
+            a.source?.toLowerCase().includes(q) ||
+            dayjs(a.scheduledFor).format('DD MMM YYYY').toLowerCase().includes(q)
+          );
+        });
+      case 'attendance':
+        return staffAttendance.filter((att) => {
+          if (!q) return true;
+          return (
+            att.date?.toLowerCase().includes(q) ||
+            att.status?.toLowerCase().includes(q) ||
+            att.branchName?.toLowerCase().includes(q)
+          );
+        });
+      case 'leaves':
+        return staffLeaves.filter((lv) => {
+          if (!q) return true;
+          return (
+            lv.leaveType?.toLowerCase().includes(q) ||
+            lv.status?.toLowerCase().includes(q) ||
+            lv.reason?.toLowerCase().includes(q)
+          );
+        });
+      case 'bonuses':
+        return bonuses.filter((b) => {
+          if (!q) return true;
+          return (
+            b.reason?.toLowerCase().includes(q) ||
+            b.ruleName?.toLowerCase().includes(q) ||
+            b.status?.toLowerCase().includes(q)
+          );
+        });
+      case 'payroll':
+        return payrollRecords.filter((p) => {
+          if (!q) return true;
+          return p.month?.toLowerCase().includes(q) || p.status?.toLowerCase().includes(q);
+        });
+      default:
+        return [];
+    }
+  }, [summaryModalType, modalSearch, staffProspects, staffAppointments, staffAttendance, staffLeaves, bonuses, payrollRecords]);
+
+  // Activity stream combining prospects, appointments, deeds, attendance, leaves, and bonuses
   const activityList = useMemo(() => {
     const list: any[] = [];
 
@@ -169,6 +267,17 @@ export const StaffProfilePage: React.FC = () => {
         title: `Scheduled Meeting with Client`,
         detail: `Date: ${dayjs(a.scheduledFor).format('MMM D, YYYY h:mm A')} | Status: ${a.status}`,
         date: a.createdAt,
+      });
+    });
+
+    staffLeaves.forEach((lv) => {
+      list.push({
+        id: `leave-${lv.id}`,
+        type: 'Leave Application',
+        icon: <FileDoneOutlined style={{ color: '#ea580c' }} />,
+        title: `Leave: ${lv.leaveType.toUpperCase()} (${lv.totalDays} Days)`,
+        detail: `${lv.startDate} to ${lv.endDate} — Reason: ${lv.reason}`,
+        date: lv.createdAt,
       });
     });
 
@@ -195,7 +304,7 @@ export const StaffProfilePage: React.FC = () => {
     });
 
     return list.sort((a, b) => dayjs(b.date).unix() - dayjs(a.date).unix());
-  }, [staffProspects, staffAppointments, staffDeeds, bonuses]);
+  }, [staffProspects, staffAppointments, staffLeaves, staffDeeds, bonuses]);
 
   if (usersLoading) {
     return (
@@ -622,58 +731,204 @@ export const StaffProfilePage: React.FC = () => {
 
                 {/* ── Bottom: Quick Operational Summary ── */}
                 <Col xs={24}>
-                  <Card title="Quick Operational Summary" style={{ borderRadius: 8 }}>
+                  <Card
+                    title={
+                      <Space>
+                        <ThunderboltOutlined style={{ fontSize: 18, color: '#f59e0b' }} />
+                        <div>
+                          <Text strong style={{ fontSize: 16 }}>Quick Operational Summary</Text>
+                          <div style={{ fontSize: 12, color: '#64748b', fontWeight: 400 }}>
+                            Live operational performance metrics for {fullName}. Click any card to inspect full records.
+                          </div>
+                        </div>
+                      </Space>
+                    }
+                    style={{ borderRadius: 12 }}
+                  >
                     <Row gutter={[16, 16]}>
-                      <Col xs={12} sm={8} md={5} lg={5}>
-                        <Card size="small" style={{ textAlign: 'center', background: '#f0f5ff', borderRadius: 8, borderColor: '#d6e4ff' }}>
-                          <Statistic
-                            title="Prospects Registered"
-                            value={staffProspects.length}
-                            valueStyle={{ color: '#1890ff', fontWeight: 600 }}
-                            prefix={<UserOutlined />}
-                          />
+                      {/* 1. Prospects */}
+                      <Col xs={12} sm={8} md={4}>
+                        <Card
+                          hoverable
+                          size="small"
+                          onClick={() => {
+                            setModalSearch('');
+                            setSummaryModalType('prospects');
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderRadius: 8,
+                            border: '1px solid #bbf7d0',
+                            background: 'linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%)',
+                            textAlign: 'center',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <UserOutlined style={{ fontSize: 24, color: '#16a34a', marginBottom: 8 }} />
+                          <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>
+                            {staffProspects.length}
+                          </div>
+                          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                            Assigned Prospects
+                          </Text>
+                          <Tag color="green" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
+                            View List &rarr;
+                          </Tag>
                         </Card>
                       </Col>
-                      <Col xs={12} sm={8} md={5} lg={5}>
-                        <Card size="small" style={{ textAlign: 'center', background: '#fff7e6', borderRadius: 8, borderColor: '#ffd591' }}>
-                          <Statistic
-                            title="Appointments Booked"
-                            value={staffAppointments.length}
-                            valueStyle={{ color: '#fa8c16', fontWeight: 600 }}
-                            prefix={<CalendarOutlined />}
-                          />
+
+                      {/* 2. Appointments */}
+                      <Col xs={12} sm={8} md={4}>
+                        <Card
+                          hoverable
+                          size="small"
+                          onClick={() => {
+                            setModalSearch('');
+                            setSummaryModalType('appointments');
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderRadius: 8,
+                            border: '1px solid #ddd6fe',
+                            background: 'linear-gradient(180deg, #f5f3ff 0%, #ffffff 100%)',
+                            textAlign: 'center',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <CalendarOutlined style={{ fontSize: 24, color: '#722ed1', marginBottom: 8 }} />
+                          <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>
+                            {staffAppointments.length}
+                          </div>
+                          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                            Appointments
+                          </Text>
+                          <Tag color="purple" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
+                            View List &rarr;
+                          </Tag>
                         </Card>
                       </Col>
-                      <Col xs={12} sm={8} md={4} lg={4}>
-                        <Card size="small" style={{ textAlign: 'center', background: '#f6ffed', borderRadius: 8, borderColor: '#b7eb8f' }}>
-                          <Statistic
-                            title="Deeds Issued"
-                            value={staffDeeds.length}
-                            valueStyle={{ color: '#52c41a', fontWeight: 600 }}
-                            prefix={<FileTextOutlined />}
-                          />
+
+                      {/* 3. Attendance */}
+                      <Col xs={12} sm={8} md={4}>
+                        <Card
+                          hoverable
+                          size="small"
+                          onClick={() => {
+                            setModalSearch('');
+                            setSummaryModalType('attendance');
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderRadius: 8,
+                            border: '1px solid #99f6e4',
+                            background: 'linear-gradient(180deg, #f0fdfa 0%, #ffffff 100%)',
+                            textAlign: 'center',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <ClockCircleOutlined style={{ fontSize: 24, color: '#0d9488', marginBottom: 8 }} />
+                          <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>
+                            {staffAttendance.length}
+                          </div>
+                          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                            Verified Shifts
+                          </Text>
+                          <Tag color="cyan" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
+                            View List &rarr;
+                          </Tag>
                         </Card>
                       </Col>
-                      <Col xs={12} sm={12} md={5} lg={5}>
-                        <Card size="small" style={{ textAlign: 'center', background: '#fffbe6', borderRadius: 8, borderColor: '#ffe58f' }}>
-                          <Statistic
-                            title="Accumulated Bonuses"
-                            value={totalBonusGHS}
-                            prefix="GH₵"
-                            precision={2}
-                            valueStyle={{ color: '#d48806', fontWeight: 600 }}
-                          />
+
+                      {/* 4. Leaves */}
+                      <Col xs={12} sm={8} md={4}>
+                        <Card
+                          hoverable
+                          size="small"
+                          onClick={() => {
+                            setModalSearch('');
+                            setSummaryModalType('leaves');
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderRadius: 8,
+                            border: '1px solid #fed7aa',
+                            background: 'linear-gradient(180deg, #fff7ed 0%, #ffffff 100%)',
+                            textAlign: 'center',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <FileDoneOutlined style={{ fontSize: 24, color: '#ea580c', marginBottom: 8 }} />
+                          <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>
+                            {staffLeaves.length}
+                          </div>
+                          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                            Leave Requests
+                          </Text>
+                          <Tag color="orange" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
+                            View List &rarr;
+                          </Tag>
                         </Card>
                       </Col>
-                      <Col xs={12} sm={12} md={5} lg={5}>
-                        <Card size="small" style={{ textAlign: 'center', background: '#f9f0ff', borderRadius: 8, borderColor: '#d3adf7' }}>
-                          <Statistic
-                            title="Payroll Runs"
-                            value={payrollRecords.length}
-                            suffix="runs"
-                            valueStyle={{ color: '#722ed1', fontWeight: 600 }}
-                            prefix={<DollarOutlined />}
-                          />
+
+                      {/* 5. Bonuses */}
+                      <Col xs={12} sm={8} md={4}>
+                        <Card
+                          hoverable
+                          size="small"
+                          onClick={() => {
+                            setModalSearch('');
+                            setSummaryModalType('bonuses');
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderRadius: 8,
+                            border: '1px solid #bbf7d0',
+                            background: 'linear-gradient(180deg, #f0fdf4 0%, #ffffff 100%)',
+                            textAlign: 'center',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <TrophyOutlined style={{ fontSize: 24, color: '#16a34a', marginBottom: 8 }} />
+                          <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>
+                            {bonuses.length}
+                          </div>
+                          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                            Bonuses ({bonuses.length})
+                          </Text>
+                          <Tag color="green" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
+                            View List &rarr;
+                          </Tag>
+                        </Card>
+                      </Col>
+
+                      {/* 6. Payroll */}
+                      <Col xs={12} sm={8} md={4}>
+                        <Card
+                          hoverable
+                          size="small"
+                          onClick={() => {
+                            setModalSearch('');
+                            setSummaryModalType('payroll');
+                          }}
+                          style={{
+                            cursor: 'pointer',
+                            borderRadius: 8,
+                            border: '1px solid #bfdbfe',
+                            background: 'linear-gradient(180deg, #eff6ff 0%, #ffffff 100%)',
+                            textAlign: 'center',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <DollarOutlined style={{ fontSize: 24, color: '#2563eb', marginBottom: 8 }} />
+                          <div style={{ fontSize: 22, fontWeight: 700, color: '#1e293b' }}>
+                            {payrollRecords.length}
+                          </div>
+                          <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
+                            Payroll Runs
+                          </Text>
+                          <Tag color="blue" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
+                            View List &rarr;
+                          </Tag>
                         </Card>
                       </Col>
                     </Row>
@@ -1211,6 +1466,326 @@ export const StaffProfilePage: React.FC = () => {
             </Space>
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* ── QUICK OPERATIONAL SUMMARY DETAIL MODAL ───────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            {summaryModalType === 'prospects' && <UserOutlined style={{ color: '#16a34a' }} />}
+            {summaryModalType === 'appointments' && <CalendarOutlined style={{ color: '#722ed1' }} />}
+            {summaryModalType === 'attendance' && <ClockCircleOutlined style={{ color: '#0d9488' }} />}
+            {summaryModalType === 'leaves' && <FileDoneOutlined style={{ color: '#ea580c' }} />}
+            {summaryModalType === 'bonuses' && <TrophyOutlined style={{ color: '#16a34a' }} />}
+            {summaryModalType === 'payroll' && <DollarOutlined style={{ color: '#2563eb' }} />}
+            <span style={{ textTransform: 'capitalize' }}>
+              {summaryModalType === 'prospects' && 'Assigned Prospects & Leads'}
+              {summaryModalType === 'appointments' && 'Scheduled Appointments & Meetings'}
+              {summaryModalType === 'attendance' && 'Verified Shifts & Attendance Punches'}
+              {summaryModalType === 'leaves' && 'Staff Leave Applications'}
+              {summaryModalType === 'bonuses' && 'Commissions & Bonuses Earned'}
+              {summaryModalType === 'payroll' && 'Salary Slips & Payroll Records'}
+              {' '}({filteredModalData.length})
+            </span>
+          </Space>
+        }
+        open={summaryModalType !== null}
+        onCancel={() => {
+          setSummaryModalType(null);
+          setModalSearch('');
+        }}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: 8 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Showing {filteredModalData.length} records for {fullName}
+            </Text>
+            <Space>
+              {summaryModalType === 'prospects' && (
+                <Button
+                  onClick={() => {
+                    setActiveTab('prospects');
+                    setSummaryModalType(null);
+                  }}
+                >
+                  Open in Prospects Tab &rarr;
+                </Button>
+              )}
+              {summaryModalType === 'attendance' && (
+                <Button
+                  onClick={() => {
+                    setActiveTab('attendance');
+                    setSummaryModalType(null);
+                  }}
+                >
+                  Open in Attendance Tab &rarr;
+                </Button>
+              )}
+              {summaryModalType === 'bonuses' && (
+                <Button
+                  onClick={() => {
+                    setActiveTab('bonuses');
+                    setSummaryModalType(null);
+                  }}
+                >
+                  Open in Bonuses Tab &rarr;
+                </Button>
+              )}
+              {summaryModalType === 'payroll' && (
+                <Button
+                  onClick={() => {
+                    setActiveTab('payroll');
+                    setSummaryModalType(null);
+                  }}
+                >
+                  Open in Payroll Tab &rarr;
+                </Button>
+              )}
+              <Button type="primary" onClick={() => setSummaryModalType(null)}>Close</Button>
+            </Space>
+          </div>
+        }
+        width={900}
+        destroyOnClose
+      >
+        <Input
+          prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+          placeholder="Search records by keyword, name, contact, reason, or status..."
+          value={modalSearch}
+          onChange={(e) => setModalSearch(e.target.value)}
+          allowClear
+          style={{ marginBottom: 16 }}
+        />
+
+        {/* Prospects Table */}
+        {summaryModalType === 'prospects' && (
+          <Table
+            size="small"
+            dataSource={filteredModalData}
+            rowKey="id"
+            pagination={{ pageSize: 8 }}
+            columns={[
+              {
+                title: 'Prospect Name',
+                key: 'name',
+                render: (_: any, r: any) => <strong>{r.firstName} {r.lastName}</strong>,
+              },
+              {
+                title: 'Contact',
+                key: 'contact',
+                render: (_: any, r: any) => (
+                  <div>
+                    <div>{r.phoneNumber || '—'}</div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>{r.address || ''}</div>
+                  </div>
+                ),
+              },
+              {
+                title: 'Status',
+                dataIndex: 'status',
+                key: 'status',
+                render: (v: string) => (
+                  <Tag color={v === 'purchased' ? 'green' : v === 'meeting_scheduled' ? 'purple' : 'blue'}>
+                    {(v || 'NEW').replace('_', ' ').toUpperCase()}
+                  </Tag>
+                ),
+              },
+              {
+                title: 'Source',
+                dataIndex: 'source',
+                key: 'source',
+                render: (v: string) => <Tag>{v || 'Direct'}</Tag>,
+              },
+              {
+                title: 'Reason / Interest',
+                dataIndex: 'reasonForContact',
+                key: 'reasonForContact',
+                render: (v: string) => v || '—',
+              },
+              {
+                title: 'Assigned / Created',
+                key: 'date',
+                render: (_: any, r: any) => dayjs(r.createdAt).format('DD MMM YYYY'),
+              },
+            ]}
+          />
+        )}
+
+        {/* Appointments Table */}
+        {summaryModalType === 'appointments' && (
+          <Table
+            size="small"
+            dataSource={filteredModalData}
+            rowKey="id"
+            pagination={{ pageSize: 8 }}
+            columns={[
+              {
+                title: 'Title / Agenda',
+                key: 'title',
+                render: (_: any, r: any) => <strong>{r.reason || 'Client Appointment'}</strong>,
+              },
+              {
+                title: 'Scheduled Date & Time',
+                key: 'scheduledFor',
+                render: (_: any, r: any) => dayjs(r.scheduledFor).format('DD MMM YYYY, hh:mm A'),
+              },
+              {
+                title: 'Status',
+                dataIndex: 'status',
+                key: 'status',
+                render: (v: string) => (
+                  <Tag color={v === 'completed' ? 'green' : v === 'cancelled' ? 'red' : 'blue'}>
+                    {(v || 'SCHEDULED').toUpperCase()}
+                  </Tag>
+                ),
+              },
+              {
+                title: 'Source',
+                dataIndex: 'source',
+                key: 'source',
+                render: (v: string) => <Tag>{v || 'General'}</Tag>,
+              },
+            ]}
+          />
+        )}
+
+        {/* Attendance Table */}
+        {summaryModalType === 'attendance' && (
+          <Table
+            size="small"
+            dataSource={filteredModalData}
+            rowKey="id"
+            pagination={{ pageSize: 8 }}
+            columns={[
+              {
+                title: 'Date',
+                key: 'date',
+                render: (_: any, r: any) => dayjs(r.clockInTime || r.date).format('DD MMM YYYY'),
+              },
+              {
+                title: 'Clock In',
+                key: 'clockIn',
+                render: (_: any, r: any) => r.clockInTime ? dayjs(r.clockInTime).format('hh:mm A') : '—',
+              },
+              {
+                title: 'Clock Out',
+                key: 'clockOut',
+                render: (_: any, r: any) => r.clockOutTime ? dayjs(r.clockOutTime).format('hh:mm A') : <Tag color="processing">Active</Tag>,
+              },
+              {
+                title: 'Branch',
+                dataIndex: 'branchName',
+                key: 'branch',
+                render: (v: string) => v || 'Head Office',
+              },
+              {
+                title: 'Punctuality Status',
+                key: 'status',
+                render: (_: any, r: any) => (
+                  <Tag color={r.isLate ? 'volcano' : 'green'}>
+                    {r.isLate ? `Late (${r.latenessMinutes} mins)` : 'On Time'}
+                  </Tag>
+                ),
+              },
+            ]}
+          />
+        )}
+
+        {/* Leaves Table */}
+        {summaryModalType === 'leaves' && (
+          <Table
+            size="small"
+            dataSource={filteredModalData}
+            rowKey="id"
+            pagination={{ pageSize: 8 }}
+            columns={[
+              {
+                title: 'Leave Type',
+                dataIndex: 'leaveType',
+                key: 'leaveType',
+                render: (v: string) => <Tag color="blue">{(v || 'Annual').toUpperCase()}</Tag>,
+              },
+              {
+                title: 'Duration',
+                key: 'duration',
+                render: (_: any, r: any) => (
+                  <span>
+                    <strong>{r.totalDays} Days</strong> ({dayjs(r.startDate).format('DD MMM')} – {dayjs(r.endDate).format('DD MMM YYYY')})
+                  </span>
+                ),
+              },
+              {
+                title: 'Reason',
+                dataIndex: 'reason',
+                key: 'reason',
+                render: (v: string) => v || '—',
+              },
+              {
+                title: 'Approval Status',
+                dataIndex: 'status',
+                key: 'status',
+                render: (v: string) => (
+                  <Tag color={v === 'approved' ? 'green' : v === 'rejected' ? 'red' : 'gold'}>
+                    {(v || 'PENDING').toUpperCase()}
+                  </Tag>
+                ),
+              },
+            ]}
+          />
+        )}
+
+        {/* Bonuses Table */}
+        {summaryModalType === 'bonuses' && (
+          <Table
+            size="small"
+            dataSource={filteredModalData}
+            rowKey="id"
+            pagination={{ pageSize: 8 }}
+            columns={[
+              {
+                title: 'Reason / Target',
+                key: 'reason',
+                render: (_: any, r: any) => <strong>{r.reason || r.ruleName}</strong>,
+              },
+              {
+                title: 'Bonus Category',
+                dataIndex: 'bonusType',
+                key: 'bonusType',
+                render: (v: string) => <Tag color="gold">{bonusTypeLabels[v as BonusType] || v || 'Bonus'}</Tag>,
+              },
+              {
+                title: 'Award Amount',
+                key: 'amount',
+                render: (_: any, r: any) => (
+                  <Tag color="green" style={{ fontWeight: 600, fontSize: 13 }}>
+                    + GH₵ {r.amountGHS?.toLocaleString() || ((r.amountMinor || 0) / 100).toLocaleString()}
+                  </Tag>
+                ),
+              },
+              {
+                title: 'Status',
+                dataIndex: 'status',
+                key: 'status',
+                render: (v: string) => <Tag color="green">{(v || 'APPROVED').toUpperCase()}</Tag>,
+              },
+              {
+                title: 'Date Awarded',
+                key: 'date',
+                render: (_: any, r: any) => dayjs(r.earnedAt).format('DD MMM YYYY, hh:mm A'),
+              },
+            ]}
+          />
+        )}
+
+        {/* Payroll Table */}
+        {summaryModalType === 'payroll' && (
+          <Table
+            size="small"
+            dataSource={filteredModalData}
+            rowKey="id"
+            pagination={{ pageSize: 8 }}
+            columns={payrollColumns}
+          />
+        )}
       </Modal>
 
       {/* ── PAYSLIP MODAL ────────────────────────────────────────────────── */}

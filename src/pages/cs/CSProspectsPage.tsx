@@ -30,7 +30,6 @@ import {
   DeleteOutlined,
   StarOutlined,
   StarFilled,
-  MessageOutlined,
   WhatsAppOutlined,
   FileExcelOutlined,
   FileTextOutlined,
@@ -42,8 +41,6 @@ import {
   ArrowRightOutlined,
   HeartOutlined,
   HeartFilled,
-  ShareAltOutlined,
-  PrinterOutlined,
   FlagOutlined,
   FlagFilled,
   GlobalOutlined,
@@ -84,7 +81,12 @@ import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
-import { customerKeys } from '@/api/customers';
+import { customerKeys, useCustomersQuery } from '@/api/customers';
+import {
+  createDuplicatePhoneRule,
+  createDuplicateNameRule,
+  assertNoProspectDuplicates,
+} from '@/utils/duplicateValidation';
 
 dayjs.extend(relativeTime);
 
@@ -99,6 +101,8 @@ export const CSProspectsPage: React.FC = () => {
   const [form] = Form.useForm();
   const [editModal, setEditModal] = useState(false);
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
+  const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
+  const allExistingCustomers = customersData?.items ?? [];
   const [convertModal, setConvertModal] = useState(false);
   const [prospectToConvert, setProspectToConvert] = useState<Prospect | null>(null);
   const [editForm] = Form.useForm();
@@ -274,6 +278,16 @@ export const CSProspectsPage: React.FC = () => {
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleAddProspect = async (values: any) => {
     try {
+      // Hard pre-submission rejection guard
+      assertNoProspectDuplicates(
+        {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+        },
+        { existingProspects: prospects, existingCustomers: allExistingCustomers }
+      );
+
       const { photo, ...prospectValues } = values;
       const payload = {
         ...prospectValues,
@@ -328,6 +342,17 @@ export const CSProspectsPage: React.FC = () => {
   const handleEditProspect = async (values: any) => {
     if (!editingProspect) return;
     try {
+      // Hard pre-submission rejection guard
+      assertNoProspectDuplicates(
+        {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+          excludeId: editingProspect.id,
+        },
+        { existingProspects: prospects, existingCustomers: allExistingCustomers }
+      );
+
       await updateProspect.mutateAsync({
         id: editingProspect.id,
         data: {
@@ -761,15 +786,6 @@ export const CSProspectsPage: React.FC = () => {
             >
               Log Interaction
             </Button>
-            <Button icon={<MessageOutlined />}>
-              Send Message
-            </Button>
-            <Button icon={<PhoneOutlined />}>
-              Call
-            </Button>
-            <Button icon={<ShareAltOutlined />}>
-              Share
-            </Button>
           </Space>
         </div>
 
@@ -984,12 +1000,8 @@ export const CSProspectsPage: React.FC = () => {
           paddingTop: 16, 
           borderTop: '1px solid #f0f0f0',
           display: 'flex',
-          justifyContent: 'space-between'
+          justifyContent: 'flex-end'
         }}>
-          <Space>
-            <Button icon={<PrinterOutlined />}>Print</Button>
-            <Button icon={<ShareAltOutlined />}>Share</Button>
-          </Space>
           <Space>
             <Button 
               type="primary" 
@@ -1241,7 +1253,16 @@ export const CSProspectsPage: React.FC = () => {
               <Form.Item
                 name="firstName"
                 label="First Name"
-                rules={[{ required: true, message: 'First name is required' }]}
+                rules={[
+                  { required: true, message: 'First name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: true,
+                    getOtherName: () => form.getFieldValue('lastName'),
+                    getExistingProspects: () => prospects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input placeholder="First name" />
               </Form.Item>
@@ -1250,7 +1271,16 @@ export const CSProspectsPage: React.FC = () => {
               <Form.Item
                 name="lastName"
                 label="Last Name"
-                rules={[{ required: true, message: 'Last name is required' }]}
+                rules={[
+                  { required: true, message: 'Last name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: false,
+                    getOtherName: () => form.getFieldValue('firstName'),
+                    getExistingProspects: () => prospects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input placeholder="Last name" />
               </Form.Item>
@@ -1268,7 +1298,14 @@ export const CSProspectsPage: React.FC = () => {
           <Form.Item
             name="phoneNumber"
             label="Phone Number"
-            rules={[{ required: true, message: 'Phone number is required' }]}
+            rules={[
+              { required: true, message: 'Phone number is required' },
+              createDuplicatePhoneRule({
+                entityType: 'prospect',
+                getExistingProspects: () => prospects,
+                getExistingCustomers: () => allExistingCustomers,
+              }),
+            ]}
           >
             <PhoneInput />
           </Form.Item>
@@ -1356,7 +1393,17 @@ export const CSProspectsPage: React.FC = () => {
               <Form.Item
                 name="firstName"
                 label="First Name"
-                rules={[{ required: true, message: 'First name is required' }]}
+                rules={[
+                  { required: true, message: 'First name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: true,
+                    excludeId: editingProspect?.id,
+                    getOtherName: () => editForm.getFieldValue('lastName'),
+                    getExistingProspects: () => prospects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input placeholder="First name" />
               </Form.Item>
@@ -1365,7 +1412,17 @@ export const CSProspectsPage: React.FC = () => {
               <Form.Item
                 name="lastName"
                 label="Last Name"
-                rules={[{ required: true, message: 'Last name is required' }]}
+                rules={[
+                  { required: true, message: 'Last name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: false,
+                    excludeId: editingProspect?.id,
+                    getOtherName: () => editForm.getFieldValue('firstName'),
+                    getExistingProspects: () => prospects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input placeholder="Last name" />
               </Form.Item>
@@ -1383,7 +1440,15 @@ export const CSProspectsPage: React.FC = () => {
           <Form.Item
             name="phoneNumber"
             label="Phone Number"
-            rules={[{ required: true, message: 'Phone number is required' }]}
+            rules={[
+              { required: true, message: 'Phone number is required' },
+              createDuplicatePhoneRule({
+                entityType: 'prospect',
+                excludeId: editingProspect?.id,
+                getExistingProspects: () => prospects,
+                getExistingCustomers: () => allExistingCustomers,
+              }),
+            ]}
           >
             <PhoneInput />
           </Form.Item>

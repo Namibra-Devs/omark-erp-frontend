@@ -258,11 +258,11 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    if (hasRole(['marketing_staff', 'marketing_director', 'admin', 'branch_manager'])) {
+    if (hasRole(['marketing_staff', 'marketing_director', 'admin', 'branch_manager', 'secretary'])) {
       items.push({
         key: '/marketing/prospects',
         icon: <UserOutlined />,
-        label: <span>My Prospects<NavBadge count={newProspectsCount} title={`${newProspectsCount} new prospect(s)`} /></span>,
+        label: <span>Mkt prospects<NavBadge count={newProspectsCount} title={`${newProspectsCount} new prospect(s)`} /></span>,
       });
     }
 

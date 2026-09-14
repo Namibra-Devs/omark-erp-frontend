@@ -7,7 +7,9 @@ import { useNavigate } from 'react-router-dom';
 import { Modal, Form, Select, Radio, InputNumber, DatePicker, Button, Space, Alert, message } from 'antd';
 import dayjs from 'dayjs';
 import { useConvertProspectMutation } from '@/api/prospects';
+import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery, formatPropertyPrice } from '@/api/properties';
+import { assertNoCustomerDuplicates, checkCustomerConflicts } from '@/utils/duplicateValidation';
 import type { Prospect, CustomerType } from '@/types';
 
 const { Option } = Select;
@@ -34,7 +36,22 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
   const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 100 });
   const properties = propertiesData?.items ?? [];
 
+  const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
+  const existingCustomers = customersData?.items ?? [];
+
   const convertProspect = useConvertProspectMutation();
+
+  // Check if a customer already exists with the same phone or name
+  const existingCustomerConflicts = prospect
+    ? checkCustomerConflicts(
+        {
+          firstName: prospect.firstName,
+          lastName: prospect.lastName,
+          phoneNumber: prospect.phoneNumber,
+        },
+        { existingCustomers }
+      ).filter((c) => c.target === 'customer')
+    : [];
 
   const handleClose = () => {
     form.resetFields();
@@ -47,6 +64,16 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
     if (!prospect) return;
 
     try {
+      // Hard pre-submission rejection guard
+      assertNoCustomerDuplicates(
+        {
+          firstName: prospect.firstName,
+          lastName: prospect.lastName,
+          phoneNumber: prospect.phoneNumber,
+        },
+        { existingCustomers }
+      );
+
       const createPlan =
         customerType === 'payment_plan'
           ? {
@@ -90,13 +117,32 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
       bodyStyle={{ padding: '16px' }}
       destroyOnClose
     >
-      <Alert
-        type="info"
-        showIcon
-        message="This is a one-way action"
-        description="Once converted, the prospect record becomes a customer and no longer appears in the prospects list. The property, customer type, and payment plan cannot be changed afterwards."
-        style={{ marginBottom: 20 }}
-      />
+      {existingCustomerConflicts.length > 0 ? (
+        <Alert
+          type="error"
+          showIcon
+          message="Duplicate Customer Conflict"
+          description={
+            <div>
+              {existingCustomerConflicts.map((c, i) => (
+                <div key={i}>{c.message}</div>
+              ))}
+              <div style={{ marginTop: 6, fontWeight: 600 }}>
+                Conversion is blocked to prevent creating a duplicate customer profile.
+              </div>
+            </div>
+          }
+          style={{ marginBottom: 20 }}
+        />
+      ) : (
+        <Alert
+          type="info"
+          showIcon
+          message="This is a one-way action"
+          description="Once converted, the prospect record becomes a customer and no longer appears in the prospects list. The property, customer type, and payment plan cannot be changed afterwards."
+          style={{ marginBottom: 20 }}
+        />
+      )}
 
       <Form
         form={form}

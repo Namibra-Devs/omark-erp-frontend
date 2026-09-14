@@ -1,12 +1,11 @@
 // src/pages/portal/PortalDashboardPage.tsx
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Button, Card, Col, Progress, Row, Spin, Statistic, Tag, Typography } from 'antd';
-import { CalendarOutlined, DollarOutlined, HomeOutlined, MessageOutlined, FileTextOutlined, DownloadOutlined, EyeOutlined } from '@ant-design/icons';
+import { Button, Card, Col, Progress, Row, Spin, Statistic, Tag, Typography, Alert, Space } from 'antd';
+import { CalendarOutlined, DollarOutlined, HomeOutlined, MessageOutlined, FileTextOutlined, DownloadOutlined, EyeOutlined, FileProtectOutlined } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
 import { usePortalMeQuery } from '@/api/portal';
 import { useCustomerDocumentsQuery, formatBytes, downloadFile } from '@/api/customerDocuments';
-import { Space } from 'antd';
 
 const { Title, Text } = Typography;
 
@@ -24,6 +23,10 @@ export const PortalDashboardPage: React.FC = () => {
   });
   const documents = documentsData?.items ?? [];
 
+  const activeAgreement = documents.find(
+    (d) => d.category === 'sales_agreement' || Boolean(d.metadata?.agreementData)
+  );
+
   if (isLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
@@ -37,6 +40,37 @@ export const PortalDashboardPage: React.FC = () => {
       <Title level={3} style={{ fontSize: 'clamp(18px, 4vw, 24px)', marginBottom: 16 }}>
         Welcome back, {customer?.firstName || 'Valued Customer'}
       </Title>
+
+      {activeAgreement && (
+        <Alert
+          message={
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+              <div>
+                <strong>
+                  <FileProtectOutlined style={{ marginRight: 6, color: tokens.primary }} />
+                  Official Land Purchase Agreement (Contract of Sale) Issued
+                </strong>
+                <div style={{ fontSize: 13, color: '#475569', marginTop: 2 }}>
+                  Your formal contract of sale and installment schedule is available to view, review, and digitally sign.
+                </div>
+              </div>
+              <Button
+                type="primary"
+                size="small"
+                style={{ backgroundColor: tokens.primary, borderColor: tokens.primary }}
+                onClick={() => navigate('/portal/documents')}
+              >
+                {activeAgreement.metadata?.agreementData?.acknowledgedByCustomer
+                  ? 'View Signed Agreement'
+                  : 'Review & Sign Agreement'}
+              </Button>
+            </div>
+          }
+          type="info"
+          showIcon={false}
+          style={{ marginBottom: 20, borderRadius: 8, border: '1px solid #bfdbfe', background: '#eff6ff' }}
+        />
+      )}
 
       <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
         <Col xs={12} sm={12} lg={6}>

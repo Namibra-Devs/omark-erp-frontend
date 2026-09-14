@@ -9,9 +9,16 @@ import {
   useUpdateCustomerMutation,
   customerKeys,
 } from '@/api/customers';
+import { useProspectsQuery } from '@/api/prospects';
 import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
+import {
+  createDuplicatePhoneRule,
+  createDuplicateNameRule,
+  assertNoCustomerDuplicates,
+} from '@/utils/duplicateValidation';
 import { usePropertiesQuery } from '@/api/properties';
 import { useBranchesQuery } from '@/api/branches';
+import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
 import { cacheCustomerSummaries, clearCustomerCache } from '@/utils/customerPortalCache';
@@ -80,7 +87,7 @@ import { ProgressCell } from '@/components/shared/ProgressCell';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { customerTypeLabels, paymentPlanStatusLabels } from '@/constants/enums';
-import type { Customer, PaymentPlan, PaymentPlanStatus, CustomerType, ProgressBand } from '@/types';
+import type { Customer, PaymentPlan, PaymentPlanStatus, CustomerType, ProgressBand, Prospect } from '@/types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -135,6 +142,12 @@ export const CustomersPage: React.FC = () => {
   const { data: propertiesResponse, isLoading: propertiesLoading } = usePropertiesQuery({
     pageSize: 100,
   });
+
+  const { data: prospectsResponse } = useProspectsQuery({ pageSize: 10000 });
+  const rawProspects: Prospect[] = prospectsResponse?.items ?? [];
+
+  const { data: usersData } = useUsersQuery({ pageSize: 500 });
+  const allStaff = usersData?.items ?? [];
 
   // API Mutations
   const createCustomer = useCreateCustomerMutation();
@@ -570,6 +583,16 @@ export const CustomersPage: React.FC = () => {
 const handleAddCustomer = async (values: any) => {
   try {
     setLoading(true);
+
+    // Hard pre-submission rejection guard
+    assertNoCustomerDuplicates(
+      {
+        firstName: values.firstName,
+        lastName: values.lastName,
+        phoneNumber: values.phoneNumber,
+      },
+      { existingCustomers: rawCustomers, existingProspects: rawProspects }
+    );
     
     // Base customer data — POST /customers only accepts these fields plus
     // an optional createPlan; email/notes/prospectId are not part of the
@@ -672,6 +695,17 @@ const handleAddCustomer = async (values: any) => {
 
     try {
       setLoading(true);
+
+      // Hard pre-submission rejection guard for edits
+      assertNoCustomerDuplicates(
+        {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+          excludeId: selectedCustomer.id,
+        },
+        { existingCustomers: rawCustomers, existingProspects: rawProspects }
+      );
 
       const updated = await updateCustomer.mutateAsync({
         id: selectedCustomer.id,
@@ -940,6 +974,38 @@ const handleAddCustomer = async (values: any) => {
           {getCustomerTypeDisplay(type)}
         </Tag>
       ),
+    },
+    {
+      title: 'Added By',
+      key: 'addedBy',
+      width: 170,
+      render: (_: any, record: Customer) => {
+        let staffId = (record as any).assignedUserId || (record as any).createdByUserId;
+        if (!staffId && record.prospectId) {
+          const linkedProspect = rawProspects.find((p) => p.id === record.prospectId);
+          if (linkedProspect) staffId = linkedProspect.assignedUserId || (linkedProspect as any).createdByUserId;
+        }
+        const staff = allStaff.find((s) => s.id === staffId);
+        if (!staff) {
+          return <Tag color="default">Direct Sales</Tag>;
+        }
+        return (
+          <Space size={6}>
+            <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
+            <div>
+              <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                {getUserFullName(staff)}
+              </Text>
+              <Tag
+                color={staff.role === 'marketing_director' ? 'gold' : staff.role === 'marketing_staff' ? 'blue' : 'cyan'}
+                style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+              >
+                {staff.role === 'marketing_director' ? 'Director' : staff.role === 'marketing_staff' ? 'Marketing' : staff.role}
+              </Tag>
+            </div>
+          </Space>
+        );
+      },
     },
     {
       title: 'Progress',
@@ -1372,7 +1438,16 @@ const handleAddCustomer = async (values: any) => {
               <Form.Item
                 name="firstName"
                 label="First Name"
-                rules={[{ required: true, message: 'First name is required' }]}
+                rules={[
+                  { required: true, message: 'First name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'customer',
+                    isFirstName: true,
+                    getOtherName: () => addForm.getFieldValue('lastName'),
+                    getExistingCustomers: () => rawCustomers,
+                    getExistingProspects: () => rawProspects,
+                  }),
+                ]}
               >
                 <Input placeholder="First name" />
               </Form.Item>
@@ -1381,7 +1456,16 @@ const handleAddCustomer = async (values: any) => {
               <Form.Item
                 name="lastName"
                 label="Last Name"
-                rules={[{ required: true, message: 'Last name is required' }]}
+                rules={[
+                  { required: true, message: 'Last name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'customer',
+                    isFirstName: false,
+                    getOtherName: () => addForm.getFieldValue('firstName'),
+                    getExistingCustomers: () => rawCustomers,
+                    getExistingProspects: () => rawProspects,
+                  }),
+                ]}
               >
                 <Input placeholder="Last name" />
               </Form.Item>
@@ -1391,7 +1475,14 @@ const handleAddCustomer = async (values: any) => {
           <Form.Item
             name="phoneNumber"
             label="Phone Number"
-            rules={[{ required: true, message: 'Phone number is required' }]}
+            rules={[
+              { required: true, message: 'Phone number is required' },
+              createDuplicatePhoneRule({
+                entityType: 'customer',
+                getExistingCustomers: () => rawCustomers,
+                getExistingProspects: () => rawProspects,
+              }),
+            ]}
           >
             <PhoneInput />
           </Form.Item>
@@ -1717,7 +1808,17 @@ const handleAddCustomer = async (values: any) => {
                         <Form.Item
                           name="firstName"
                           label="First Name"
-                          rules={[{ required: true, message: 'First name is required' }]}
+                          rules={[
+                            { required: true, message: 'First name is required' },
+                            createDuplicateNameRule({
+                              entityType: 'customer',
+                              isFirstName: true,
+                              excludeId: selectedCustomer?.id,
+                              getOtherName: () => form.getFieldValue('lastName'),
+                              getExistingCustomers: () => rawCustomers,
+                              getExistingProspects: () => rawProspects,
+                            }),
+                          ]}
                         >
                           <Input placeholder="First name" />
                         </Form.Item>
@@ -1726,7 +1827,17 @@ const handleAddCustomer = async (values: any) => {
                         <Form.Item
                           name="lastName"
                           label="Last Name"
-                          rules={[{ required: true, message: 'Last name is required' }]}
+                          rules={[
+                            { required: true, message: 'Last name is required' },
+                            createDuplicateNameRule({
+                              entityType: 'customer',
+                              isFirstName: false,
+                              excludeId: selectedCustomer?.id,
+                              getOtherName: () => form.getFieldValue('firstName'),
+                              getExistingCustomers: () => rawCustomers,
+                              getExistingProspects: () => rawProspects,
+                            }),
+                          ]}
                         >
                           <Input placeholder="Last name" />
                         </Form.Item>
@@ -1736,7 +1847,15 @@ const handleAddCustomer = async (values: any) => {
                     <Form.Item
                       name="phoneNumber"
                       label="Phone Number"
-                      rules={[{ required: true, message: 'Phone number is required' }]}
+                      rules={[
+                        { required: true, message: 'Phone number is required' },
+                        createDuplicatePhoneRule({
+                          entityType: 'customer',
+                          excludeId: selectedCustomer?.id,
+                          getExistingCustomers: () => rawCustomers,
+                          getExistingProspects: () => rawProspects,
+                        }),
+                      ]}
                     >
                       <PhoneInput />
                     </Form.Item>

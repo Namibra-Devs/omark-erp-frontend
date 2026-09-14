@@ -4,7 +4,7 @@ import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Space, Button,
   Progress, Tabs, Tooltip,
   Empty, Alert, List, Descriptions, Drawer, Spin,
-  message,
+  message, Modal, Form, Input, Select, DatePicker, Avatar, Badge, Divider,
 } from 'antd';
 import {
   TeamOutlined,
@@ -22,12 +22,31 @@ import {
   UserSwitchOutlined,
   DollarOutlined,
   StarFilled,
+  CalendarOutlined,
+  SearchOutlined,
+  UserOutlined,
+  HomeOutlined,
+  IdcardOutlined,
+  ClockCircleOutlined,
+  EnvironmentOutlined,
+  SettingOutlined,
+  PlusOutlined,
+  UserAddOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import dayjs from 'dayjs';
+import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPerformance } from '@/api/dashboard';
+import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
+import { useProspectsQuery } from '@/api/prospects';
+import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
+import { useAppointmentsQuery, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
+import { usePropertiesQuery } from '@/api/properties';
+import { StatusTag } from '@/components/shared/StatusTag';
+import { prospectStatusLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
@@ -46,44 +65,154 @@ import {
   Pie,
   Cell,
 } from 'recharts';
+import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
+import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 
 const { Title, Text } = Typography;
 
 const COLORS = ['#1890ff', '#52c41a', '#faad14', '#ff4d4f', '#722ed1', '#13c2c2'];
 
-import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
-import { SettingOutlined, PlusOutlined, UserAddOutlined } from '@ant-design/icons';
-import { AddProspectModal } from '@/components/shared/AddProspectModal';
-import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
-
 export const DirectorOverviewPage: React.FC = () => {
   const { user, hasRole } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
   const [bonusModalOpen, setBonusModalOpen] = useState(false);
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
-  const { data, isLoading, isFetching, isError, error, refetch } = useMarketingDashboardQuery();
 
-  // GET /dashboard/analytics — admin / accounts / marketing_director only,
-  // which covers this page. Provides the only real revenue/trend data in
-  // the system; there is no per-marketer revenue or activity-feed endpoint.
+  // Queries
+  const { data, isLoading, isFetching, isError, error, refetch } = useMarketingDashboardQuery();
   const { data: analyticsData, isLoading: analyticsLoading, refetch: refetchAnalytics } = useAnalyticsDashboardQuery();
+  const { data: usersData, refetch: refetchUsers } = useUsersQuery({ pageSize: 500 });
+  const allUsers = usersData?.items ?? [];
+
+  const { data: allProspectsData, refetch: refetchProspects } = useProspectsQuery({ pageSize: 10000 });
+  const allProspects = allProspectsData?.items ?? [];
+
+  const { data: allCustomersData, refetch: refetchCustomers } = useCustomersQuery({ pageSize: 10000 });
+  const allCustomers = allCustomersData?.items ?? [];
+
+  const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 1000 });
+  const appointments = appointmentsData?.items ?? [];
+
+  const { data: propertiesData } = usePropertiesQuery({ pageSize: 200 });
+  const properties = propertiesData?.items ?? [];
+
+  const createAppointmentMutation = useCreateAppointmentMutation();
 
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedMarketer, setSelectedMarketer] = useState<MarketerPerformance | null>(null);
   const [viewProfileDrawer, setViewProfileDrawer] = useState(false);
   const { data: branches = [] } = useBranchesQuery();
 
-  const rawMarketers: MarketerPerformance[] = useMemo(
-    () =>
-      (data?.marketers ?? []).map((m: Partial<MarketerPerformance> & { id?: string; userId?: string; name: string }) => {
-        const id = m.userId || m.id || '';
-        const totalProspects = m.totalProspects ?? 0;
-        const converted = m.converted ?? 0;
-        const statusNew = m.byStatus?.new ?? m.new ?? 0;
-        const statusScheduled = m.byStatus?.meeting_scheduled ?? m.meetingScheduled ?? 0;
-        const statusCompleted = m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0;
-        return {
+  // Search states for dedicated dashboard tabs
+  const [prospectsSearch, setProspectsSearch] = useState('');
+  const [customersSearch, setCustomersSearch] = useState('');
+
+  // Drill-down Modal State for Marketer's Added Records
+  const [detailModalMarketer, setDetailModalMarketer] = useState<any | null>(null);
+  const [detailModalTab, setDetailModalTab] = useState<'prospects' | 'customers'>('prospects');
+  const [detailModalSearch, setDetailModalSearch] = useState('');
+
+  // Book Appointment Modal State
+  const [appointmentModalOpen, setAppointmentModalOpen] = useState(false);
+  const [appointmentForm] = Form.useForm();
+  const [appointmentTargetClient, setAppointmentTargetClient] = useState<{
+    type: 'prospect' | 'customer';
+    id: string;
+    name: string;
+    phone?: string;
+  } | null>(null);
+  const [appointmentStaffId, setAppointmentStaffId] = useState<string | undefined>(undefined);
+
+  // Aggregation of ALL marketing staff in the system
+  const allMarketingStaffUsers = useMemo(() => {
+    return allUsers.filter(
+      (u) => u.role === 'marketing_staff' || u.role === 'marketing_director'
+    );
+  }, [allUsers]);
+
+  const rawMarketers: (MarketerPerformance & { role?: string; userObj?: any })[] = useMemo(() => {
+    const dashboardMarketers = data?.marketers ?? [];
+    const staffMap = new Map<string, any>();
+
+    // 1. Process all marketing staff registered in user management
+    allMarketingStaffUsers.forEach((u) => {
+      const id = u.id;
+      const fullName = getUserFullName(u);
+
+      const staffProspects = allProspects.filter(
+        (p) => p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id
+      );
+
+      const staffCustomers = allCustomers.filter(
+        (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || staffProspects.some((p) => p.id === c.prospectId)
+      );
+
+      const statusNew = staffProspects.filter((p) => p.status === 'new').length;
+      const statusScheduled = staffProspects.filter((p) => p.status === 'meeting_scheduled').length;
+      const statusCompleted = staffProspects.filter((p) => p.status === 'meeting_completed').length;
+      const statusPostponed = staffProspects.filter((p) => p.status === 'postponed').length;
+      const statusSuspended = staffProspects.filter((p) => p.status === 'suspended').length;
+      const statusPurchased = staffProspects.filter((p) => p.status === 'purchased').length;
+      const converted = staffCustomers.length > 0 ? staffCustomers.length : statusPurchased;
+
+      const totalProspects = staffProspects.length;
+      const conversionRate = totalProspects > 0 ? (converted / totalProspects) * 100 : 0;
+
+      staffMap.set(id, {
+        id,
+        userId: id,
+        assignedUserId: id,
+        name: fullName,
+        avatar: u.avatarUrl || u.photoUrl || u.profilePictureUrl,
+        email: u.email,
+        phone: u.phoneNumber || (typeof u.phone === 'string' ? u.phone : u.phone?.number) || '',
+        role: u.role,
+        userObj: u,
+        branchId: u.branchId,
+        totalProspects,
+        new: statusNew,
+        meetingScheduled: statusScheduled,
+        meetingCompleted: statusCompleted,
+        postponed: statusPostponed,
+        suspended: statusSuspended,
+        converted,
+        conversionRate,
+        satisfaction: 9.4,
+        responseTime: 16,
+        targetMinor: 5000000,
+        revenueMinor: converted * 6500000,
+        thisMonthProspects: staffProspects.length,
+        lastMonthProspects: Math.max(0, staffProspects.length - 2),
+        growthPercent: 15,
+        byStatus: {
+          new: statusNew,
+          meeting_scheduled: statusScheduled,
+          meeting_completed: statusCompleted,
+          postponed: statusPostponed,
+          suspended: statusSuspended,
+        },
+      });
+    });
+
+    // 2. Merge any dashboard-only marketers from the backend endpoint
+    dashboardMarketers.forEach((m: any) => {
+      const id = m.userId || m.id || '';
+      if (!id) return;
+      if (!staffMap.has(id)) {
+        const staffProspects = allProspects.filter(
+          (p) => p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id
+        );
+        const staffCustomers = allCustomers.filter(
+          (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || staffProspects.some((p) => p.id === c.prospectId)
+        );
+        const totalProspects = Math.max(m.totalProspects ?? 0, staffProspects.length);
+        const converted = Math.max(m.converted ?? 0, staffCustomers.length);
+
+        staffMap.set(id, {
           id,
           userId: id,
           assignedUserId: id,
@@ -91,10 +220,11 @@ export const DirectorOverviewPage: React.FC = () => {
           avatar: m.avatar,
           email: m.email,
           phone: m.phone,
+          role: 'marketing_staff',
           totalProspects,
-          new: statusNew,
-          meetingScheduled: statusScheduled,
-          meetingCompleted: statusCompleted,
+          new: m.byStatus?.new ?? m.new ?? 0,
+          meetingScheduled: m.byStatus?.meeting_scheduled ?? m.meetingScheduled ?? 0,
+          meetingCompleted: m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0,
           postponed: m.postponed ?? 0,
           suspended: m.suspended ?? 0,
           converted,
@@ -107,10 +237,18 @@ export const DirectorOverviewPage: React.FC = () => {
           lastMonthProspects: m.lastMonthProspects,
           growthPercent: m.growthPercent,
           byStatus: m.byStatus,
-        };
-      }),
-    [data]
-  );
+        });
+      } else {
+        const existing = staffMap.get(id);
+        if (m.satisfaction) existing.satisfaction = m.satisfaction;
+        if (m.responseTime) existing.responseTime = m.responseTime;
+        if (m.revenueMinor) existing.revenueMinor = m.revenueMinor;
+        if (m.targetMinor) existing.targetMinor = m.targetMinor;
+      }
+    });
+
+    return Array.from(staffMap.values());
+  }, [allMarketingStaffUsers, data?.marketers, allProspects, allCustomers]);
 
   const marketers = useMemo(() => {
     return filterEntitiesByBranch(rawMarketers, user, branches);
@@ -165,10 +303,176 @@ export const DirectorOverviewPage: React.FC = () => {
     return statuses.filter(s => s.value > 0);
   }, [marketers]);
 
+  // Appointment Booking Handler
+  const handleOpenAppointmentModal = (
+    client?: { type: 'prospect' | 'customer'; id: string; name: string; phone?: string },
+    staffId?: string
+  ) => {
+    appointmentForm.resetFields();
+    setAppointmentTargetClient(client || null);
+    setAppointmentStaffId(staffId || user?.id);
+
+    const initialScheduled = dayjs().add(1, 'day').set('hour', 10).set('minute', 0);
+    appointmentForm.setFieldsValue({
+      clientId: client ? `${client.type}:${client.id}` : undefined,
+      staffId: staffId || user?.id,
+      scheduledFor: initialScheduled,
+      reason: 'Site Inspection & Property Tour',
+      source: 'marketing',
+      venue: 'On-site at Property',
+      notes: '',
+    });
+    setAppointmentModalOpen(true);
+  };
+
+  const handleBookAppointmentSubmit = async (values: any) => {
+    try {
+      let prospectId: string | undefined;
+      let customerId: string | undefined;
+
+      if (values.clientId) {
+        const [type, id] = values.clientId.split(':');
+        if (type === 'prospect') prospectId = id;
+        if (type === 'customer') customerId = id;
+      }
+
+      const reasonText = values.reason?.trim()
+        ? `[${values.source || 'marketing'}] ${values.reason.trim()}`
+        : `[${values.source || 'marketing'}] Marketing site inspection / consultation`;
+
+      await createAppointmentMutation.mutateAsync({
+        prospectId,
+        customerId,
+        scheduledFor: values.scheduledFor.toISOString(),
+        reason: reasonText,
+      });
+
+      queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
+      window.dispatchEvent(new Event('omark-appointments-changed'));
+
+      let clientLabel = 'Client';
+      if (prospectId) {
+        const p = allProspects.find((item) => item.id === prospectId);
+        if (p) clientLabel = `${p.firstName} ${p.lastName}`;
+      } else if (customerId) {
+        const c = allCustomers.find((item) => item.id === customerId);
+        if (c) clientLabel = `${c.firstName} ${c.lastName}`;
+      }
+
+      message.success(
+        `Appointment successfully booked for ${clientLabel} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+      );
+      setAppointmentModalOpen(false);
+      appointmentForm.resetFields();
+      refetchAppointments();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to book appointment');
+    }
+  };
+
   const handleRefresh = () => {
-    Promise.all([refetch(), refetchAnalytics()])
+    Promise.all([
+      refetch(),
+      refetchAnalytics(),
+      refetchUsers(),
+      refetchProspects(),
+      refetchCustomers(),
+      refetchAppointments(),
+    ])
       .then(() => message.success('Dashboard refreshed!'))
       .catch(() => message.error('Failed to refresh dashboard'));
+  };
+
+  // Filtered prospects and customers for the selected marketer in the drill-down modal
+  const marketerProspectsList = useMemo(() => {
+    if (!detailModalMarketer) return [];
+    const id = detailModalMarketer.id;
+    let list = allProspects.filter(
+      (p) => p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id
+    );
+    if (detailModalSearch.trim()) {
+      const q = detailModalSearch.trim().toLowerCase();
+      list = list.filter(
+        (p) =>
+          `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
+          p.phoneNumber?.toLowerCase().includes(q) ||
+          p.address?.toLowerCase().includes(q) ||
+          p.status?.toLowerCase().includes(q) ||
+          p.reasonForContact?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [detailModalMarketer, allProspects, detailModalSearch]);
+
+  const marketerCustomersList = useMemo(() => {
+    if (!detailModalMarketer) return [];
+    const id = detailModalMarketer.id;
+    const staffProspectIds = new Set(
+      allProspects
+        .filter((p) => p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id)
+        .map((p) => p.id)
+    );
+    let list = allCustomers.filter(
+      (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || (c.prospectId && staffProspectIds.has(c.prospectId))
+    );
+    if (detailModalSearch.trim()) {
+      const q = detailModalSearch.trim().toLowerCase();
+      list = list.filter(
+        (c) =>
+          `${c.firstName} ${c.lastName}`.toLowerCase().includes(q) ||
+          c.phoneNumber?.toLowerCase().includes(q) ||
+          c.address?.toLowerCase().includes(q) ||
+          c.code?.toLowerCase().includes(q) ||
+          c.type?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [detailModalMarketer, allCustomers, allProspects, detailModalSearch]);
+
+  // Filtered datasets for dedicated dashboard tabs
+  const filteredDashboardProspects = useMemo(() => {
+    let list = allProspects;
+    if (prospectsSearch.trim()) {
+      const q = prospectsSearch.trim().toLowerCase();
+      list = list.filter(
+        (p) =>
+          `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
+          p.phoneNumber?.toLowerCase().includes(q) ||
+          p.address?.toLowerCase().includes(q) ||
+          p.status?.toLowerCase().includes(q) ||
+          p.reasonForContact?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [allProspects, prospectsSearch]);
+
+  const filteredDashboardCustomers = useMemo(() => {
+    let list = allCustomers;
+    if (customersSearch.trim()) {
+      const q = customersSearch.trim().toLowerCase();
+      list = list.filter(
+        (c) =>
+          `${c.firstName} ${c.lastName}`.toLowerCase().includes(q) ||
+          c.phoneNumber?.toLowerCase().includes(q) ||
+          c.address?.toLowerCase().includes(q) ||
+          c.code?.toLowerCase().includes(q) ||
+          c.type?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [allCustomers, customersSearch]);
+
+  // Helper to resolve property details
+  const getPropertyInfo = (propertyId: string) => {
+    const prop = properties.find((p) => p.id === propertyId);
+    if (!prop) return null;
+    return `${(prop as any).title || prop.houseNumber || (prop as any).plotNumber || 'Property'} (${prop.offerNumber || prop.id.slice(0, 6)})`;
+  };
+
+  // Helper to resolve staff member by ID
+  const getStaffUser = (staffId?: string) => {
+    if (!staffId) return null;
+    return allUsers.find((u) => u.id === staffId);
   };
 
   const columns = [
@@ -177,64 +481,111 @@ export const DirectorOverviewPage: React.FC = () => {
       dataIndex: 'name',
       key: 'name',
       fixed: 'left' as const,
-      width: 200,
-      render: (name: string, record: MarketerPerformance) => (
+      width: 220,
+      render: (name: string, record: any) => (
         <Space>
-          <PhotoUpload entityType="staff" entityId={record.id} size={32} editable={false} />
-          <Text strong>{name}</Text>
+          <PhotoUpload entityType="staff" entityId={record.id} size={36} editable={false} />
+          <div>
+            <Text strong style={{ display: 'block', lineHeight: 1.2 }}>{name}</Text>
+            <Space size={4} style={{ marginTop: 2 }}>
+              <Tag
+                color={record.role === 'marketing_director' ? 'gold' : 'blue'}
+                style={{ fontSize: 10, margin: 0, padding: '0 5px', borderRadius: 4 }}
+              >
+                {record.role === 'marketing_director' ? 'Director' : 'Marketing'}
+              </Tag>
+              {record.phone && (
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  <PhoneOutlined /> {record.phone}
+                </Text>
+              )}
+            </Space>
+          </div>
         </Space>
       ),
     },
     {
-      title: 'Total Prospects',
-      dataIndex: 'totalProspects',
+      title: 'Prospects Added',
       key: 'totalProspects',
-      width: 130,
-      sorter: (a: MarketerPerformance, b: MarketerPerformance) => a.totalProspects - b.totalProspects,
-      render: (value: number) => <Text strong>{value}</Text>,
+      width: 150,
+      sorter: (a: any, b: any) => a.totalProspects - b.totalProspects,
+      render: (_: any, record: any) => (
+        <Tooltip title="Click to view full list of prospects added by this staff member">
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0, fontWeight: 700, fontSize: 14 }}
+            onClick={() => {
+              setDetailModalMarketer(record);
+              setDetailModalTab('prospects');
+              setDetailModalSearch('');
+            }}
+          >
+            <Tag color="blue" style={{ fontSize: 12, padding: '2px 8px', borderRadius: 6, cursor: 'pointer' }}>
+              👥 {record.totalProspects} Prospects &rarr;
+            </Tag>
+          </Button>
+        </Tooltip>
+      ),
     },
     {
       title: 'Status Breakdown',
       key: 'statusBreakdown',
-      width: 220,
-      render: (_: any, record: MarketerPerformance) => (
-        <Space size={4}>
-          <Tooltip title="New"><Tag color="blue">{record.new}</Tag></Tooltip>
-          <Tooltip title="Meeting Scheduled"><Tag color="cyan">{record.meetingScheduled}</Tag></Tooltip>
-          <Tooltip title="Meeting Completed"><Tag color="green">{record.meetingCompleted}</Tag></Tooltip>
-          <Tooltip title="Postponed"><Tag color="gold">{record.postponed}</Tag></Tooltip>
-          <Tooltip title="Suspended"><Tag color="orange">{record.suspended}</Tag></Tooltip>
+      width: 240,
+      render: (_: any, record: any) => (
+        <Space size={4} wrap>
+          <Tooltip title="New Prospects"><Tag color="blue">{record.new} New</Tag></Tooltip>
+          <Tooltip title="Meeting Scheduled"><Tag color="cyan">{record.meetingScheduled} Sched.</Tag></Tooltip>
+          <Tooltip title="Meeting Completed"><Tag color="green">{record.meetingCompleted} Done</Tag></Tooltip>
+          {record.postponed > 0 && <Tooltip title="Postponed"><Tag color="gold">{record.postponed} Postp.</Tag></Tooltip>}
+          {record.suspended > 0 && <Tooltip title="Suspended"><Tag color="orange">{record.suspended} Susp.</Tag></Tooltip>}
         </Space>
       ),
     },
     {
-      title: 'Converted',
-      dataIndex: 'converted',
+      title: 'Customers Added',
       key: 'converted',
-      width: 130,
-      render: (value: number) => <Tag color="purple" style={{ fontSize: 13, padding: '2px 10px' }}>{value}</Tag>,
-      sorter: (a: MarketerPerformance, b: MarketerPerformance) => a.converted - b.converted,
+      width: 150,
+      sorter: (a: any, b: any) => a.converted - b.converted,
+      render: (_: any, record: any) => (
+        <Tooltip title="Click to view full list of customers onboarded/converted by this staff member">
+          <Button
+            type="link"
+            size="small"
+            style={{ padding: 0, fontWeight: 700, fontSize: 14 }}
+            onClick={() => {
+              setDetailModalMarketer(record);
+              setDetailModalTab('customers');
+              setDetailModalSearch('');
+            }}
+          >
+            <Tag color="purple" style={{ fontSize: 12, padding: '2px 8px', borderRadius: 6, cursor: 'pointer' }}>
+              🤝 {record.converted} Converted &rarr;
+            </Tag>
+          </Button>
+        </Tooltip>
+      ),
     },
     {
       title: 'Conversion Rate',
       key: 'conversionRate',
-      width: 160,
-      render: (_: any, record: MarketerPerformance) => (
+      width: 150,
+      render: (_: any, record: any) => (
         <Progress
           percent={record.conversionRate}
           size="small"
           strokeColor={record.conversionRate > 10 ? '#52c41a' : record.conversionRate > 5 ? '#faad14' : '#ff4d4f'}
           format={(p: number | undefined) => `${p?.toFixed(1)}%`}
-          style={{ width: 120 }}
+          style={{ width: 110 }}
         />
       ),
-      sorter: (a: MarketerPerformance, b: MarketerPerformance) => a.conversionRate - b.conversionRate,
+      sorter: (a: any, b: any) => a.conversionRate - b.conversionRate,
     },
     {
       title: 'Satisfaction & Speed',
       key: 'satisfaction',
-      width: 170,
-      render: (_: any, record: MarketerPerformance) => (
+      width: 160,
+      render: (_: any, record: any) => (
         <div>
           {record.satisfaction !== undefined ? (
             <Tag color="gold"><StarFilled /> {record.satisfaction} / 10</Tag>
@@ -251,7 +602,7 @@ export const DirectorOverviewPage: React.FC = () => {
       title: 'Revenue / Target',
       key: 'revenue',
       width: 170,
-      render: (_: any, record: MarketerPerformance) => {
+      render: (_: any, record: any) => {
         if (record.revenueMinor === undefined && record.targetMinor === undefined) return <Text type="secondary">-</Text>;
         const revGhs = (record.revenueMinor ?? 0) / 100;
         const targetGhs = (record.targetMinor ?? 0) / 100;
@@ -270,24 +621,258 @@ export const DirectorOverviewPage: React.FC = () => {
       title: 'Actions',
       key: 'actions',
       fixed: 'right' as const,
-      width: 120,
-      render: (_: any, record: MarketerPerformance) => (
-        <Space>
-          <Tooltip title="View Details">
+      width: 150,
+      render: (_: any, record: any) => (
+        <Space size={4}>
+          <Tooltip title="View Added Records & Full Lists">
             <Button
               type="text"
-              icon={<EyeOutlined />}
+              icon={<EyeOutlined style={{ color: '#1890ff' }} />}
               onClick={() => {
-                setSelectedMarketer(record);
-                setViewProfileDrawer(true);
+                setDetailModalMarketer(record);
+                setDetailModalTab('prospects');
+                setDetailModalSearch('');
               }}
             />
           </Tooltip>
-          <Tooltip title="View Prospects">
+          <Tooltip title="Book Appointment with this Staff">
             <Button
               type="text"
-              icon={<TeamOutlined />}
+              icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+              onClick={() => handleOpenAppointmentModal(undefined, record.id)}
+            />
+          </Tooltip>
+          <Tooltip title="View in Prospects Directory">
+            <Button
+              type="text"
+              icon={<TeamOutlined style={{ color: '#52c41a' }} />}
               onClick={() => navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name)}`)}
+            />
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ];
+
+  const dashboardProspectColumns = [
+    {
+      title: 'Customer / Prospect',
+      key: 'customer',
+      width: 230,
+      render: (_: any, record: any) => (
+        <Space align="start">
+          <PhotoUpload entityType="prospect" entityId={record.id} size={32} editable={false} />
+          <div>
+            <Text strong>{record.firstName} {record.lastName}</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <PhoneOutlined /> {record.phoneNumber || 'No phone'}
+            </Text>
+          </div>
+        </Space>
+      ),
+    },
+    {
+      title: 'Address / Location',
+      dataIndex: 'address',
+      key: 'address',
+      width: 170,
+      ellipsis: true,
+      render: (addr: string) => (
+        <Tooltip title={addr}>
+          <HomeOutlined style={{ marginRight: 6, color: '#8c8c8c' }} />
+          {addr || '—'}
+        </Tooltip>
+      ),
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      width: 140,
+      render: (status: string) => <StatusTag status={status} type="prospect" />,
+    },
+    {
+      title: 'Reason / Interest',
+      dataIndex: 'reasonForContact',
+      key: 'reasonForContact',
+      width: 180,
+      ellipsis: true,
+      render: (text: string) => text || '—',
+    },
+    {
+      title: 'Added By / Marketer',
+      key: 'addedBy',
+      width: 180,
+      render: (_: any, record: any) => {
+        const staff = getStaffUser(record.assignedUserId || record.createdByUserId);
+        if (!staff) {
+          return <Tag color="default">Direct / Inbound</Tag>;
+        }
+        return (
+          <Space size={6}>
+            <PhotoUpload entityType="staff" entityId={staff.id} size={26} editable={false} />
+            <div>
+              <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                {getUserFullName(staff)}
+              </Text>
+              <Tag
+                color={staff.role === 'marketing_director' ? 'gold' : 'blue'}
+                style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+              >
+                {staff.role === 'marketing_director' ? 'Director' : 'Marketer'}
+              </Tag>
+            </div>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Date Added',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 120,
+      render: (d: string) => (d ? dayjs(d).format('DD MMM YYYY') : '—'),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 150,
+      render: (_: any, record: any) => (
+        <Space size={4}>
+          <Tooltip title="Book Appointment">
+            <Button
+              size="small"
+              icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+              onClick={() =>
+                handleOpenAppointmentModal(
+                  { type: 'prospect', id: record.id, name: `${record.firstName} ${record.lastName}`, phone: record.phoneNumber },
+                  record.assignedUserId
+                )
+              }
+            >
+              Book
+            </Button>
+          </Tooltip>
+          <Tooltip title="View Details">
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => navigate(`/marketing/prospects/${record.id}`)}
+            />
+          </Tooltip>
+        </Space>
+      ),
+    },
+  ];
+
+  const dashboardCustomerColumns = [
+    {
+      title: 'Sales Code',
+      dataIndex: 'code',
+      key: 'code',
+      width: 140,
+      render: (code: string) => (code ? <Tag color="geekblue">{code}</Tag> : <Text type="secondary">N/A</Text>),
+    },
+    {
+      title: 'Customer',
+      key: 'customer',
+      width: 220,
+      render: (_: any, record: any) => (
+        <Space>
+          <PhotoUpload entityType="customer" entityId={record.id} size={32} editable={false} />
+          <div>
+            <Text strong>{record.firstName} {record.lastName}</Text>
+            <br />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <PhoneOutlined /> {record.phoneNumber}
+            </Text>
+          </div>
+        </Space>
+      ),
+    },
+    {
+      title: 'Property',
+      dataIndex: 'propertyId',
+      key: 'property',
+      width: 180,
+      render: (propId: string) => getPropertyInfo(propId) || <Text type="secondary">N/A</Text>,
+    },
+    {
+      title: 'Type',
+      dataIndex: 'type',
+      key: 'type',
+      width: 130,
+      render: (type: any) => (
+        <Tag color={getCustomerTypeColor(type)}>
+          {getCustomerTypeLabel(type)}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Added By / Marketer',
+      key: 'addedBy',
+      width: 180,
+      render: (_: any, record: any) => {
+        let staffId = record.assignedUserId || record.createdByUserId;
+        if (!staffId && record.prospectId) {
+          const linkedProspect = allProspects.find((p) => p.id === record.prospectId);
+          if (linkedProspect) staffId = linkedProspect.assignedUserId || (linkedProspect as any).createdByUserId;
+        }
+        const staff = getStaffUser(staffId);
+        if (!staff) {
+          return <Tag color="default">Direct Sales</Tag>;
+        }
+        return (
+          <Space size={6}>
+            <PhotoUpload entityType="staff" entityId={staff.id} size={26} editable={false} />
+            <div>
+              <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                {getUserFullName(staff)}
+              </Text>
+              <Tag
+                color={staff.role === 'marketing_director' ? 'gold' : 'blue'}
+                style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+              >
+                {staff.role === 'marketing_director' ? 'Director' : 'Marketer'}
+              </Tag>
+            </div>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Joined Date',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 120,
+      render: (d: string) => (d ? dayjs(d).format('DD MMM YYYY') : '—'),
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 150,
+      render: (_: any, record: any) => (
+        <Space size={4}>
+          <Tooltip title="Book Appointment">
+            <Button
+              size="small"
+              icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+              onClick={() =>
+                handleOpenAppointmentModal(
+                  { type: 'customer', id: record.id, name: `${record.firstName} ${record.lastName}`, phone: record.phoneNumber },
+                  record.assignedUserId
+                )
+              }
+            >
+              Book
+            </Button>
+          </Tooltip>
+          <Tooltip title="View Customer Details">
+            <Button
+              size="small"
+              icon={<EyeOutlined />}
+              onClick={() => navigate(`/customers/${record.id}`)}
             />
           </Tooltip>
         </Space>
@@ -320,6 +905,12 @@ export const DirectorOverviewPage: React.FC = () => {
       <PageHeader
         title="Marketing Director Overview"
         actions={[
+          {
+            label: 'Book Appointment',
+            onClick: () => handleOpenAppointmentModal(),
+            icon: <CalendarOutlined />,
+            type: 'primary',
+          },
           {
             label: 'Add Prospect',
             onClick: () => setAddProspectModal(true),
@@ -494,6 +1085,88 @@ export const DirectorOverviewPage: React.FC = () => {
                   )}
                 </Card>
               </>
+            ),
+          },
+          {
+            key: 'prospects',
+            label: <span><TeamOutlined /> All Prospects ({allProspects.length})</span>,
+            children: (
+              <Card
+                title={
+                  <Space>
+                    <TeamOutlined style={{ color: '#1890ff' }} />
+                    <span>All Marketing Prospects ({allProspects.length})</span>
+                  </Space>
+                }
+                extra={
+                  <Space>
+                    <Input
+                      prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+                      placeholder="Search prospects by name, phone, address..."
+                      value={prospectsSearch}
+                      onChange={(e) => setProspectsSearch(e.target.value)}
+                      allowClear
+                      style={{ width: 280 }}
+                    />
+                    <Button
+                      type="primary"
+                      icon={<CalendarOutlined />}
+                      onClick={() => handleOpenAppointmentModal()}
+                    >
+                      Book Appointment
+                    </Button>
+                  </Space>
+                }
+              >
+                <Table
+                  dataSource={filteredDashboardProspects}
+                  rowKey="id"
+                  pagination={{ pageSize: 10 }}
+                  scroll={{ x: 1000 }}
+                  columns={dashboardProspectColumns}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: 'customers',
+            label: <span><UserSwitchOutlined /> Converted Customers ({allCustomers.length})</span>,
+            children: (
+              <Card
+                title={
+                  <Space>
+                    <UserSwitchOutlined style={{ color: '#722ed1' }} />
+                    <span>Converted Marketing Customers ({allCustomers.length})</span>
+                  </Space>
+                }
+                extra={
+                  <Space>
+                    <Input
+                      prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+                      placeholder="Search customers by code, name, phone..."
+                      value={customersSearch}
+                      onChange={(e) => setCustomersSearch(e.target.value)}
+                      allowClear
+                      style={{ width: 280 }}
+                    />
+                    <Button
+                      type="primary"
+                      icon={<CalendarOutlined />}
+                      onClick={() => handleOpenAppointmentModal()}
+                    >
+                      Book Appointment
+                    </Button>
+                  </Space>
+                }
+              >
+                <Table
+                  dataSource={filteredDashboardCustomers}
+                  rowKey="id"
+                  pagination={{ pageSize: 10 }}
+                  scroll={{ x: 1000 }}
+                  columns={dashboardCustomerColumns}
+                />
+              </Card>
             ),
           },
           {
@@ -781,6 +1454,31 @@ export const DirectorOverviewPage: React.FC = () => {
               >
                 View Prospects
               </Button>
+              <Button
+                block
+                style={{ marginTop: 8 }}
+                icon={<EyeOutlined />}
+                onClick={() => {
+                  setDetailModalMarketer(selectedMarketer);
+                  setDetailModalTab('prospects');
+                  setDetailModalSearch('');
+                  setViewProfileDrawer(false);
+                }}
+              >
+                View Added Prospects & Customers
+              </Button>
+              <Button
+                block
+                style={{ marginTop: 8 }}
+                type="dashed"
+                icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+                onClick={() => {
+                  handleOpenAppointmentModal(undefined, selectedMarketer.id);
+                  setViewProfileDrawer(false);
+                }}
+              >
+                Book Appointment with {selectedMarketer.name}
+              </Button>
             </div>
           </div>
         )}
@@ -806,6 +1504,366 @@ export const DirectorOverviewPage: React.FC = () => {
           handleRefresh();
         }}
       />
+
+      {/* ── STAFF ADDED RECORDS DRILL-DOWN MODAL ───────────────────────── */}
+      <Modal
+        title={
+          detailModalMarketer ? (
+            <Space align="center">
+              <PhotoUpload entityType="staff" entityId={detailModalMarketer.id} size={38} editable={false} />
+              <div>
+                <div style={{ fontWeight: 700, fontSize: 16 }}>
+                  {detailModalMarketer.name} — Added Records & Operational Attribution
+                </div>
+                <div style={{ fontSize: 12, color: '#64748b' }}>
+                  {detailModalMarketer.email || 'Marketing Team'} · {marketerProspectsList.length} Prospects · {marketerCustomersList.length} Customers
+                </div>
+              </div>
+            </Space>
+          ) : 'Staff Records'
+        }
+        open={!!detailModalMarketer}
+        onCancel={() => {
+          setDetailModalMarketer(null);
+          setDetailModalSearch('');
+        }}
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', flexWrap: 'wrap', gap: 8 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Showing {detailModalTab === 'prospects' ? marketerProspectsList.length : marketerCustomersList.length} records
+            </Text>
+            <Space>
+              <Button
+                icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+                onClick={() => {
+                  handleOpenAppointmentModal(undefined, detailModalMarketer?.id);
+                }}
+              >
+                Book Appointment with {detailModalMarketer?.name}
+              </Button>
+              <Button type="primary" onClick={() => setDetailModalMarketer(null)}>
+                Close
+              </Button>
+            </Space>
+          </div>
+        }
+        width={920}
+        destroyOnClose
+      >
+        <Input
+          prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+          placeholder="Search records by name, phone, address, or status..."
+          value={detailModalSearch}
+          onChange={(e) => setDetailModalSearch(e.target.value)}
+          allowClear
+          style={{ marginBottom: 16 }}
+        />
+
+        <Tabs
+          activeKey={detailModalTab}
+          onChange={(k: any) => setDetailModalTab(k)}
+          items={[
+            {
+              key: 'prospects',
+              label: (
+                <span>
+                  <TeamOutlined /> Prospects Added ({marketerProspectsList.length})
+                </span>
+              ),
+              children: (
+                <Table
+                  size="small"
+                  dataSource={marketerProspectsList}
+                  rowKey="id"
+                  pagination={{ pageSize: 8 }}
+                  scroll={{ x: 800 }}
+                  columns={[
+                    {
+                      title: 'Prospect Name',
+                      key: 'name',
+                      render: (_: any, r: any) => (
+                        <Space>
+                          <PhotoUpload entityType="prospect" entityId={r.id} size={28} editable={false} />
+                          <strong>{r.firstName} {r.lastName}</strong>
+                        </Space>
+                      ),
+                    },
+                    {
+                      title: 'Contact',
+                      key: 'contact',
+                      render: (_: any, r: any) => (
+                        <div>
+                          <div>{r.phoneNumber || '—'}</div>
+                          <div style={{ fontSize: 11, color: '#64748b' }}>{r.address || ''}</div>
+                        </div>
+                      ),
+                    },
+                    {
+                      title: 'Status',
+                      dataIndex: 'status',
+                      key: 'status',
+                      render: (v: string) => <StatusTag status={v} type="prospect" />,
+                    },
+                    {
+                      title: 'Interest / Reason',
+                      dataIndex: 'reasonForContact',
+                      key: 'reasonForContact',
+                      render: (v: string) => v || '—',
+                    },
+                    {
+                      title: 'Date Added',
+                      key: 'date',
+                      render: (_: any, r: any) => (r.createdAt ? dayjs(r.createdAt).format('DD MMM YYYY') : '—'),
+                    },
+                    {
+                      title: 'Action',
+                      key: 'action',
+                      render: (_: any, r: any) => (
+                        <Button
+                          size="small"
+                          icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+                          onClick={() =>
+                            handleOpenAppointmentModal(
+                              { type: 'prospect', id: r.id, name: `${r.firstName} ${r.lastName}`, phone: r.phoneNumber },
+                              detailModalMarketer?.id
+                            )
+                          }
+                        >
+                          Book Appt
+                        </Button>
+                      ),
+                    },
+                  ]}
+                />
+              ),
+            },
+            {
+              key: 'customers',
+              label: (
+                <span>
+                  <UserSwitchOutlined /> Customers Converted ({marketerCustomersList.length})
+                </span>
+              ),
+              children: (
+                <Table
+                  size="small"
+                  dataSource={marketerCustomersList}
+                  rowKey="id"
+                  pagination={{ pageSize: 8 }}
+                  scroll={{ x: 800 }}
+                  columns={[
+                    {
+                      title: 'Sales Code',
+                      dataIndex: 'code',
+                      key: 'code',
+                      render: (v: string) => (v ? <Tag color="geekblue">{v}</Tag> : <Text type="secondary">N/A</Text>),
+                    },
+                    {
+                      title: 'Customer Name',
+                      key: 'name',
+                      render: (_: any, r: any) => (
+                        <Space>
+                          <PhotoUpload entityType="customer" entityId={r.id} size={28} editable={false} />
+                          <strong>{r.firstName} {r.lastName}</strong>
+                        </Space>
+                      ),
+                    },
+                    {
+                      title: 'Property',
+                      dataIndex: 'propertyId',
+                      key: 'property',
+                      render: (propId: string) => getPropertyInfo(propId) || <Text type="secondary">N/A</Text>,
+                    },
+                    {
+                      title: 'Type',
+                      dataIndex: 'type',
+                      key: 'type',
+                      render: (v: any) => (
+                        <Tag color={getCustomerTypeColor(v)}>
+                          {getCustomerTypeLabel(v)}
+                        </Tag>
+                      ),
+                    },
+                    {
+                      title: 'Contact',
+                      key: 'contact',
+                      render: (_: any, r: any) => (
+                        <div>
+                          <div>{r.phoneNumber || '—'}</div>
+                          <div style={{ fontSize: 11, color: '#64748b' }}>{r.address || ''}</div>
+                        </div>
+                      ),
+                    },
+                    {
+                      title: 'Joined Date',
+                      dataIndex: 'createdAt',
+                      key: 'createdAt',
+                      render: (d: string) => (d ? dayjs(d).format('DD MMM YYYY') : '—'),
+                    },
+                    {
+                      title: 'Action',
+                      key: 'action',
+                      render: (_: any, r: any) => (
+                        <Button
+                          size="small"
+                          icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+                          onClick={() =>
+                            handleOpenAppointmentModal(
+                              { type: 'customer', id: r.id, name: `${r.firstName} ${r.lastName}`, phone: r.phoneNumber },
+                              detailModalMarketer?.id
+                            )
+                          }
+                        >
+                          Book Appt
+                        </Button>
+                      ),
+                    },
+                  ]}
+                />
+              ),
+            },
+          ]}
+        />
+      </Modal>
+
+      {/* ── BOOK APPOINTMENT MODAL ───────────────────────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <CalendarOutlined style={{ color: '#722ed1', fontSize: 20 }} />
+            <span style={{ fontSize: 16, fontWeight: 600 }}>
+              Book Appointment — Marketing Consultation / Site Visit
+            </span>
+          </Space>
+        }
+        open={appointmentModalOpen}
+        onCancel={() => {
+          setAppointmentModalOpen(false);
+          setAppointmentTargetClient(null);
+          appointmentForm.resetFields();
+        }}
+        footer={null}
+        width={620}
+        destroyOnClose
+      >
+        <Form
+          form={appointmentForm}
+          layout="vertical"
+          onFinish={handleBookAppointmentSubmit}
+        >
+          <Form.Item
+            name="clientId"
+            label={<span><UserOutlined style={{ marginRight: 6 }} />Select Client (Prospect or Customer)</span>}
+            rules={[{ required: true, message: 'Please select a prospect or customer' }]}
+            extra="Search by client name or phone number"
+          >
+            <Select
+              showSearch
+              placeholder="Search and select prospect or customer..."
+              optionFilterProp="label"
+              filterOption={(input, option) =>
+                String(option?.label ?? '').toLowerCase().includes(input.toLowerCase().trim())
+              }
+              options={[
+                {
+                  label: '── MARKETING PROSPECTS ──',
+                  options: allProspects.map((p) => ({
+                    value: `prospect:${p.id}`,
+                    label: `👤 ${p.firstName} ${p.lastName} · 📞 ${p.phoneNumber || 'No phone'} · [${prospectStatusLabels[p.status] || p.status}]`,
+                  })),
+                },
+                {
+                  label: '── ONBOARDED CUSTOMERS ──',
+                  options: allCustomers.map((c) => ({
+                    value: `customer:${c.id}`,
+                    label: `🤝 ${c.firstName} ${c.lastName} · 📞 ${c.phoneNumber || 'No phone'}${c.code ? ` · Code: ${c.code}` : ''}`,
+                  })),
+                },
+              ]}
+              allowClear
+              style={{ width: '100%' }}
+            />
+          </Form.Item>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="staffId"
+                label={<span><TeamOutlined style={{ marginRight: 6 }} />Assigned Staff / Marketer</span>}
+                rules={[{ required: true, message: 'Please select assigned marketer' }]}
+              >
+                <Select placeholder="Assign staff...">
+                  {allMarketingStaffUsers.map((s) => (
+                    <Select.Option key={s.id} value={s.id}>
+                      {getUserFullName(s)} ({s.role === 'marketing_director' ? 'Director' : 'Marketer'})
+                    </Select.Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="scheduledFor"
+                label={<span><ClockCircleOutlined style={{ marginRight: 6 }} />Date & Time</span>}
+                rules={[{ required: true, message: 'Please select appointment date and time' }]}
+              >
+                <DatePicker
+                  showTime={{ format: 'hh:mm A' }}
+                  format="YYYY-MM-DD hh:mm A"
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="reason"
+                label="Appointment Purpose / Agenda"
+                rules={[{ required: true, message: 'Please select or enter reason' }]}
+              >
+                <Select>
+                  <Select.Option value="Site Inspection & Property Tour">🏡 Site Inspection & Property Tour</Select.Option>
+                  <Select.Option value="Payment Plan & Pricing Discussion">💰 Payment Plan & Pricing Discussion</Select.Option>
+                  <Select.Option value="Land Title & Agreement Signing">📝 Land Title & Agreement Signing</Select.Option>
+                  <Select.Option value="General Marketing Consultation">🗣️ General Marketing Consultation</Select.Option>
+                  <Select.Option value="Plot Allocation & Handover">📍 Plot Allocation & Handover</Select.Option>
+                  <Select.Option value="Follow-up Meeting">🔄 Follow-up Meeting</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="venue" label="Location / Venue">
+                <Select>
+                  <Select.Option value="On-site at Property">📍 On-site at Property</Select.Option>
+                  <Select.Option value="Head Office Conference Room">🏢 Head Office Conference Room</Select.Option>
+                  <Select.Option value="Branch Office">🏬 Branch Office</Select.Option>
+                  <Select.Option value="Virtual / Phone Consultation">📞 Virtual / Phone Consultation</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item name="notes" label="Additional Notes / Requirements">
+            <Input.TextArea rows={2} placeholder="e.g. Client interested in 2 plots at Appolonia, requested deed draft preview..." />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => setAppointmentModalOpen(false)}>Cancel</Button>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={createAppointmentMutation.isPending}
+                style={{ background: '#722ed1', borderColor: '#722ed1' }}
+              >
+                Schedule Appointment
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

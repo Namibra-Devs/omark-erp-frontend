@@ -57,8 +57,10 @@ import {
   FundOutlined,
   PieChartOutlined,
   LineChartOutlined,
-  BarChartOutlined
+  BarChartOutlined,
+  FileProtectOutlined,
 } from '@ant-design/icons';
+import { LandPurchaseAgreementModal } from '@/components/paymentPlan/LandPurchaseAgreementModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
@@ -120,6 +122,8 @@ export const PaymentPlansPage: React.FC = () => {
   const [bandFilter, setBandFilter] = useState<string>(urlBand);
   const [selectedPlan, setSelectedPlan] = useState<PaymentPlan | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
+  const [agreementModalOpen, setAgreementModalOpen] = useState(false);
+  const [agreementPlan, setAgreementPlan] = useState<PaymentPlan | null>(null);
   const [addModal, setAddModal] = useState(false);
   const [addForm] = Form.useForm();
 
@@ -728,6 +732,17 @@ export const PaymentPlansPage: React.FC = () => {
               onClick={() => {
                 setSelectedPlan(record);
                 setViewDrawerOpen(true);
+              }}
+            />
+          </Tooltip>
+          <Tooltip title="Send Land Purchase Agreement to Customer Portal">
+            <Button
+              type="primary"
+              icon={<FileProtectOutlined />}
+              style={{ backgroundColor: '#092b5a', borderColor: '#092b5a' }}
+              onClick={() => {
+                setAgreementPlan(record);
+                setAgreementModalOpen(true);
               }}
             />
           </Tooltip>
@@ -1487,6 +1502,20 @@ export const PaymentPlansPage: React.FC = () => {
       >
         {renderDrawerContent()}
       </Drawer>
+
+      {/* Land Purchase Agreement (Contract of Sale) Portal Modal */}
+      {agreementPlan && (
+        <LandPurchaseAgreementModal
+          open={agreementModalOpen}
+          onClose={() => {
+            setAgreementModalOpen(false);
+            setAgreementPlan(null);
+          }}
+          plan={agreementPlan}
+          customer={customerMap[agreementPlan.customerId]}
+          property={propertyMap[agreementPlan.propertyId]}
+        />
+      )}
     </div>
   );
 };

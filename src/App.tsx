@@ -213,7 +213,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/marketing/overview" 
           element={
-            <ProtectedRoute allowedRoles={['marketing_director', 'admin']}>
+            <ProtectedRoute allowedRoles={['marketing_director', 'admin', 'secretary', 'branch_manager']}>
               <DirectorOverviewPage />
             </ProtectedRoute>
           } 

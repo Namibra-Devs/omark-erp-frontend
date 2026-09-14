@@ -3,6 +3,11 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapData, unwrapList } from './client';
 import { AxiosError } from 'axios';
 import type { Prospect, Interaction, ApiResponse, ProspectSource, ProspectStatus, InteractionChannel, CustomerType } from '@/types';
+import {
+  assertNoProspectDuplicates,
+  getProspectsFromCache,
+  getCustomersFromCache,
+} from '@/utils/duplicateValidation';
 
 export type { ProspectSource, ProspectStatus, InteractionChannel };
 
@@ -171,6 +176,17 @@ export const useCreateProspectMutation = () => {
   return useMutation({
     mutationFn: async (data: CreateProspectPayload) => {
       try {
+        const cachedProspects = getProspectsFromCache(queryClient);
+        const cachedCustomers = getCustomersFromCache(queryClient);
+        assertNoProspectDuplicates(
+          {
+            firstName: data.firstName,
+            lastName: data.lastName,
+            phoneNumber: data.phoneNumber,
+          },
+          { existingProspects: cachedProspects, existingCustomers: cachedCustomers }
+        );
+
         const response = await apiClient.post<ApiResponse<Prospect>>('/prospects', data);
         return unwrapData(response);
       } catch (error) {

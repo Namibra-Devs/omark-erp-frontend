@@ -1,8 +1,26 @@
 // src/pages/marketing/ProspectsPage.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin, Popconfirm, Tooltip, Alert } from 'antd';
-import { PlusOutlined, EyeOutlined, SearchOutlined, EditOutlined, DeleteOutlined, DollarOutlined, CloseOutlined, FlagFilled } from '@ant-design/icons';
+import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin, Popconfirm, Tooltip, Alert, Statistic, Badge, Dropdown, DatePicker } from 'antd';
+import {
+  PlusOutlined,
+  EyeOutlined,
+  SearchOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  DollarOutlined,
+  CloseOutlined,
+  FlagFilled,
+  UserOutlined,
+  PhoneOutlined,
+  HomeOutlined,
+  DownOutlined,
+  SettingOutlined,
+  TrophyOutlined,
+  CalendarOutlined,
+} from '@ant-design/icons';
+import { tokens } from '@/constants/tokens';
+import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
@@ -12,10 +30,16 @@ import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload
 import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
-import { useAppointmentsQuery } from '@/api/appointments';
-import { useUsersQuery } from '@/api/users';
+import { useCustomersQuery } from '@/api/customers';
+import { useAppointmentsQuery, useCreateAppointmentMutation } from '@/api/appointments';
+import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
+import {
+  createDuplicatePhoneRule,
+  createDuplicateNameRule,
+  assertNoProspectDuplicates,
+} from '@/utils/duplicateValidation';
 import { useAwardBonusMutation, useStaffBonusesQuery } from '@/api/bonuses';
 import { markSeen } from '@/utils/seenTracker';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
@@ -24,9 +48,7 @@ const { Option } = Select;
 const { TextArea } = Input;
 const { Text } = Typography;
 
-import dayjs from 'dayjs';
-import { DatePicker } from 'antd';
-import { SettingOutlined, TrophyOutlined, CalendarOutlined } from '@ant-design/icons';
+
 
 export const ProspectsPage: React.FC = () => {
   const navigate = useNavigate();
@@ -46,6 +68,10 @@ export const ProspectsPage: React.FC = () => {
   const [editingProspect, setEditingProspect] = useState<Prospect | null>(null);
   const [convertModal, setConvertModal] = useState(false);
   const [prospectToConvert, setProspectToConvert] = useState<Prospect | null>(null);
+  const [bookAppointmentModal, setBookAppointmentModal] = useState(false);
+  const [appointmentTargetProspect, setAppointmentTargetProspect] = useState<Prospect | null>(null);
+  const [appointmentForm] = Form.useForm();
+  const createAppointment = useCreateAppointmentMutation();
   const { data: userBonuses = [] } = useStaffBonusesQuery(user?.id);
   const userBonusTotal = (userBonuses as any[]).reduce((sum: number, b: any) => sum + (b.amountGHS || 0), 0);
 
@@ -74,6 +100,11 @@ export const ProspectsPage: React.FC = () => {
     pageSize,
   });
 
+  const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
+  const allExistingProspects = allProspectsData?.items ?? [];
+  const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
+  const allExistingCustomers = customersData?.items ?? [];
+
   // Reset to page 1 whenever a filter changes, so a new, smaller result set
   // doesn't strand the user on a page that no longer exists.
   useEffect(() => {
@@ -92,9 +123,12 @@ export const ProspectsPage: React.FC = () => {
   // Only admins can set assignedUserId at creation (per the API), and only
   // admins need to pick — marketing_staff creating their own prospects
   // should just self-assign, matching how the field is hidden for them below.
-  const isAdmin = hasRole(['admin']);
-  const { data: marketingStaffData } = useUsersQuery(isAdmin ? { role: 'marketing_staff' } : undefined);
-  const marketingStaff = isAdmin ? (marketingStaffData?.items ?? []) : [];
+  const isAdmin = hasRole(['admin', 'marketing_director']);
+  const { data: usersData } = useUsersQuery({ pageSize: 500 });
+  const allStaff = usersData?.items ?? [];
+  const marketingStaff = allStaff.filter(
+    (u) => u.role === 'marketing_staff' || u.role === 'marketing_director'
+  );
 
   const { data: branches = [] } = useBranchesQuery();
   const rawProspectList: Prospect[] = prospectsData?.items ?? [];
@@ -130,6 +164,26 @@ export const ProspectsPage: React.FC = () => {
 
     return map;
   }, [appointments]);
+
+  // Full marketing prospects list across all pages for status breakdown calculation
+  const allMarketingProspects = useMemo(() => {
+    let list = allExistingProspects.filter((p) => p.source === 'marketing' || !p.source);
+    if (assignedUserIdFilter) {
+      list = list.filter((p) => p.assignedUserId === assignedUserIdFilter);
+    }
+    return filterEntitiesByBranch(list, user, branches);
+  }, [allExistingProspects, assignedUserIdFilter, user, branches]);
+
+  const statusBreakdown = useMemo(() => {
+    return {
+      total: allMarketingProspects.length,
+      new: allMarketingProspects.filter((p) => p.status === 'new').length,
+      meetingScheduled: allMarketingProspects.filter((p) => p.status === 'meeting_scheduled').length,
+      meetingCompleted: allMarketingProspects.filter((p) => p.status === 'meeting_completed').length,
+      purchased: allMarketingProspects.filter((p) => p.status === 'purchased').length,
+      canceled: allMarketingProspects.filter((p) => p.status === 'canceled' || p.status === 'suspended' || p.status === 'postponed').length,
+    };
+  }, [allMarketingProspects]);
 
   // Date-wise filtering (Daily, Weekly, Monthly, Yearly, Custom) + PRIORITY SORTING (Due climbs to top)
   const filteredByDateList = useMemo(() => {
@@ -177,6 +231,16 @@ export const ProspectsPage: React.FC = () => {
 
   const handleAddProspect = async (values: any) => {
     try {
+      // Hard pre-submission rejection guard
+      assertNoProspectDuplicates(
+        {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+        },
+        { existingProspects: allExistingProspects, existingCustomers: allExistingCustomers }
+      );
+
       // `photo` isn't a real prospect field — POST /prospects would reject
       // it, so pull it out before spreading the rest into the payload.
       const { photo, ...prospectValues } = values;
@@ -216,6 +280,17 @@ export const ProspectsPage: React.FC = () => {
   const handleEditProspect = async (values: any) => {
     if (!editingProspect) return;
     try {
+      // Hard pre-submission rejection guard
+      assertNoProspectDuplicates(
+        {
+          firstName: values.firstName,
+          lastName: values.lastName,
+          phoneNumber: values.phoneNumber,
+          excludeId: editingProspect.id,
+        },
+        { existingProspects: allExistingProspects, existingCustomers: allExistingCustomers }
+      );
+
       await updateProspectMutation.mutateAsync({
         id: editingProspect.id,
         data: {
@@ -248,101 +323,167 @@ export const ProspectsPage: React.FC = () => {
     }
   };
 
+  const handleStatusChange = async (id: string, newStatus: ProspectStatus) => {
+    try {
+      await updateProspectMutation.mutateAsync({ id, data: { status: newStatus } });
+      message.success(`Status updated to ${prospectStatusLabels[newStatus] || newStatus}`);
+      refetch();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to update status');
+    }
+  };
+
   const columns = [
     {
-      title: 'Name',
-      key: 'name',
-      width: 170,
+      title: 'Customer',
+      key: 'customer',
+      width: 250,
       render: (_: any, record: Prospect) => {
         const dueApt = dueProspectMap[record.id];
         return (
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
-              <Text strong style={{ fontSize: 'clamp(12px, 1vw, 14px)' }}>
-                {record.firstName} {record.lastName}
-              </Text>
-              {dueApt && (
-                <Tooltip
-                  title={`🚩 APPOINTMENT DUE: ${dayjs(dueApt.scheduledFor).format('MMM D, YYYY h:mm A')} (${dayjs(dueApt.scheduledFor).fromNow()}). Reason: ${dueApt.reason || 'Client follow-up'}`}
-                >
-                  <Tag
-                    color="red"
-                    icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
-                    style={{
-                      margin: 0,
-                      fontWeight: 700,
-                      fontSize: 10,
-                      padding: '0 5px',
-                      borderRadius: 4,
-                      cursor: 'pointer',
-                      border: '1px solid #ffa39e',
-                      background: '#fff1f0',
-                      color: '#cf1322',
-                    }}
+          <Space align="start">
+            <PhotoUpload entityType="prospect" entityId={record.id} size={32} editable={false} />
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                <Text strong>{record.firstName} {record.lastName}</Text>
+                {dueApt && (
+                  <Tooltip
+                    title={`🚩 APPOINTMENT DUE: ${dayjs(dueApt.scheduledFor).format('MMM D, YYYY h:mm A')} (${dayjs(dueApt.scheduledFor).fromNow()}). Reason: ${dueApt.reason || 'Client follow-up'}`}
                   >
-                    DUE {dayjs(dueApt.scheduledFor).isBefore(dayjs().startOf('day')) ? 'OVERDUE' : dayjs(dueApt.scheduledFor).format('h:mm A')}
-                  </Tag>
-                </Tooltip>
-              )}
+                    <Tag
+                      color="red"
+                      icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
+                      style={{
+                        margin: 0,
+                        fontWeight: 700,
+                        fontSize: 10,
+                        padding: '0 5px',
+                        borderRadius: 4,
+                        cursor: 'pointer',
+                        border: '1px solid #ffa39e',
+                        background: '#fff1f0',
+                        color: '#cf1322',
+                      }}
+                    >
+                      DUE {dayjs(dueApt.scheduledFor).isBefore(dayjs().startOf('day')) ? 'OVERDUE' : dayjs(dueApt.scheduledFor).format('h:mm A')}
+                    </Tag>
+                  </Tooltip>
+                )}
+              </div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <PhoneOutlined /> {record.phoneNumber}
+              </Text>
             </div>
-          </div>
+          </Space>
         );
       },
-    },
-    {
-      title: 'Phone',
-      dataIndex: 'phoneNumber',
-      key: 'phoneNumber',
-      width: 120,
-      responsive: ['md'] as any,
     },
     {
       title: 'Address',
       dataIndex: 'address',
       key: 'address',
+      width: 180,
       ellipsis: true,
-      width: 150,
-      responsive: ['lg'] as any,
+      render: (address: string) => (
+        <Tooltip title={address}>
+          <HomeOutlined style={{ marginRight: 6, color: '#8c8c8c' }} />
+          {address || '—'}
+        </Tooltip>
+      ),
     },
     {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
+      width: 150,
       render: (status: string) => <StatusTag status={status} type="prospect" />,
     },
     {
       title: 'Reason',
       dataIndex: 'reasonForContact',
       key: 'reasonForContact',
+      width: 180,
       ellipsis: true,
-      width: 150,
-      responsive: ['xl'] as any,
+      render: (text: string) => (
+        <Tooltip title={text}>
+          <Text>{text || '—'}</Text>
+        </Tooltip>
+      ),
+    },
+    {
+      title: 'Added By',
+      key: 'addedBy',
+      width: 170,
+      render: (_: any, record: Prospect) => {
+        const staff = allStaff.find(
+          (u) => u.id === record.assignedUserId || u.id === (record as any).createdByUserId
+        );
+        if (!staff) {
+          return <Tag color="default">Direct / Inbound</Tag>;
+        }
+        return (
+          <Space size={6}>
+            <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
+            <div>
+              <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                {getUserFullName(staff)}
+              </Text>
+              <Tag
+                color={staff.role === 'marketing_director' ? 'gold' : 'blue'}
+                style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+              >
+                {staff.role === 'marketing_director' ? 'Director' : 'Marketing'}
+              </Tag>
+            </div>
+          </Space>
+        );
+      },
     },
     {
       title: 'Last Activity',
       dataIndex: 'updatedAt',
       key: 'updatedAt',
-      width: 100,
-      responsive: ['lg'] as any,
-      render: (date: string) => new Date(date).toLocaleDateString(),
+      width: 130,
+      render: (date: string) => (
+        <Tooltip title={dayjs(date).format('MMMM DD, YYYY')}>
+          {dayjs(date).fromNow()}
+        </Tooltip>
+      ),
     },
     {
       title: 'Actions',
       key: 'actions',
-      width: 100,
+      width: 250,
       fixed: 'right' as any,
       render: (_: any, record: Prospect) => (
-        <Space size={[4, 4]} wrap onClick={(e) => e.stopPropagation()}>
-          <Button
-            type="primary"
-            ghost
-            icon={<EyeOutlined />}
-            onClick={() => navigate(`/marketing/prospects/${record.id}`)}
-            size="small"
-          >
-            View
-          </Button>
+        <Space size={6} onClick={(e) => e.stopPropagation()}>
+          <Tooltip title="Book Appointment">
+            <Button
+              icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
+              onClick={() => {
+                setAppointmentTargetProspect(record);
+                appointmentForm.resetFields();
+                appointmentForm.setFieldsValue({
+                  staffId: record.assignedUserId || user?.id,
+                  scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+                  reason: 'Site Inspection & Property Viewing',
+                  source: 'marketing',
+                });
+                setBookAppointmentModal(true);
+              }}
+              size="small"
+              style={{ borderColor: '#d3adf7' }}
+            />
+          </Tooltip>
+          <Tooltip title="View Details">
+            <Button
+              type="primary"
+              ghost
+              icon={<EyeOutlined />}
+              onClick={() => navigate(`/marketing/prospects/${record.id}`)}
+              size="small"
+            />
+          </Tooltip>
           <Tooltip title="Edit Prospect">
             <Button
               icon={<EditOutlined />}
@@ -364,10 +505,29 @@ export const ProspectsPage: React.FC = () => {
               />
             </Tooltip>
           )}
+          <Tooltip title="Quick Status Change">
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'new', label: 'New', onClick: () => handleStatusChange(record.id, 'new') },
+                  { key: 'meeting_scheduled', label: 'Meeting Scheduled', onClick: () => handleStatusChange(record.id, 'meeting_scheduled') },
+                  { key: 'meeting_completed', label: 'Meeting Completed', onClick: () => handleStatusChange(record.id, 'meeting_completed') },
+                  { key: 'suspended', label: 'Suspended', onClick: () => handleStatusChange(record.id, 'suspended') },
+                  { key: 'postponed', label: 'Postponed', onClick: () => handleStatusChange(record.id, 'postponed') },
+                  { key: 'canceled', label: 'Canceled', onClick: () => handleStatusChange(record.id, 'canceled') },
+                ],
+              }}
+              trigger={['click']}
+            >
+              <Button size="small">
+                Status <DownOutlined style={{ fontSize: 10 }} />
+              </Button>
+            </Dropdown>
+          </Tooltip>
           {hasRole(['admin']) && (
             <Popconfirm
               title="Delete Prospect"
-              description={`Are you sure you want to delete ${record.firstName} ${record.lastName}? This also removes its interactions and appointments.`}
+              description={`Are you sure you want to delete ${record.firstName} ${record.lastName}?`}
               onConfirm={() => handleDeleteProspect(record.id)}
               okText="Yes"
               cancelText="No"
@@ -426,6 +586,124 @@ export const ProspectsPage: React.FC = () => {
           }
         />
       )}
+
+      {/* Status Cards */}
+      <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+        <Col xs={12} sm={8} md={4}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter('all')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'all' ? tokens.primary : undefined,
+              boxShadow: statusFilter === 'all' ? `0 0 0 2px ${tokens.primary}20` : undefined,
+            }}
+          >
+            <Statistic
+              title="Total"
+              value={statusBreakdown.total}
+              prefix={<UserOutlined />}
+              valueStyle={{ color: tokens.primary }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={4}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'new' ? 'all' : 'new')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'new' ? '#1890ff' : undefined,
+              boxShadow: statusFilter === 'new' ? '0 0 0 2px rgba(24,144,255,0.2)' : undefined,
+            }}
+          >
+            <Statistic
+              title="New"
+              value={statusBreakdown.new}
+              prefix={<Badge status="processing" />}
+              valueStyle={{ color: '#1890ff' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={4}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'meeting_scheduled' ? 'all' : 'meeting_scheduled')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'meeting_scheduled' ? '#faad14' : undefined,
+              boxShadow: statusFilter === 'meeting_scheduled' ? '0 0 0 2px rgba(250,173,20,0.2)' : undefined,
+            }}
+          >
+            <Statistic
+              title="Meeting Scheduled"
+              value={statusBreakdown.meetingScheduled}
+              prefix={<Badge status="warning" />}
+              valueStyle={{ color: '#faad14' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={4}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'meeting_completed' ? 'all' : 'meeting_completed')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'meeting_completed' ? '#52c41a' : undefined,
+              boxShadow: statusFilter === 'meeting_completed' ? '0 0 0 2px rgba(82,196,26,0.2)' : undefined,
+            }}
+          >
+            <Statistic
+              title="Meeting Completed"
+              value={statusBreakdown.meetingCompleted}
+              prefix={<Badge status="success" />}
+              valueStyle={{ color: '#52c41a' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={4}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'purchased' ? 'all' : 'purchased')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'purchased' ? '#722ed1' : undefined,
+              boxShadow: statusFilter === 'purchased' ? '0 0 0 2px rgba(114,46,209,0.2)' : undefined,
+            }}
+          >
+            <Statistic
+              title="Purchased"
+              value={statusBreakdown.purchased}
+              prefix={<Badge status="success" />}
+              valueStyle={{ color: '#722ed1' }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={4}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'canceled' ? 'all' : 'canceled')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'canceled' ? '#ff4d4f' : undefined,
+              boxShadow: statusFilter === 'canceled' ? '0 0 0 2px rgba(255,77,79,0.2)' : undefined,
+            }}
+          >
+            <Statistic
+              title="Canceled"
+              value={statusBreakdown.canceled}
+              prefix={<Badge status="error" />}
+              valueStyle={{ color: '#ff4d4f' }}
+            />
+          </Card>
+        </Col>
+      </Row>
 
       {/* Filters (Search, Status, and Date-wise: Daily, Weekly, Monthly, Yearly, Custom) */}
       <Card style={{ marginBottom: 16 }}>
@@ -505,13 +783,14 @@ export const ProspectsPage: React.FC = () => {
           rowKey="id"
           loading={isLoading}
           size="middle"
-          scroll={{ x: 700 }}
+          scroll={{ x: 1000 }}
           pagination={{
             current: page,
             pageSize,
             total: filteredByDateList.length,
             showSizeChanger: true,
-            showTotal: (total) => `Total ${total} prospects`,
+            pageSizeOptions: ['10', '20', '50', '100', '250'],
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} prospects`,
             responsive: true,
             onChange: (nextPage, nextPageSize) => {
               setPage(nextPage);
@@ -558,7 +837,16 @@ export const ProspectsPage: React.FC = () => {
               <Form.Item
                 name="firstName"
                 label="First Name"
-                rules={[{ required: true, message: 'First name is required' }]}
+                rules={[
+                  { required: true, message: 'First name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: true,
+                    getOtherName: () => form.getFieldValue('lastName'),
+                    getExistingProspects: () => allExistingProspects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input />
               </Form.Item>
@@ -567,7 +855,16 @@ export const ProspectsPage: React.FC = () => {
               <Form.Item
                 name="lastName"
                 label="Last Name"
-                rules={[{ required: true, message: 'Last name is required' }]}
+                rules={[
+                  { required: true, message: 'Last name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: false,
+                    getOtherName: () => form.getFieldValue('firstName'),
+                    getExistingProspects: () => allExistingProspects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input />
               </Form.Item>
@@ -585,7 +882,14 @@ export const ProspectsPage: React.FC = () => {
           <Form.Item
             name="phoneNumber"
             label="Phone Number"
-            rules={[{ required: true, message: 'Phone number is required' }]}
+            rules={[
+              { required: true, message: 'Phone number is required' },
+              createDuplicatePhoneRule({
+                entityType: 'prospect',
+                getExistingProspects: () => allExistingProspects,
+                getExistingCustomers: () => allExistingCustomers,
+              }),
+            ]}
           >
             <PhoneInput />
           </Form.Item>
@@ -663,7 +967,17 @@ export const ProspectsPage: React.FC = () => {
               <Form.Item
                 name="firstName"
                 label="First Name"
-                rules={[{ required: true, message: 'First name is required' }]}
+                rules={[
+                  { required: true, message: 'First name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: true,
+                    excludeId: editingProspect?.id,
+                    getOtherName: () => editForm.getFieldValue('lastName'),
+                    getExistingProspects: () => allExistingProspects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input />
               </Form.Item>
@@ -672,7 +986,17 @@ export const ProspectsPage: React.FC = () => {
               <Form.Item
                 name="lastName"
                 label="Last Name"
-                rules={[{ required: true, message: 'Last name is required' }]}
+                rules={[
+                  { required: true, message: 'Last name is required' },
+                  createDuplicateNameRule({
+                    entityType: 'prospect',
+                    isFirstName: false,
+                    excludeId: editingProspect?.id,
+                    getOtherName: () => editForm.getFieldValue('firstName'),
+                    getExistingProspects: () => allExistingProspects,
+                    getExistingCustomers: () => allExistingCustomers,
+                  }),
+                ]}
               >
                 <Input />
               </Form.Item>
@@ -690,7 +1014,15 @@ export const ProspectsPage: React.FC = () => {
           <Form.Item
             name="phoneNumber"
             label="Phone Number"
-            rules={[{ required: true, message: 'Phone number is required' }]}
+            rules={[
+              { required: true, message: 'Phone number is required' },
+              createDuplicatePhoneRule({
+                entityType: 'prospect',
+                excludeId: editingProspect?.id,
+                getExistingProspects: () => allExistingProspects,
+                getExistingCustomers: () => allExistingCustomers,
+              }),
+            ]}
           >
             <PhoneInput />
           </Form.Item>
@@ -750,6 +1082,133 @@ export const ProspectsPage: React.FC = () => {
           setProspectToConvert(null);
         }}
       />
+
+      {/* ── Book Appointment Modal ── */}
+      <Modal
+        title={
+          <Space>
+            <CalendarOutlined style={{ color: '#722ed1', fontSize: 20 }} />
+            <span>
+              Book Appointment —{' '}
+              {appointmentTargetProspect
+                ? `${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}`
+                : 'Prospect'}
+            </span>
+          </Space>
+        }
+        open={bookAppointmentModal}
+        onCancel={() => {
+          setBookAppointmentModal(false);
+          setAppointmentTargetProspect(null);
+          appointmentForm.resetFields();
+        }}
+        footer={null}
+        width={560}
+        destroyOnClose
+      >
+        <Form
+          form={appointmentForm}
+          layout="vertical"
+          onFinish={async (values) => {
+            if (!appointmentTargetProspect) return;
+            try {
+              const reasonText = values.reason?.trim()
+                ? `[${values.source || 'marketing'}] ${values.reason.trim()}`
+                : `[${values.source || 'marketing'}] Site inspection and sales consultation`;
+
+              await createAppointment.mutateAsync({
+                prospectId: appointmentTargetProspect.id,
+                scheduledFor: values.scheduledFor.toISOString(),
+                reason: reasonText,
+              });
+              message.success(
+                `Appointment booked successfully for ${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+              );
+              setBookAppointmentModal(false);
+              setAppointmentTargetProspect(null);
+              appointmentForm.resetFields();
+              refetchAppointments();
+              window.dispatchEvent(new Event('omark-appointments-changed'));
+            } catch (err: any) {
+              message.error(err?.message || 'Failed to book appointment');
+            }
+          }}
+          initialValues={{
+            scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+            reason: 'Site Inspection & Property Viewing',
+            source: 'marketing',
+            staffId: user?.id,
+          }}
+        >
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="staffId"
+                label="Assigned Marketer / Staff"
+                rules={[{ required: true, message: 'Please select staff' }]}
+              >
+                <Select>
+                  {marketingStaff.map((s) => (
+                    <Option key={s.id} value={s.id}>
+                      {getUserFullName(s)} ({s.role === 'marketing_director' ? 'Director' : 'Marketer'})
+                    </Option>
+                  ))}
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="scheduledFor"
+                label="Appointment Date & Time"
+                rules={[{ required: true, message: 'Please pick date and time' }]}
+              >
+                <DatePicker
+                  showTime={{ format: 'hh:mm A' }}
+                  format="YYYY-MM-DD hh:mm A"
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item name="reason" label="Agenda / Purpose" rules={[{ required: true }]}>
+                <Select>
+                  <Option value="Site Inspection & Property Viewing">🏡 Site Inspection & Property Viewing</Option>
+                  <Option value="Payment Plan & Pricing Discussion">💰 Payment Plan & Pricing Discussion</Option>
+                  <Option value="Land Title & Contract Discussion">📝 Land Title & Contract Discussion</Option>
+                  <Option value="General Consultation">🗣️ General Consultation</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="source" label="Source" rules={[{ required: true }]}>
+                <Select>
+                  <Option value="marketing">Marketing</Option>
+                  <Option value="office_walk_in">Office Walk-in</Option>
+                  <Option value="referral">Referral</Option>
+                  <Option value="website">Website / Social Media</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => setBookAppointmentModal(false)}>Cancel</Button>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={createAppointment.isPending}
+                style={{ background: '#722ed1', borderColor: '#722ed1' }}
+              >
+                Schedule Appointment
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

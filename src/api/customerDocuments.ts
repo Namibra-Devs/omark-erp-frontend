@@ -35,6 +35,7 @@ export interface CustomerDocument {
   visibleToCustomer: boolean;
   status: 'active' | 'archived';
   version?: number;
+  metadata?: any;
 }
 
 export interface CustomerDocumentsListParams {
