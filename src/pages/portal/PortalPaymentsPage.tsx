@@ -21,15 +21,74 @@ export const PortalPaymentsPage: React.FC = () => {
   const installments = paymentsData?.installments ?? [];
   const payments = paymentsData?.payments ?? [];
 
+  // Helper for ordinals (1st, 2nd, 3rd...)
+  const getOrdinal = (n: number) => {
+    const s = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (s[(v - 20) % 10] || s[v] || s[0]);
+  };
+
+  const totalInstallmentMinor = installments.reduce((sum, i) => sum + (i.expectedAmountMinor || 0), 0);
+  let accumulatedMinor = 0;
+  const enhancedInstallments = installments.map((item, idx) => {
+    accumulatedMinor += (item.expectedAmountMinor || 0);
+    const remainingBalanceMinor = idx === installments.length - 1 
+      ? 0 
+      : Math.max(totalInstallmentMinor - accumulatedMinor, 0);
+    return {
+      ...item,
+      ordinal: getOrdinal(item.sequence || idx + 1),
+      accumulatedMinor,
+      remainingBalanceMinor,
+    };
+  });
+
   const installmentColumns = [
-    { title: '#', dataIndex: 'sequence', key: 'sequence', width: 50 },
-    { title: 'Due Date', dataIndex: 'dueDate', key: 'dueDate', width: 120, render: (d: string) => d ? dayjs(d).format('MMM D, YYYY') : 'N/A' },
-    { title: 'Expected Amount', dataIndex: 'expectedAmountMinor', key: 'amount', width: 140, render: (v: number) => `GHS ${(v / 100).toLocaleString()}` },
+    { 
+      title: 'Inst.', 
+      dataIndex: 'ordinal', 
+      key: 'ordinal', 
+      width: 70, 
+      align: 'center' as const,
+      render: (v: string) => <strong>{v}</strong>
+    },
+    { 
+      title: 'Due Date', 
+      dataIndex: 'dueDate', 
+      key: 'dueDate', 
+      width: 130, 
+      render: (d: string) => d ? dayjs(d).format('D MMM YYYY') : 'N/A' 
+    },
+    { 
+      title: 'Installment (₵)', 
+      dataIndex: 'expectedAmountMinor', 
+      key: 'amount', 
+      width: 140, 
+      align: 'right' as const,
+      render: (v: number) => `₵${((v || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` 
+    },
+    { 
+      title: 'Accumulated (₵)', 
+      dataIndex: 'accumulatedMinor', 
+      key: 'accumulated', 
+      width: 150, 
+      align: 'right' as const,
+      render: (v: number) => `₵${((v || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` 
+    },
+    { 
+      title: 'Remaining Balance (₵)', 
+      dataIndex: 'remainingBalanceMinor', 
+      key: 'remaining', 
+      width: 170, 
+      align: 'right' as const,
+      render: (v: number) => <strong>₵{((v || 0) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+    },
     {
       title: 'Status',
       dataIndex: 'isPaid',
       key: 'status',
-      width: 90,
+      width: 100,
+      align: 'center' as const,
       render: (isPaid: boolean) => <Tag color={isPaid ? 'green' : 'red'}>{isPaid ? 'Paid' : 'Pending'}</Tag>,
     },
   ];
@@ -51,7 +110,7 @@ export const PortalPaymentsPage: React.FC = () => {
         {installments.length > 0 ? (
           <Table
             columns={installmentColumns}
-            dataSource={installments}
+            dataSource={enhancedInstallments}
             rowKey="id"
             pagination={false}
             size="small"

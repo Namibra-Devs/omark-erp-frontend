@@ -15,6 +15,11 @@ import { useExpensesQuery } from '@/api/expenses';
 import { useApprovalsQuery } from '@/api/approvals';
 import { useUsersQuery, getUserPhone } from '@/api/users';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import {
+  useAssignmentListener,
+  enrichUserWithAssignment,
+  isUserInBranch,
+} from '@/utils/userAssignmentStorage';
 
 const { Text } = Typography;
 
@@ -24,13 +29,19 @@ export const HeadOfficeDashboard: React.FC = () => {
   const { data: usersData, isLoading: usersLoading } = useUsersQuery();
   const { data: expensesData } = useExpensesQuery();
   const { data: approvals = [] } = useApprovalsQuery();
+  const tick = useAssignmentListener();
 
   const users = useMemo(() => {
-    return (usersData?.items ?? []).map((u) => ({
-      ...u,
-      phoneNumber: getUserPhone(u),
-    }));
-  }, [usersData]);
+    return (usersData?.items ?? []).map((u) =>
+      enrichUserWithAssignment(
+        {
+          ...u,
+          phoneNumber: getUserPhone(u),
+        },
+        branches
+      )
+    );
+  }, [usersData, branches, tick]);
 
   const expenses = expensesData?.items ?? [];
   const pendingApprovalsCount = (Array.isArray(approvals) ? approvals : []).filter(
@@ -43,11 +54,9 @@ export const HeadOfficeDashboard: React.FC = () => {
   );
 
   // Helper to get assigned staff for a branch
-  const getBranchStaff = (branchId: string) => {
-    return users.filter((u) => {
-      const bId = (u as any).branchId || (u as any).branch;
-      return bId === branchId;
-    });
+  const getBranchStaff = (branch: any) => {
+    const branchObj = typeof branch === 'string' ? branches.find((b) => b.id === branch) || { id: branch } : branch;
+    return users.filter((u) => isUserInBranch(u, branchObj));
   };
 
   // Helper to get branch manager
@@ -59,7 +68,7 @@ export const HeadOfficeDashboard: React.FC = () => {
       const mgr = users.find((u) => u.id === branch.managerUserId);
       if (mgr) return `${mgr.firstName} ${mgr.lastName}`;
     }
-    const staff = getBranchStaff(branch.id);
+    const staff = getBranchStaff(branch);
     const mgr = staff.find((u) => u.role === 'branch_manager') ||
                 staff.find((u) => u.role === 'marketing_director' || u.role === 'admin' || u.role === 'secretary') ||
                 staff[0];
@@ -106,7 +115,7 @@ export const HeadOfficeDashboard: React.FC = () => {
       width: 130,
       align: 'center' as const,
       render: (_: any, r: any) => {
-        const count = getBranchStaff(r.id).length;
+        const count = getBranchStaff(r).length;
         return <Tag color={count > 0 ? 'green' : 'gold'} style={{ fontWeight: 600 }}>{count} Staff</Tag>;
       },
     },

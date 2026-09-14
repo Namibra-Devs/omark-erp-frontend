@@ -335,9 +335,12 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
   };
 
   const handleRoleChange = (role: string) => {
+    const defaultDept = DEPT_BY_ROLE[role] ?? 'Marketing';
+    const matchedDept = mockBranchDepartments.find((d) => d.name.toLowerCase().includes(defaultDept.toLowerCase()) || d.id === defaultDept);
     form.setFieldsValue({
       role: role,
-      department: DEPT_BY_ROLE[role] ?? '',
+      department: defaultDept,
+      departmentId: matchedDept?.id,
     });
     setPreview((p) => ({ ...p, role }));
   };
@@ -348,6 +351,11 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
 
       // Build the complete payload with all required fields
       const fullName = `${values.firstName?.trim() || ''} ${values.lastName?.trim() || ''}`.trim();
+      const deptObj = mockBranchDepartments.find((d) => d.id === values.departmentId);
+      const deptName = values.department || deptObj?.name || 'Marketing';
+      const deptId = values.departmentId || deptObj?.id;
+      const branchObj = branches.find((b: any) => b.id === values.branchId);
+      const branchName = branchObj?.name;
 
       const payload = {
         name: fullName,
@@ -358,13 +366,14 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
         phoneNumber: values.phoneNumber?.trim() || '',
         password: values.password || '',
         role: values.role || 'marketing_staff',
-        department: values.department || 'Marketing',
+        department: deptName,
         isActive: true,
         // Prototype-only — see src/mock/staffAssignments.ts. Not part of the
         // real POST /users payload; useAdminDashboard.ts strips these out
         // before calling the API and saves them locally after creation.
         branchId: values.branchId,
-        departmentId: values.departmentId,
+        branchName: branchName,
+        departmentId: deptId,
         // Prototype-only — see src/mock/photos.ts. No upload endpoint exists
         // on the real API; useAdminDashboard.ts strips this out before
         // calling POST /users and saves it locally after creation.

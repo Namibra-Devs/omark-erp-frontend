@@ -92,6 +92,14 @@ import type { User, Role } from '@/types';
 import apiClient, { unwrapData } from '@/api/client';
 import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone } from '@/api/users';
 import { useBranchesQuery, useDepartmentsQuery } from '@/api/branches';
+import {
+  getStoredUserAssignment,
+  setStoredUserAssignment,
+  resolveDefaultDepartment,
+  addStaffToBranchRoster,
+  useAssignmentListener,
+} from '@/utils/userAssignmentStorage';
+import { getBranchCanonicalKey, getUserBranchName, getStoredEntityBranch, recordEntityBranch } from '@/utils/branchIsolation';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -136,6 +144,7 @@ export const UsersPage: React.FC = () => {
   const [exportModal, setExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
   const [exportLoading, setExportLoading] = useState(false);
+  const tick = useAssignmentListener();
 
   // ── API hooks ────────────────────────────────────────────────────────────
   const { data: usersResponse, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
@@ -151,10 +160,22 @@ export const UsersPage: React.FC = () => {
   // string, so normalize via getUserPhone().
   const rawItems = usersResponse?.items ?? [];
   const users: User[] = rawItems.length > 0
-    ? rawItems.map((u) => ({
-        ...u,
-        phoneNumber: getUserPhone(u),
-      }))
+    ? rawItems.map((u) => {
+        const stored = getStoredUserAssignment(u.id);
+        const defaultDept = resolveDefaultDepartment(u.role);
+        const branchId = stored?.branchId || (u as any).branchId || (u as any).branch || getStoredEntityBranch(u.id);
+        const branchName = stored?.branchName || (branchId ? getUserBranchName({ branchId }, branches) : undefined);
+        const department = stored?.departmentName || stored?.department || u.department || defaultDept;
+        return {
+          ...u,
+          phoneNumber: getUserPhone(u),
+          branchId,
+          branch: branchName || branchId,
+          branchName,
+          departmentId: stored?.departmentId || (u as any).departmentId,
+          department,
+        } as User;
+      })
     : [DEFAULT_PRIMARY_ADMIN];
 
   // Role configuration
@@ -218,16 +239,36 @@ export const UsersPage: React.FC = () => {
       });
 
       if (newUserObj?.id && (values.branchId || values.departmentId)) {
+        const branchObj = branches.find((b: any) => b.id === values.branchId);
+        const deptObj = departments.find((d: any) => d.id === values.departmentId);
+        const departmentName = deptObj?.name || values.departmentId;
+
+        setStoredUserAssignment(newUserObj.id, {
+          branchId: values.branchId,
+          branchName: branchObj?.name,
+          departmentId: values.departmentId,
+          departmentName: departmentName,
+          department: departmentName,
+          role: values.role,
+        });
+        if (values.branchId) {
+          recordEntityBranch('staff', newUserObj.id, values.branchId);
+          addStaffToBranchRoster(values.branchId, newUserObj.id, branchObj?.name);
+        }
+
         try {
           await updateUserAssignment.mutateAsync({
             userId: newUserObj.id,
             payload: {
               branchId: values.branchId,
+              branchName: branchObj?.name,
               departmentId: values.departmentId,
+              departmentName: departmentName,
+              department: departmentName,
             },
           });
         } catch (assignErr) {
-          console.error('Server assignment error:', assignErr);
+          console.warn('Server assignment error (saved locally):', assignErr);
         }
       }
 
@@ -261,16 +302,36 @@ export const UsersPage: React.FC = () => {
       });
 
       if (values.branchId || values.departmentId) {
+        const branchObj = branches.find((b: any) => b.id === values.branchId);
+        const deptObj = departments.find((d: any) => d.id === values.departmentId);
+        const departmentName = deptObj?.name || values.departmentId;
+
+        setStoredUserAssignment(selectedUser.id, {
+          branchId: values.branchId,
+          branchName: branchObj?.name,
+          departmentId: values.departmentId,
+          departmentName: departmentName,
+          department: departmentName,
+          role: values.role,
+        });
+        if (values.branchId) {
+          recordEntityBranch('staff', selectedUser.id, values.branchId);
+          addStaffToBranchRoster(values.branchId, selectedUser.id, branchObj?.name);
+        }
+
         try {
           await updateUserAssignment.mutateAsync({
             userId: selectedUser.id,
             payload: {
               branchId: values.branchId,
+              branchName: branchObj?.name,
               departmentId: values.departmentId,
+              departmentName: departmentName,
+              department: departmentName,
             },
           });
         } catch (assignErr) {
-          console.error('Server assignment error:', assignErr);
+          console.warn('Server assignment error (saved locally):', assignErr);
         }
       }
 
@@ -455,6 +516,45 @@ export const UsersPage: React.FC = () => {
       onFilter: (value: any, record: User) => record.role === value,
     },
     {
+      title: 'Branch',
+      key: 'branch',
+      width: 150,
+      align: 'left' as const,
+      render: (_: any, record: User) => {
+        const stored = getStoredUserAssignment(record.id);
+        const branchId = stored?.branchId || record.branchId || (record as any).branch || getStoredEntityBranch(record.id);
+        const managedBranch = branches.find((b: any) => b.managerUserId === record.id);
+        const branch = branches.find(
+          (b: any) => b.id === branchId || b.branchCode === branchId || b.name === branchId || (branchId && getBranchCanonicalKey(b.id) === getBranchCanonicalKey(branchId))
+        ) || managedBranch;
+        const name = stored?.branchName || branch?.name || (branchId ? getUserBranchName({ branchId }, branches) : null) || (typeof branchId === 'string' && branchId.length > 0 ? branchId : null);
+        if (name) {
+          return <Tag color={tokens.primary}>{name}</Tag>;
+        }
+        if (record.role === 'admin') {
+          return <Tag color="blue">Head Office</Tag>;
+        }
+        return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+      },
+    },
+    {
+      title: 'Department',
+      key: 'department',
+      width: 160,
+      align: 'left' as const,
+      render: (_: any, record: User) => {
+        const stored = getStoredUserAssignment(record.id);
+        const deptRaw = stored?.departmentName || stored?.department || record.department || stored?.departmentId;
+        const dept = departments.find((d: any) => d.id === deptRaw || d.name === deptRaw);
+        const roleDefault = resolveDefaultDepartment(record.role);
+        const name = stored?.departmentName || dept?.name || (typeof deptRaw === 'string' && deptRaw.trim().length > 0 ? deptRaw : null) || roleDefault;
+        if (name && name !== 'Unassigned') {
+          return <Tag>{name}</Tag>;
+        }
+        return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+      },
+    },
+    {
       title: 'Status',
       dataIndex: 'isActive',
       key: 'isActive',
@@ -521,17 +621,24 @@ export const UsersPage: React.FC = () => {
                   role: record.role,
                   isActive: record.isActive,
                 });
+                const stored = getStoredUserAssignment(record.id);
+                if (stored?.branchId || stored?.departmentId) {
+                  form.setFieldsValue({
+                    branchId: stored.branchId,
+                    departmentId: stored.departmentId,
+                  });
+                }
                 try {
                   const res = await apiClient.get(`/users/${record.id}/assignment`);
                   const assignmentData = unwrapData(res) as { branchId?: string; departmentId?: string } | undefined;
-                  if (assignmentData) {
+                  if (assignmentData && (assignmentData.branchId || assignmentData.departmentId)) {
                     form.setFieldsValue({
-                      branchId: assignmentData.branchId,
-                      departmentId: assignmentData.departmentId,
+                      branchId: assignmentData.branchId || stored?.branchId,
+                      departmentId: assignmentData.departmentId || stored?.departmentId,
                     });
                   }
                 } catch {
-                  // Fallback if no assignment set yet
+                  // Fallback if no server assignment available
                 }
               }}
             />

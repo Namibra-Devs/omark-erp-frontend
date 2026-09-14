@@ -23,6 +23,14 @@ import { setPhoto } from '@/utils/userPhotoStorage';
 import { useMockActivityFeed } from './useMockActivityFeed';
 import { useAuth } from '@/contexts/AuthContext';
 import { useActivityLogQuery } from '@/api/activityLog';
+import {
+  getStoredUserAssignment,
+  setStoredUserAssignment,
+  resolveDefaultDepartment,
+  useAssignmentListener,
+  addStaffToBranchRoster,
+} from '@/utils/userAssignmentStorage';
+import { getStoredEntityBranch, recordEntityBranch, getBranchCanonicalKey } from '@/utils/branchIsolation';
 
 import { getStoredActivities } from '@/utils/activityNotificationEngine';
 
@@ -150,6 +158,20 @@ const mapApiUserToLocalUser = (entity: UserEntity, createdPasswords: Record<stri
         entity.phoneNumber ??
         '';
 
+  const assignment = getStoredUserAssignment(entity.id);
+  const defaultDept = resolveDefaultDepartment(entity.role);
+  const department =
+    assignment?.departmentName ||
+    assignment?.department ||
+    entity.department ||
+    defaultDept;
+  const branchId =
+    assignment?.branchId ||
+    (entity as any).branchId ||
+    (entity as any).branch ||
+    getStoredEntityBranch(entity.id);
+  const departmentId = assignment?.departmentId || (entity as any).departmentId;
+
   return {
     id: entity.id,
     name,
@@ -159,7 +181,10 @@ const mapApiUserToLocalUser = (entity: UserEntity, createdPasswords: Record<stri
     phone,
     role: entity.role,
     status: entity.isActive ? 'active' : 'inactive',
-    department: entity.department || undefined,
+    department,
+    departmentId,
+    branchId,
+    branch: branchId,
     joined: entity.createdAt?.split('T')[0] ?? '',
     lastActive: entity.updatedAt?.split('T')[0] ?? '',
     createdPassword: createdPasswords[entity.id],
@@ -168,6 +193,7 @@ const mapApiUserToLocalUser = (entity: UserEntity, createdPasswords: Record<stri
 
 export const useAdminDashboard = () => {
   const queryClient = useQueryClient();
+  const assignmentTick = useAssignmentListener();
 
   // "Every branch is a unit on its own" — an admin assigned to a specific
   // branch (see src/mock/staffAssignments.ts) only sees that branch's own
@@ -403,6 +429,7 @@ export const useAdminDashboard = () => {
     // we have the new user's id, in onSuccess below.
     const branchId = userData.branchId as string | undefined;
     const departmentId = userData.departmentId as string | undefined;
+    const department = (userData.department || resolveDefaultDepartment(role)) as string;
     // Prototype-only photo (see src/mock/photos.ts) — no upload endpoint
     // exists on the real API, so this never goes in the API payload either.
     const photo = userData.photo as string | undefined;
@@ -424,14 +451,32 @@ export const useAdminDashboard = () => {
         console.log('✅ Registration successful:', response);
         if (response?.id) {
           setCreatedPasswords(prev => ({ ...prev, [response.id]: password }));
-          if (branchId || departmentId) {
+
+          // Always persist assignment locally so newly created staff are NEVER unassigned
+          const branchCanon = getBranchCanonicalKey(branchId);
+          const branchName = userData.branchName || (branchCanon === 'accra' ? 'Accra Central' : undefined);
+
+          setStoredUserAssignment(response.id, {
+            branchId,
+            branchName,
+            departmentId,
+            department,
+            departmentName: department,
+            role,
+          });
+          if (branchId) {
+            recordEntityBranch('staff', response.id, branchId);
+            addStaffToBranchRoster(branchId, response.id, branchName);
+          }
+
+          if (branchId || departmentId || department) {
             try {
               await updateUserAssignmentMutation.mutateAsync({
                 userId: response.id,
-                payload: { branchId, departmentId },
+                payload: { branchId, departmentId, department, departmentName: department },
               });
             } catch (assignErr) {
-              console.error('Failed to update user assignment on server:', assignErr);
+              console.warn('Server assignment sync caught, local assignment retained:', assignErr);
             }
           }
           if (photo) {
@@ -496,17 +541,36 @@ export const useAdminDashboard = () => {
       { id, payload },
       {
         onSuccess: async () => {
-          if (userData.branchId !== undefined || userData.departmentId !== undefined) {
+          if (userData.branchId !== undefined || userData.departmentId !== undefined || userData.department !== undefined) {
+            const branchCanon = getBranchCanonicalKey(userData.branchId);
+            const branchName = userData.branchName || (branchCanon === 'accra' ? 'Accra Central' : undefined);
+
+            setStoredUserAssignment(id, {
+              branchId: userData.branchId,
+              branchName,
+              departmentId: userData.departmentId,
+              department: userData.department,
+              departmentName: userData.department,
+              role: userData.role,
+            });
+            if (userData.branchId) {
+              recordEntityBranch('staff', id, userData.branchId);
+              addStaffToBranchRoster(userData.branchId, id, branchName);
+            }
+
             try {
               await updateUserAssignmentMutation.mutateAsync({
                 userId: id,
                 payload: {
                   branchId: userData.branchId,
+                  branchName,
                   departmentId: userData.departmentId,
+                  department: userData.department,
+                  departmentName: userData.department,
                 },
               });
             } catch (assignErr) {
-              console.error('Failed to update assignment on edit:', assignErr);
+              console.warn('Failed to update assignment on server, local assignment retained:', assignErr);
             }
           }
           setLocalActivityLogs(prev => [
@@ -521,6 +585,23 @@ export const useAdminDashboard = () => {
         },
         onError: (err: any) => {
           console.error('❌ Update error:', err);
+          if (userData.branchId !== undefined || userData.departmentId !== undefined || userData.department !== undefined) {
+            const branchCanon = getBranchCanonicalKey(userData.branchId);
+            const branchName = userData.branchName || (branchCanon === 'accra' ? 'Accra Central' : undefined);
+
+            setStoredUserAssignment(id, {
+              branchId: userData.branchId,
+              branchName,
+              departmentId: userData.departmentId,
+              department: userData.department,
+              departmentName: userData.department,
+              role: userData.role,
+            });
+            if (userData.branchId) {
+              recordEntityBranch('staff', id, userData.branchId);
+              addStaffToBranchRoster(userData.branchId, id, branchName);
+            }
+          }
           const errorData = err?.response?.data || err?.error || err;
           const msg = errorData?.message || 'Failed to update user';
           message.error(msg);

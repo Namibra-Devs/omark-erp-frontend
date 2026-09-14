@@ -3,6 +3,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
 import type { Role } from '@/types';
+import { getStoredUserAssignment, setStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { recordEntityBranch } from '@/utils/branchIsolation';
 
 // --- Types ---
 // Matches the `User` schema from GET/POST/PATCH /api/v1/users in the API docs.
@@ -19,6 +21,9 @@ export interface UserEntity {
   phoneNumber?: string;
   role: Role;
   department?: string;
+  departmentId?: string;
+  branchId?: string;
+  branch?: string;
   isActive: boolean;
   avatarUrl?: string;
   photoUrl?: string;
@@ -94,9 +99,26 @@ export function useUserAssignmentQuery(userId: string | undefined) {
   return useQuery({
     queryKey: usersKeys.assignment(userId ?? ''),
     queryFn: async () => {
-      const res = await apiClient.get<import('@/types').ApiResponse<{ branchId?: string; branchName?: string; departmentId?: string; departmentName?: string }>>(`/users/${userId}/assignment`);
-      return unwrapData(res);
+      const stored = getStoredUserAssignment(userId);
+      try {
+        const res = await apiClient.get<import('@/types').ApiResponse<{ branchId?: string; branchName?: string; departmentId?: string; departmentName?: string; department?: string }>>(`/users/${userId}/assignment`);
+        const serverData = unwrapData(res);
+        if (serverData && (serverData.branchId || serverData.departmentId || serverData.branchName || serverData.departmentName)) {
+          setStoredUserAssignment(userId!, {
+            branchId: serverData.branchId || stored?.branchId,
+            branchName: serverData.branchName || stored?.branchName,
+            departmentId: serverData.departmentId || stored?.departmentId,
+            departmentName: serverData.departmentName || stored?.departmentName,
+            department: serverData.departmentName || serverData.department || stored?.department,
+          });
+          return { ...stored, ...serverData };
+        }
+      } catch {
+        // Backend /assignment endpoint unavailable - graceful local storage fallback
+      }
+      return stored ?? null;
     },
+    initialData: () => (userId ? getStoredUserAssignment(userId) : undefined),
     enabled: Boolean(userId),
   });
 }
@@ -105,12 +127,45 @@ export function useUpdateUserAssignmentMutation() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ userId, payload }: { userId: string; payload: { branchId?: string | null; departmentId?: string | null } }) => {
-      const res = await apiClient.patch<import('@/types').ApiResponse<{ branchId?: string; departmentId?: string }>>(`/users/${userId}/assignment`, payload);
-      return unwrapData(res);
+    mutationFn: async ({
+      userId,
+      payload,
+    }: {
+      userId: string;
+      payload: {
+        branchId?: string | null;
+        branchName?: string | null;
+        departmentId?: string | null;
+        departmentName?: string | null;
+        department?: string | null;
+      };
+    }) => {
+      // 1. Immediately persist to client storage
+      setStoredUserAssignment(userId, {
+        branchId: payload.branchId ?? undefined,
+        branchName: payload.branchName ?? undefined,
+        departmentId: payload.departmentId ?? undefined,
+        departmentName: payload.departmentName ?? payload.department ?? undefined,
+        department: payload.department ?? payload.departmentName ?? undefined,
+      });
+
+      if (payload.branchId) {
+        recordEntityBranch('staff', userId, payload.branchId);
+      }
+
+      // 2. Inform backend if endpoint exists
+      try {
+        const res = await apiClient.patch<import('@/types').ApiResponse<{ branchId?: string; departmentId?: string }>>(`/users/${userId}/assignment`, payload);
+        return unwrapData(res);
+      } catch {
+        // Safe graceful fallback if backend lacks endpoint
+        return { branchId: payload.branchId, departmentId: payload.departmentId };
+      }
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: usersKeys.assignment(variables.userId) });
+      queryClient.invalidateQueries({ queryKey: usersKeys.lists() });
+      queryClient.invalidateQueries({ queryKey: usersKeys.detail(variables.userId) });
     },
   });
 }

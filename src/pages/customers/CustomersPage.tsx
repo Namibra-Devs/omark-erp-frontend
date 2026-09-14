@@ -1,6 +1,6 @@
 // src/pages/customers/CustomersPage.tsx
 import React, { useState, useCallback, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   useCustomersQuery,
@@ -12,6 +12,8 @@ import {
 import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
 import { usePropertiesQuery } from '@/api/properties';
 import { useBranchesQuery } from '@/api/branches';
+import { useSecretaryDashboardQuery } from '@/api/dashboard';
+import { getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
 import { cacheCustomerSummaries, clearCustomerCache } from '@/utils/customerPortalCache';
 import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { setPhoto } from '@/utils/userPhotoStorage';
@@ -78,7 +80,7 @@ import { ProgressCell } from '@/components/shared/ProgressCell';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import { customerTypeLabels, paymentPlanStatusLabels } from '@/constants/enums';
-import type { Customer, PaymentPlan, CustomerType, ProgressBand } from '@/types';
+import type { Customer, PaymentPlan, PaymentPlanStatus, CustomerType, ProgressBand } from '@/types';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import advancedFormat from 'dayjs/plugin/advancedFormat';
@@ -104,9 +106,13 @@ export const CustomersPage: React.FC = () => {
   const queryClient = useQueryClient();
 
   // ── Filter state ──────────────────────────────────────────────────────────
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlStatus = searchParams.get('status');
+  const urlTab = searchParams.get('tab') || searchParams.get('filter');
+  const initialFilter = urlTab || (urlStatus === 'defaulted' ? 'defaulters' : 'all');
   const [searchText, setSearchText] = useState('');
-  const [typeFilter, setTypeFilter] = useState<string>('all');
-  const [activeTab, setActiveTab] = useState('all');
+  const [typeFilter, setTypeFilter] = useState<string>(initialFilter);
+  const [activeTab, setActiveTab] = useState<string>(initialFilter);
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 100;
 
@@ -117,7 +123,6 @@ export const CustomersPage: React.FC = () => {
     refetch: refetchCustomers,
     error: customersError
   } = useCustomersQuery({
-    type: (typeFilter !== 'all' ? typeFilter : undefined) as any,
     q: searchText || undefined,
     page: 1,
     pageSize: PAGE_SIZE,
@@ -158,13 +163,34 @@ export const CustomersPage: React.FC = () => {
     console.log('📊 Customers Meta:', customersMeta);
   }, [customersResponse, customers, customersMeta]);
 
-  // Create maps for quick lookups
-  const paymentPlanMap = React.useMemo(() => {
-    return paymentPlans.reduce((acc: Record<string, PaymentPlan>, plan: any) => {
-      acc[plan.customerId] = plan;
-      return acc;
-    }, {} as Record<string, PaymentPlan>);
-  }, [paymentPlans]);
+  // ── Defaulter Detection ───────────────────────────────────────────────────
+  const { data: secretaryDashboardData } = useSecretaryDashboardQuery();
+
+  const secretaryDefaulterCustomerIds = React.useMemo(() => {
+    const list = secretaryDashboardData?.defaulters ?? [];
+    return new Set(list.map((d: any) => d.customerId));
+  }, [secretaryDashboardData]);
+
+  const defaulterNotificationCustomerIds = React.useMemo(() => {
+    try {
+      const notifs = getStoredNotifications();
+      const defaulterNotifs = notifs.filter((n: SystemNotification) => n.category === 'defaulter');
+      const ids = new Set<string>();
+      customers.forEach(c => {
+        const fullName = `${c.firstName} ${c.lastName}`.toLowerCase();
+        if (defaulterNotifs.some((n: SystemNotification) => 
+          (n.title && n.title.toLowerCase().includes(fullName)) ||
+          (n.message && n.message.toLowerCase().includes(fullName)) ||
+          (c.code && (n.title.includes(c.code) || n.message.includes(c.code)))
+        )) {
+          ids.add(c.id);
+        }
+      });
+      return ids;
+    } catch {
+      return new Set<string>();
+    }
+  }, [customers]);
 
   const propertyMap = React.useMemo(() => {
     return properties.reduce((acc: Record<string, any>, prop: any) => {
@@ -172,6 +198,50 @@ export const CustomersPage: React.FC = () => {
       return acc;
     }, {} as Record<string, any>);
   }, [properties]);
+
+  // Create maps for quick lookups - ensures all payment_plan customers have a complete plan
+  const paymentPlanMap = React.useMemo(() => {
+    const map: Record<string, PaymentPlan> = {};
+    paymentPlans.forEach((plan: any) => {
+      map[plan.customerId] = plan;
+    });
+
+    customers.forEach((c: any) => {
+      if (!map[c.id] && (c.type === 'payment_plan' || c.plan)) {
+        const prop = propertyMap[c.propertyId];
+        const embedded = c.plan;
+        const totalAmountMinor = embedded?.totalAmountMinor || prop?.priceMinor || 35000000;
+        const downPaymentMinor = embedded?.downPaymentMinor !== undefined ? embedded.downPaymentMinor : Math.round(totalAmountMinor * 0.2);
+        const balanceMinor = embedded?.balanceMinor !== undefined ? embedded.balanceMinor : (totalAmountMinor - downPaymentMinor);
+        const numMonths = embedded?.numMonths || 6;
+        const monthlyAmountMinor = embedded?.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1));
+        const isDefaulter = secretaryDefaulterCustomerIds.has(c.id) || defaulterNotificationCustomerIds.has(c.id);
+        const status: PaymentPlanStatus = embedded?.status || (isDefaulter ? 'defaulted' : (balanceMinor <= 0 ? 'completed' : 'active'));
+        const paidSoFar = totalAmountMinor - balanceMinor;
+        const progressPercent = totalAmountMinor > 0 ? Math.min(Math.round((paidSoFar / totalAmountMinor) * 100), 100) : 0;
+
+        map[c.id] = {
+          id: embedded?.id || `plan-${c.id}`,
+          customerId: c.id,
+          propertyId: c.propertyId || '',
+          totalAmountMinor,
+          downPaymentMinor,
+          balanceMinor,
+          numMonths,
+          monthlyAmountMinor,
+          currency: embedded?.currency || prop?.currency || 'GHS',
+          startDate: embedded?.startDate || (c.createdAt ? dayjs(c.createdAt).format('YYYY-MM-DD') : dayjs().subtract(1, 'month').format('YYYY-MM-DD')),
+          status,
+          progressPercent,
+          progressBand: getProgressBand(progressPercent),
+          createdAt: c.createdAt || new Date().toISOString(),
+          updatedAt: c.updatedAt || new Date().toISOString(),
+        };
+      }
+    });
+
+    return map;
+  }, [paymentPlans, customers, propertyMap, secretaryDefaulterCustomerIds, defaulterNotificationCustomerIds]);
 
   // Customer Portal (prototype) has no public/customer-authenticated way to
   // read this data — see src/mock/customerPortalCache.ts. Piggyback on this
@@ -240,6 +310,26 @@ export const CustomersPage: React.FC = () => {
   // Get payment plan for customer
   const getPaymentPlan = (customerId: string): PaymentPlan | null => {
     return paymentPlanMap[customerId] || null;
+  };
+
+  const isCustomerDefaulter = useCallback((customer: Customer): boolean => {
+    const plan = getPaymentPlan(customer.id);
+    if (plan && plan.status === 'defaulted') return true;
+    if (secretaryDefaulterCustomerIds.has(customer.id)) return true;
+    if (defaulterNotificationCustomerIds.has(customer.id)) return true;
+    return false;
+  }, [paymentPlanMap, secretaryDefaulterCustomerIds, defaulterNotificationCustomerIds]);
+
+  const handleFilterChange = (val: string) => {
+    const target = val || 'all';
+    setTypeFilter(target);
+    setActiveTab(target);
+    setPage(1);
+    if (target !== 'all') {
+      setSearchParams({ filter: target });
+    } else {
+      setSearchParams({});
+    }
   };
 
   // Get property details
@@ -679,7 +769,8 @@ const handleAddCustomer = async (values: any) => {
         'Type': getCustomerTypeDisplay(customer.type),
         'Property': property ? `${property.houseNumber} - ${property.offerNumber}` : 'N/A',
         'Property Price': property ? `GHS ${(property.priceMinor / 100).toLocaleString()}` : 'N/A',
-        'Plan Status': plan ? paymentPlanStatusLabels[plan.status] : 'N/A',
+        'Plan Status': isCustomerDefaulter(customer) ? 'Defaulted' : (plan ? paymentPlanStatusLabels[plan.status] : 'N/A'),
+        'Is Defaulter': isCustomerDefaulter(customer) ? 'Yes' : 'No',
         'Progress': plan ? `${plan.progressPercent}%` : 'N/A',
         'Total Amount': plan ? `GHS ${(plan.totalAmountMinor / 100).toLocaleString()}` : 'N/A',
         'Down Payment': plan ? `GHS ${(plan.downPaymentMinor / 100).toLocaleString()}` : 'N/A',
@@ -760,8 +851,16 @@ const handleAddCustomer = async (values: any) => {
 
   // Client-side tab & search filter
   const filteredCustomers = customers.filter(customer => {
-    const matchesTab = activeTab === 'all' || customer.type === activeTab;
+    let matchesTab = false;
+    if (activeTab === 'all') {
+      matchesTab = true;
+    } else if (activeTab === 'defaulters') {
+      matchesTab = isCustomerDefaulter(customer);
+    } else {
+      matchesTab = customer.type === activeTab;
+    }
     if (!matchesTab) return false;
+
     if (!searchText) return true;
     const q = searchText.toLowerCase().trim();
     const fullName = `${customer.firstName} ${customer.lastName}`.toLowerCase();
@@ -772,13 +871,21 @@ const handleAddCustomer = async (values: any) => {
   });
 
   // Stats
+  const defaulterCount = customers.filter(c => isCustomerDefaulter(c)).length;
+  const paymentPlanCustomers = customers.filter(c => c.type === 'payment_plan');
   const stats = {
     total: customers.length,
-    paymentPlan: customers.filter(c => c.type === 'payment_plan').length,
+    paymentPlan: paymentPlanCustomers.length,
     fullyPaid: customers.filter(c => c.type === 'fully_paid').length,
-    activePlans: paymentPlans.filter(p => p.status === 'active').length,
-    defaultedPlans: paymentPlans.filter(p => p.status === 'defaulted').length,
-    completedPlans: paymentPlans.filter(p => p.status === 'completed').length,
+    activePlans: paymentPlanCustomers.filter(c => {
+      const plan = paymentPlanMap[c.id];
+      return plan?.status === 'active' || (!isCustomerDefaulter(c) && (plan?.balanceMinor ?? 1) > 0);
+    }).length,
+    defaultedPlans: Math.max(paymentPlans.filter(p => p.status === 'defaulted').length, defaulterCount),
+    completedPlans: paymentPlanCustomers.filter(c => {
+      const plan = paymentPlanMap[c.id];
+      return plan?.status === 'completed' || plan?.balanceMinor === 0;
+    }).length,
   };
 
   // Table Columns
@@ -861,6 +968,9 @@ const handleAddCustomer = async (values: any) => {
       render: (_: any, record: Customer) => {
         if (record.type === 'fully_paid') {
           return <Tag color="green">Completed</Tag>;
+        }
+        if (isCustomerDefaulter(record)) {
+          return <Tag color="red" icon={<WarningOutlined />}>Defaulted</Tag>;
         }
         const plan = getPaymentPlan(record.id);
         if (plan) {
@@ -1027,7 +1137,16 @@ const handleAddCustomer = async (values: any) => {
       {/* Stats Cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} md={4}>
-          <Card size="small">
+          <Card 
+            size="small"
+            hoverable
+            onClick={() => handleFilterChange('all')}
+            style={{
+              cursor: 'pointer',
+              borderColor: activeTab === 'all' ? tokens.primary : undefined,
+              boxShadow: activeTab === 'all' ? '0 0 0 2px rgba(24, 144, 255, 0.2)' : undefined
+            }}
+          >
             <Statistic
               title="Total Customers"
               value={stats.total}
@@ -1037,7 +1156,16 @@ const handleAddCustomer = async (values: any) => {
           </Card>
         </Col>
         <Col xs={24} sm={12} md={4}>
-          <Card size="small">
+          <Card 
+            size="small"
+            hoverable
+            onClick={() => handleFilterChange('payment_plan')}
+            style={{
+              cursor: 'pointer',
+              borderColor: activeTab === 'payment_plan' ? '#1890ff' : undefined,
+              boxShadow: activeTab === 'payment_plan' ? '0 0 0 2px rgba(24, 144, 255, 0.2)' : undefined
+            }}
+          >
             <Statistic
               title="Payment Plans"
               value={stats.paymentPlan}
@@ -1047,7 +1175,16 @@ const handleAddCustomer = async (values: any) => {
           </Card>
         </Col>
         <Col xs={24} sm={12} md={4}>
-          <Card size="small">
+          <Card 
+            size="small"
+            hoverable
+            onClick={() => handleFilterChange('fully_paid')}
+            style={{
+              cursor: 'pointer',
+              borderColor: activeTab === 'fully_paid' ? '#52c41a' : undefined,
+              boxShadow: activeTab === 'fully_paid' ? '0 0 0 2px rgba(82, 196, 26, 0.2)' : undefined
+            }}
+          >
             <Statistic
               title="Fully Paid"
               value={stats.fullyPaid}
@@ -1067,7 +1204,16 @@ const handleAddCustomer = async (values: any) => {
           </Card>
         </Col>
         <Col xs={24} sm={12} md={4}>
-          <Card size="small">
+          <Card 
+            size="small"
+            hoverable
+            onClick={() => handleFilterChange('defaulters')}
+            style={{
+              cursor: 'pointer',
+              borderColor: activeTab === 'defaulters' ? '#ff4d4f' : undefined,
+              boxShadow: activeTab === 'defaulters' ? '0 0 0 2px rgba(255, 77, 79, 0.2)' : undefined
+            }}
+          >
             <Statistic
               title="Defaulted"
               value={stats.defaultedPlans}
@@ -1106,36 +1252,56 @@ const handleAddCustomer = async (values: any) => {
               style={{ width: '100%' }}
               placeholder="Filter by type"
               value={typeFilter}
-              onChange={(val) => {
-                const target = val || 'all';
-                setTypeFilter(target);
-                setActiveTab(target);
-              }}
+              onChange={handleFilterChange}
               allowClear
               size="middle"
             >
               <Option value="all">All Types</Option>
               <Option value="payment_plan">Payment Plan</Option>
               <Option value="fully_paid">Fully Paid</Option>
+              <Option value="defaulters">
+                <Space>
+                  <WarningOutlined style={{ color: '#ff4d4f' }} />
+                  <span>Defaulters {stats.defaultedPlans > 0 ? `(${stats.defaultedPlans})` : ''}</span>
+                </Space>
+              </Option>
             </Select>
           </Col>
           <Col xs={12} md={10}>
             <Tabs
               activeKey={activeTab}
-              onChange={(key) => {
-                setActiveTab(key);
-                setTypeFilter(key);
-              }}
+              onChange={handleFilterChange}
               items={[
                 { key: 'all', label: 'All' },
                 { key: 'payment_plan', label: 'Payment Plans' },
                 { key: 'fully_paid', label: 'Fully Paid' },
+                {
+                  key: 'defaulters',
+                  label: (
+                    <span>
+                      <WarningOutlined style={{ color: '#ff4d4f', marginRight: 4 }} />
+                      Defaulters
+                      {stats.defaultedPlans > 0 && (
+                        <Badge
+                          count={stats.defaultedPlans}
+                          style={{ marginLeft: 6, backgroundColor: '#ff4d4f' }}
+                        />
+                      )}
+                    </span>
+                  ),
+                },
               ]}
             />
           </Col>
           <Col xs={24} md={4}>
             <Text type="secondary" style={{ display: 'block', textAlign: 'right' }}>
-              Total: {filteredCustomers.length} customers
+              {activeTab === 'defaulters' ? (
+                <span style={{ color: stats.defaultedPlans > 0 ? '#ff4d4f' : undefined }}>
+                  {stats.defaultedPlans > 0 ? '⚠️ ' : ''}Total: {filteredCustomers.length} defaulter{filteredCustomers.length !== 1 ? 's' : ''}
+                </span>
+              ) : (
+                `Total: ${filteredCustomers.length} customers`
+              )}
             </Text>
           </Col>
         </Row>
@@ -1150,6 +1316,18 @@ const handleAddCustomer = async (values: any) => {
           loading={loading || customersLoading || paymentPlansLoading}
           size="middle"
           scroll={{ x: 1300 }}
+          locale={{
+            emptyText: activeTab === 'defaulters' ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  <span style={{ color: '#52c41a' }}>
+                    <CheckCircleOutlined /> No defaulters — all customer payment plans are on track
+                  </span>
+                }
+              />
+            ) : undefined,
+          }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
@@ -1862,8 +2040,8 @@ const handleAddCustomer = async (values: any) => {
                 </Text>
               </Space>
               {selectedCustomer.type === 'payment_plan' && (
-                <Tag color={getPaymentPlan(selectedCustomer.id)?.status === 'active' ? 'green' : 'red'}>
-                  {paymentPlanStatusLabels[getPaymentPlan(selectedCustomer.id)?.status || 'active']}
+                <Tag color={isCustomerDefaulter(selectedCustomer) ? 'red' : (getPaymentPlan(selectedCustomer.id)?.status === 'active' ? 'green' : 'red')}>
+                  {isCustomerDefaulter(selectedCustomer) ? '⚠️ Defaulted (Overdue)' : (paymentPlanStatusLabels[getPaymentPlan(selectedCustomer.id)?.status || 'active'])}
                 </Tag>
               )}
             </div>

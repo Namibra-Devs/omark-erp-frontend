@@ -5,6 +5,7 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/api/branches';
+import { getStoredUserAssignment, resolveDefaultDepartment } from '@/utils/userAssignmentStorage';
 import type { User } from '../types';
 
 const { Option } = Select;
@@ -30,6 +31,16 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
 
   useEffect(() => {
     if (user && open) {
+      const stored = getStoredUserAssignment(user.id);
+      const defaultDept = resolveDefaultDepartment(user.role);
+      const branchId = stored?.branchId || user.branchId || user.branch;
+      const department = stored?.departmentName || stored?.department || user.department || defaultDept;
+      
+      // Match departmentId if possible
+      const matchedDept = mockBranchDepartments.find(
+        (d) => d.id === stored?.departmentId || d.name === department || d.id === department
+      );
+
       const formValues = {
         firstName: user.firstName || '',
         lastName: user.lastName || '',
@@ -39,9 +50,9 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
         phoneNumber: user.phone || '',
         role: user.role || '',
         status: user.status || 'active',
-        department: user.department || '',
-        branchId: (user as any)?.branchId || (user as any)?.branch,
-        departmentId: (user as any)?.departmentId || user.department,
+        department: department,
+        branchId: branchId,
+        departmentId: matchedDept?.id || stored?.departmentId || user.departmentId || department,
       };
 
       form.setFieldsValue(formValues);
@@ -89,12 +100,18 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
       return;
     }
     
-    if (!payload.email) {
-      message.error('Email is required');
-      return;
-    }
-    
-    onEdit({ ...payload, branchId: values.branchId, departmentId: values.departmentId });
+    const deptObj = mockBranchDepartments.find((d) => d.id === values.departmentId);
+    const departmentName = deptObj?.name || values.departmentId;
+    const branchObj = branches.find((b: any) => b.id === values.branchId);
+    const branchName = branchObj?.name;
+
+    onEdit({
+      ...payload,
+      branchId: values.branchId,
+      branchName,
+      departmentId: values.departmentId,
+      department: departmentName,
+    });
   };
 
   const handleClose = () => {

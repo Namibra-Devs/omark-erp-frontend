@@ -11,7 +11,13 @@ import {
   FileProtectOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import type { PayrollRecord } from '@/api/payroll';
+import {
+  type PayrollRecord,
+  getPayrollBaseSalaryMinor,
+  getPayrollBonusMinor,
+  getPayrollDeductionsMinor,
+  getPayrollNetSalaryMinor,
+} from '@/api/payroll';
 import { salaryTypeLabels, paymentMethodLabels } from '@/api/compensation';
 import { tokens } from '@/constants/tokens';
 
@@ -26,43 +32,39 @@ interface PayslipModalProps {
 export const PayslipModal: React.FC<PayslipModalProps> = ({ open, onClose, record }) => {
   if (!record) return null;
 
-  const basePayGHS = (record.baseSalaryMinor || 0) / 100;
-  const overtimeGHS = (record.overtimeMinor || 0) / 100;
-  const transportGHS = (record.transportAllowanceMinor || 0) / 100;
-  const housingGHS = (record.housingAllowanceMinor || 0) / 100;
-  const mealGHS = (record.mealAllowanceMinor || 0) / 100;
-  const otherAllowanceGHS = (record.otherAllowanceMinor || 0) / 100;
+  const basePayGHS = getPayrollBaseSalaryMinor(record) / 100;
+  const overtimeGHS = (Number(record.overtimeMinor) || 0) / 100;
+  const transportGHS = (Number(record.transportAllowanceMinor) || 0) / 100;
+  const housingGHS = (Number(record.housingAllowanceMinor) || 0) / 100;
+  const mealGHS = (Number(record.mealAllowanceMinor) || 0) / 100;
+  const otherAllowanceGHS = (Number(record.otherAllowanceMinor) || 0) / 100;
 
-  const commissionGHS = (record.commissionMinor || 0) / 100;
-  const salesBonusGHS = (record.salesBonusMinor || 0) / 100;
-  const attendanceBonusGHS = (record.attendanceBonusMinor || 0) / 100;
-  const punctualityBonusGHS = (record.punctualityBonusMinor || 0) / 100;
-  const productivityBonusGHS = (record.productivityBonusMinor || 0) / 100;
-  const projectCompletionBonusGHS = (record.projectCompletionBonusMinor || 0) / 100;
+  const commissionGHS = (Number(record.commissionMinor) || 0) / 100;
+  const salesBonusGHS = (Number(record.salesBonusMinor) || 0) / 100;
+  const attendanceBonusGHS = (Number(record.attendanceBonusMinor) || 0) / 100;
+  const punctualityBonusGHS = (Number(record.punctualityBonusMinor) || 0) / 100;
+  const productivityBonusGHS = (Number(record.productivityBonusMinor) || 0) / 100;
+  const projectCompletionBonusGHS = (Number(record.projectCompletionBonusMinor) || 0) / 100;
   const genericBonusGHS =
-    ((record.bonusMinor || 0) -
+    ((getPayrollBonusMinor(record)) -
       (commissionGHS + salesBonusGHS + attendanceBonusGHS + punctualityBonusGHS + productivityBonusGHS + projectCompletionBonusGHS) * 100 > 0)
-      ? ((record.bonusMinor || 0) -
+      ? ((getPayrollBonusMinor(record)) -
           (commissionGHS + salesBonusGHS + attendanceBonusGHS + punctualityBonusGHS + productivityBonusGHS + projectCompletionBonusGHS) * 100) / 100
       : 0;
 
   const totalAllowancesGHS = transportGHS + housingGHS + mealGHS + otherAllowanceGHS;
-  const totalBonusesGHS =
-    (record.bonusMinor || 0) / 100 ||
-    (commissionGHS + salesBonusGHS + attendanceBonusGHS + punctualityBonusGHS + productivityBonusGHS + projectCompletionBonusGHS);
+  const totalBonusesGHS = getPayrollBonusMinor(record) / 100;
   const grossPayGHS = basePayGHS + overtimeGHS + totalAllowancesGHS + totalBonusesGHS;
 
-  const taxSSNITGHS = (record.statutoryDeductionMinor || 0) / 100;
-  const latenessGHS = (record.latenessDeductionMinor || 0) / 100;
-  const absenceGHS = (record.absenceDeductionMinor || 0) / 100;
-  const loanGHS = (record.loanDeductionMinor || 0) / 100;
-  const advanceGHS = (record.advanceDeductionMinor || 0) / 100;
-  const otherDeductionGHS = ((record as any).otherDeductionMinor || 0) / 100;
-  const totalDeductionsGHS =
-    (record.deductionsMinor || 0) / 100 ||
-    (taxSSNITGHS + latenessGHS + absenceGHS + loanGHS + advanceGHS + otherDeductionGHS);
+  const taxSSNITGHS = (Number(record.statutoryDeductionMinor) || 0) / 100;
+  const latenessGHS = (Number(record.latenessDeductionMinor) || 0) / 100;
+  const absenceGHS = (Number(record.absenceDeductionMinor) || 0) / 100;
+  const loanGHS = (Number(record.loanDeductionMinor) || 0) / 100;
+  const advanceGHS = (Number(record.advanceDeductionMinor) || 0) / 100;
+  const otherDeductionGHS = (Number((record as any).otherDeductionMinor) || 0) / 100;
+  const totalDeductionsGHS = getPayrollDeductionsMinor(record) / 100;
 
-  const netPayGHS = (record.netSalaryMinor || 0) / 100 || (grossPayGHS - totalDeductionsGHS);
+  const netPayGHS = getPayrollNetSalaryMinor(record) / 100;
 
   const earningsItems = [
     { label: 'Basic Salary', amount: basePayGHS, bold: true },

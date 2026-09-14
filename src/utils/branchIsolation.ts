@@ -49,12 +49,27 @@ export const getUserBranchName = (user: any, branches: BranchInfo[] = []): strin
   const bId = getUserBranchId(user);
   if (!bId) return undefined;
 
+  const bIdCanonical = getBranchCanonicalKey(bId);
+
   const branch = branches.find(
-    (b) => b.id === bId || b.branchCode === bId || b.name === bId || getBranchCanonicalKey(b.id) === getBranchCanonicalKey(bId)
+    (b) =>
+      b.id === bId ||
+      b.branchCode === bId ||
+      b.name === bId ||
+      (bIdCanonical &&
+        (getBranchCanonicalKey(b.id) === bIdCanonical ||
+         getBranchCanonicalKey(b.name) === bIdCanonical ||
+         getBranchCanonicalKey(b.branchCode) === bIdCanonical))
   );
   if (branch) return branch.name;
 
-  const canonical = getBranchCanonicalKey(bId);
+  if (bIdCanonical) {
+    const matchedByCanon = branches.find(
+      (b) => getBranchCanonicalKey(b.name || b.id || b.branchCode) === bIdCanonical
+    );
+    if (matchedByCanon) return matchedByCanon.name;
+  }
+
   const fallbackNames: Record<string, string> = {
     kumasi: 'Kumasi Main',
     accra: 'Accra Central',
@@ -64,7 +79,7 @@ export const getUserBranchName = (user: any, branches: BranchInfo[] = []): strin
     tafo: 'Tafo Branch',
   };
 
-  return fallbackNames[canonical] || (typeof bId === 'string' && bId.length > 0 ? bId : undefined);
+  return fallbackNames[bIdCanonical] || (typeof bId === 'string' && bId.length > 0 ? bId : undefined);
 };
 
 /**

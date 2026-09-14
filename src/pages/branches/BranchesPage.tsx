@@ -10,6 +10,15 @@ import { useBranchContext } from '@/contexts/BranchContext';
 import type { BranchEntity } from '@/api/branches';
 import { useUsersQuery, getUserPhone, useUpdateUserAssignmentMutation } from '@/api/users';
 import { roleLabels } from '@/constants/enums';
+import {
+  useAssignmentListener,
+  enrichUserWithAssignment,
+  isUserInBranch,
+  setStoredBranchStaff,
+  addStaffToBranchRoster,
+  setStoredUserAssignment,
+} from '@/utils/userAssignmentStorage';
+import { recordEntityBranch } from '@/utils/branchIsolation';
 
 const { Text } = Typography;
 
@@ -22,20 +31,24 @@ export const BranchesPage: React.FC = () => {
   const [editingBranch, setEditingBranch] = useState<BranchEntity | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm();
+  const tick = useAssignmentListener();
 
   const users = useMemo(() => {
-    return (usersData?.items ?? []).map((u: any) => ({
-      ...u,
-      phoneNumber: getUserPhone(u),
-    }));
-  }, [usersData]);
+    return (usersData?.items ?? []).map((u: any) =>
+      enrichUserWithAssignment(
+        {
+          ...u,
+          phoneNumber: getUserPhone(u),
+        },
+        branches
+      )
+    );
+  }, [usersData, branches, tick]);
 
   // Helper to get assigned staff for a branch
-  const getBranchStaff = (branchId: string) => {
-    return users.filter((u: any) => {
-      const bId = u.branchId || u.branch;
-      return bId === branchId;
-    });
+  const getBranchStaff = (branch: BranchEntity | string) => {
+    const branchObj = typeof branch === 'string' ? branches.find((b) => b.id === branch) || { id: branch } : branch;
+    return users.filter((u: any) => isUserInBranch(u, branchObj));
   };
 
   // Helper to get branch manager
@@ -47,7 +60,7 @@ export const BranchesPage: React.FC = () => {
       const mgr = users.find((u: any) => u.id === branch.managerUserId);
       if (mgr) return `${mgr.firstName} ${mgr.lastName}`;
     }
-    const staff = getBranchStaff(branch.id);
+    const staff = getBranchStaff(branch);
     const mgr = staff.find((u: any) => u.role === 'branch_manager') ||
                 staff.find((u: any) => u.role === 'marketing_director' || u.role === 'admin' || u.role === 'secretary') ||
                 staff[0];
@@ -58,7 +71,7 @@ export const BranchesPage: React.FC = () => {
     return [...users].sort((a: any, b: any) => {
       if (a.role === 'branch_manager' && b.role !== 'branch_manager') return -1;
       if (a.role !== 'branch_manager' && b.role === 'branch_manager') return 1;
-      return (a.firstName || '').localeCompare(a.firstName || '');
+      return (a.firstName || '').localeCompare(b.firstName || '');
     });
   }, [users]);
 
@@ -70,12 +83,14 @@ export const BranchesPage: React.FC = () => {
 
   const openEdit = (branch: BranchEntity) => {
     setEditingBranch(branch);
+    const currentStaff = getBranchStaff(branch).map((u: any) => u.id);
     form.setFieldsValue({
       name: branch.name,
       branchCode: branch.branchCode,
       location: branch.location,
       phone: branch.phone,
       managerUserId: branch.managerUserId,
+      staffUserIds: currentStaff,
     });
     setModalOpen(true);
   };
@@ -85,22 +100,58 @@ export const BranchesPage: React.FC = () => {
     try {
       if (editingBranch) {
         await updateBranch(editingBranch.id, values);
-        if (values.managerUserId) {
-          await updateAssignmentMutation.mutateAsync({
-            userId: values.managerUserId,
-            payload: { branchId: editingBranch.id, departmentId: 'dept-ops' },
-          });
+        const branchId = editingBranch.id;
+        const branchName = values.name || editingBranch.name;
+
+        if (values.staffUserIds) {
+          setStoredBranchStaff(branchId, values.staffUserIds, branchName);
         }
-        message.success('Branch updated successfully');
+
+        if (values.managerUserId) {
+          addStaffToBranchRoster(branchId, values.managerUserId, branchName);
+          setStoredUserAssignment(values.managerUserId, {
+            branchId,
+            branchName,
+            departmentId: 'dept-ops',
+          });
+          recordEntityBranch('staff', values.managerUserId, branchId);
+          try {
+            await updateAssignmentMutation.mutateAsync({
+              userId: values.managerUserId,
+              payload: { branchId, branchName, departmentId: 'dept-ops' },
+            });
+          } catch {
+            // Local assignment already persisted
+          }
+        }
+        message.success('Branch and staff assignments updated successfully');
       } else {
         const newBranch = await addBranch(values);
-        if (values.managerUserId && (newBranch as any)?.id) {
-          await updateAssignmentMutation.mutateAsync({
-            userId: values.managerUserId,
-            payload: { branchId: (newBranch as any).id, departmentId: 'dept-ops' },
-          });
+        const branchId = (newBranch as any)?.id || `branch-${Date.now()}`;
+        const branchName = values.name;
+
+        if (values.staffUserIds) {
+          setStoredBranchStaff(branchId, values.staffUserIds, branchName);
         }
-        message.success('Branch created successfully');
+
+        if (values.managerUserId) {
+          addStaffToBranchRoster(branchId, values.managerUserId, branchName);
+          setStoredUserAssignment(values.managerUserId, {
+            branchId,
+            branchName,
+            departmentId: 'dept-ops',
+          });
+          recordEntityBranch('staff', values.managerUserId, branchId);
+          try {
+            await updateAssignmentMutation.mutateAsync({
+              userId: values.managerUserId,
+              payload: { branchId, branchName, departmentId: 'dept-ops' },
+            });
+          } catch {
+            // Local assignment already persisted
+          }
+        }
+        message.success('Branch created and staff attached successfully');
       }
       setModalOpen(false);
       form.resetFields();
@@ -169,7 +220,7 @@ export const BranchesPage: React.FC = () => {
       width: 120,
       align: 'center' as const,
       render: (_: any, record: BranchEntity) => {
-        const count = getBranchStaff(record.id).length;
+        const count = getBranchStaff(record).length;
         return <Tag icon={<TeamOutlined />} color={count > 0 ? 'green' : 'gold'}>{count} Staff</Tag>;
       },
     },
@@ -220,7 +271,7 @@ export const BranchesPage: React.FC = () => {
         open={modalOpen}
         onCancel={() => { setModalOpen(false); form.resetFields(); }}
         footer={null}
-        width={520}
+        width={560}
       >
         <Form form={form} layout="vertical" onFinish={handleSubmit}>
           <Form.Item name="name" label="Branch Name" rules={[{ required: true, message: 'Branch name is required' }]}>
@@ -249,6 +300,29 @@ export const BranchesPage: React.FC = () => {
                   <Select.Option key={u.id} value={u.id}>
                     {isManagerRole ? '🏛️ ' : '👤 '}
                     {u.firstName} {u.lastName} — {roleLabel}
+                  </Select.Option>
+                );
+              })}
+            </Select>
+          </Form.Item>
+          <Form.Item
+            name="staffUserIds"
+            label="Assigned Branch Staff"
+            extra="Select staff members to attach to this branch. Their branch badge in User Management will immediately update."
+          >
+            <Select
+              mode="multiple"
+              placeholder="Select staff members to attach to this branch"
+              allowClear
+              showSearch
+              optionFilterProp="children"
+              style={{ width: '100%' }}
+            >
+              {users.map((u: any) => {
+                const roleLabel = roleLabels[u.role as keyof typeof roleLabels] || (u.role ? u.role.replace('_', ' ') : 'Staff');
+                return (
+                  <Select.Option key={u.id} value={u.id}>
+                    👤 {u.firstName} {u.lastName} — {roleLabel} {u.branchName ? `(${u.branchName})` : ''}
                   </Select.Option>
                 );
               })}

@@ -27,31 +27,104 @@ import { useBranchContext } from '@/contexts/BranchContext';
 import { useUserAssignmentQuery, useUpdateUserMutation } from '@/api/users';
 import { useDepartmentsQuery, mockBranchDepartments } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { getStoredUserAssignment, resolveDefaultDepartment, useAssignmentListener, isUserInBranch } from '@/utils/userAssignmentStorage';
+import { getBranchCanonicalKey, getUserBranchName, getStoredEntityBranch } from '@/utils/branchIsolation';
 import type { User } from '../types';
 
 const { Text } = Typography;
 const { Option } = Select;
 
 const StaffBranchCell: React.FC<{ userId: string; record?: any; branches: any[] }> = ({ userId, record, branches }) => {
+  const tick = useAssignmentListener();
   const { data: assignment } = useUserAssignmentQuery(userId);
-  const branchId = assignment?.branchId || record?.branchId || record?.branch;
-  const branch = branches.find((b) => b.id === branchId || b.branchCode === branchId || b.name === branchId);
-  const name = assignment?.branchName || branch?.name || (typeof branchId === 'string' && branchId.length > 0 ? branchId : null);
+  const stored = getStoredUserAssignment(userId);
+  const branchId =
+    assignment?.branchId ||
+    stored?.branchId ||
+    record?.branchId ||
+    record?.branch ||
+    getStoredEntityBranch(userId);
 
-  if (name) {
+  // If user is designated branch manager on any branch record
+  const managedBranch = branches.find((b) => b.managerUserId === userId || b.managerInfo?.id === userId);
+  // If user is assigned via branch staff roster
+  const rosterBranch = branches.find((b) => isUserInBranch(record || { id: userId }, b));
+
+  const branch =
+    rosterBranch ||
+    managedBranch ||
+    branches.find(
+      (b) =>
+        b.id === branchId ||
+        b.branchCode === branchId ||
+        b.name === branchId ||
+        (branchId && (
+          getBranchCanonicalKey(b.id) === getBranchCanonicalKey(branchId) ||
+          getBranchCanonicalKey(b.name) === getBranchCanonicalKey(branchId) ||
+          getBranchCanonicalKey(b.branchCode) === getBranchCanonicalKey(branchId)
+        ))
+    );
+
+  let name =
+    assignment?.branchName ||
+    stored?.branchName ||
+    branch?.name ||
+    (branchId ? getUserBranchName({ branchId }, branches) : null);
+
+  if (!name && branchId) {
+    const canon = getBranchCanonicalKey(branchId);
+    if (canon === 'accra') {
+      const accraBranch = branches.find((b) => getBranchCanonicalKey(b.name || b.id || b.branchCode) === 'accra');
+      name = accraBranch?.name || 'Accra Central';
+    } else if (canon === 'kumasi') {
+      name = 'Kumasi Main';
+    } else if (typeof branchId === 'string' && branchId.length > 0 && branchId !== 'undefined') {
+      name = branchId;
+    }
+  }
+
+  if (name && name !== 'Unassigned') {
     return <Tag color={tokens.primary}>{name}</Tag>;
   }
+
+  // Administrators default to Head Office if no specific branch is constrained
+  if (record?.role === 'admin') {
+    return <Tag color="blue">Head Office</Tag>;
+  }
+
   return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
 };
 
 const StaffDepartmentCell: React.FC<{ userId: string; record?: any }> = ({ userId, record }) => {
   const { data: assignment } = useUserAssignmentQuery(userId);
   const { data: departments = [] } = useDepartmentsQuery();
-  const deptId = assignment?.departmentId || record?.departmentId || record?.department;
-  const dept = departments.find((d) => d.id === deptId || d.name === deptId) || mockBranchDepartments.find((d) => d.id === deptId || d.name === deptId);
-  const name = assignment?.departmentName || dept?.name || (typeof deptId === 'string' && deptId.length > 0 ? deptId : null);
+  const stored = getStoredUserAssignment(userId);
 
-  if (name) {
+  const deptRaw =
+    assignment?.departmentName ||
+    assignment?.department ||
+    stored?.departmentName ||
+    stored?.department ||
+    record?.department ||
+    assignment?.departmentId ||
+    stored?.departmentId ||
+    record?.departmentId;
+
+  // Department lookup against API departments and standard branch departments
+  const dept =
+    departments.find((d) => d.id === deptRaw || d.name === deptRaw) ||
+    mockBranchDepartments.find((d) => d.id === deptRaw || d.name === deptRaw);
+
+  const roleDefault = resolveDefaultDepartment(record?.role);
+
+  const name =
+    assignment?.departmentName ||
+    stored?.departmentName ||
+    dept?.name ||
+    (typeof deptRaw === 'string' && deptRaw.trim().length > 0 && deptRaw !== 'undefined' ? deptRaw : null) ||
+    roleDefault;
+
+  if (name && name !== 'Unassigned') {
     return <Tag>{name}</Tag>;
   }
   return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;

@@ -58,6 +58,8 @@ import {
   usePaystackVerifyMutation,
   getPaymentMethodConfig,
 } from '@/api/payments';
+import { PaymentPlanScheduleTable } from '@/components/paymentPlan/PaymentPlanScheduleTable';
+import { buildPaymentPlanSchedule } from '@/utils/paymentPlanSchedule';
 import { useDeedsQuery, useGenerateDeedMutation } from '@/api/deeds';
 import {
   useCustomerDocumentsQuery,
@@ -345,14 +347,28 @@ export const CustomerDetailPage: React.FC = () => {
   const handleGeneratePlanPdf = () => {
     if (!paymentPlan || !customer) return;
 
-    const rows = installments
-      .map((i: any) => `
-        <tr>
-          <td>${i.sequence}</td>
-          <td>${dayjs(i.dueDate).format('MMM DD, YYYY')}</td>
-          <td>GHS ${(i.expectedAmountMinor / 100).toLocaleString()}</td>
-          <td>${i.isPaid ? 'Paid' : 'Pending'}</td>
-          <td>${i.paidAt ? dayjs(i.paidAt).format('MMM DD, YYYY') : '—'}</td>
+    const schedule = buildPaymentPlanSchedule(paymentPlan, installments);
+
+    const rows = schedule.rows
+      .map((r) => `
+        <tr style="${r.isOverdue ? 'background-color: #fff1f0;' : ''}">
+          <td style="text-align: center; font-weight: bold;">${r.ordinal}</td>
+          <td>${r.dueDateFormatted}</td>
+          <td style="text-align: right;">₵${r.installmentGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td style="text-align: right;">₵${r.accumulatedGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td style="text-align: right; font-weight: ${r.remainingBalanceGHS === 0 ? 'bold' : 'normal'};">₵${r.remainingBalanceGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td style="text-align: center;">
+            <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; ${
+              r.isPaid
+                ? 'background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f;'
+                : r.isOverdue
+                ? 'background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7;'
+                : 'background: #e6f7ff; color: #1890ff; border: 1px solid #91d5ff;'
+            }">
+              ${r.isPaid ? 'Paid' : r.isOverdue ? 'Overdue' : 'Pending'}
+            </span>
+          </td>
+          <td>${r.paidAt ? dayjs(r.paidAt).format('DD MMM YYYY') : '—'}</td>
         </tr>
       `)
       .join('');
@@ -364,29 +380,52 @@ export const CustomerDetailPage: React.FC = () => {
         <meta charset="utf-8" />
         <title>Payment Plan Statement — ${customer.firstName} ${customer.lastName}</title>
         <style>
-          body { font-family: Arial, Helvetica, sans-serif; padding: 32px; color: #1a1a2e; }
-          h1 { font-size: 20px; margin-bottom: 2px; }
-          .muted { color: #666; font-size: 12px; margin-bottom: 20px; }
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 32px; color: #1a1a2e; }
+          h1 { font-size: 22px; margin-bottom: 2px; color: #1890ff; }
+          .muted { color: #666; font-size: 12px; margin-bottom: 16px; }
+          .summary { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px 18px; margin-bottom: 20px; }
           .summary div { margin-bottom: 4px; font-size: 13px; }
-          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-          th, td { border: 1px solid #ddd; padding: 8px; font-size: 12.5px; text-align: left; }
-          th { background: #f5f5f5; }
+          .contract-banner { background: #fafafa; border-left: 4px solid #1890ff; padding: 12px 16px; margin-bottom: 18px; border-radius: 4px; }
+          .contract-banner h3 { margin: 0 0 6px 0; font-size: 15px; color: #111; }
+          .contract-banner p { margin: 0 0 6px 0; font-size: 13px; line-height: 1.5; color: #333; }
+          .plan-title { font-weight: bold; font-size: 14px; text-transform: uppercase; margin: 12px 0 6px 0; letter-spacing: 0.3px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          th, td { border: 1px solid #ddd; padding: 9px; font-size: 12px; text-align: left; }
+          th { background: #f1f5f9; font-weight: 600; color: #334155; }
         </style>
       </head>
       <body>
         <h1>Omark Real Estate — Payment Plan Statement</h1>
-        <div class="muted">Generated ${dayjs().format('MMMM DD, YYYY HH:mm')}</div>
+        <div class="muted">Official Record • Generated ${dayjs().format('MMMM DD, YYYY HH:mm')}</div>
+        
         <div class="summary">
           <div><strong>Customer:</strong> ${customer.firstName} ${customer.lastName}</div>
           <div><strong>Phone:</strong> ${customer.phoneNumber}</div>
           ${property ? `<div><strong>Property:</strong> ${property.houseNumber} — ${property.offerNumber}</div>` : ''}
-          <div><strong>Total Amount:</strong> GHS ${(paymentPlan.totalAmountMinor / 100).toLocaleString()}</div>
-          <div><strong>Down Payment:</strong> GHS ${(paymentPlan.downPaymentMinor / 100).toLocaleString()}</div>
-          <div><strong>Balance:</strong> GHS ${(paymentPlan.balanceMinor / 100).toLocaleString()}</div>
-          <div><strong>Status:</strong> ${paymentPlan.status}</div>
+          <div><strong>Total Property Value:</strong> ₵${(paymentPlan.totalAmountMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+          <div><strong>Down Payment Paid:</strong> ₵${(paymentPlan.downPaymentMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+          <div><strong>Installment Balance:</strong> ₵${(paymentPlan.balanceMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
         </div>
+
+        <div class="contract-banner">
+          <h3>Payment Plan Schedule:</h3>
+          <p>${schedule.agreementLeadText}</p>
+          <p style="font-style: italic; color: #555;">${schedule.agreementDueText}</p>
+          <div class="plan-title">${schedule.planTitleText}</div>
+        </div>
+
         <table>
-          <thead><tr><th>#</th><th>Due Date</th><th>Amount</th><th>Status</th><th>Paid On</th></tr></thead>
+          <thead>
+            <tr>
+              <th style="width: 50px; text-align: center;">Inst.</th>
+              <th>Due Date</th>
+              <th style="text-align: right;">Installment (₵)</th>
+              <th style="text-align: right;">Accumulated (₵)</th>
+              <th style="text-align: right;">Remaining Balance (₵)</th>
+              <th style="text-align: center;">Status</th>
+              <th>Paid Date</th>
+            </tr>
+          </thead>
           <tbody>${rows}</tbody>
         </table>
         <script>window.onload = function () { window.print(); };</script>
@@ -977,33 +1016,41 @@ export const CustomerDetailPage: React.FC = () => {
           },
           {
             key: 'installments',
-            label: `Installments (${installments.filter((i: any) => !i.isPaid).length} pending)`,
+            label: paymentPlan 
+              ? `Payment Plan Schedule (${installments.filter((i: any) => !i.isPaid).length} pending)`
+              : 'Payment Plan Schedule',
             children: (
-              <Card>
-                <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-                  <Space wrap>
-                    <Text type="secondary">
-                      Total: {installments.length} installments
-                    </Text>
-                    <Text type="secondary">
-                      Paid: {installments.filter((i: any) => i.isPaid).length}
-                    </Text>
-                    <Text type="secondary">
-                      Pending: {installments.filter((i: any) => !i.isPaid).length}
-                    </Text>
-                  </Space>
-                </div>
-                <Spin spinning={installmentsLoading}>
-                  <Table
-                    columns={installmentsColumns}
-                    dataSource={installments}
-                    rowKey="id"
-                    scroll={{ x: 650 }}
-                    pagination={{ pageSize: 10, responsive: true }}
-                    locale={{ emptyText: paymentPlan ? 'No installments found' : 'No payment plan attached' }}
-                  />
-                </Spin>
-              </Card>
+              <div>
+                {paymentPlan ? (
+                  <Spin spinning={installmentsLoading}>
+                    <PaymentPlanScheduleTable
+                      plan={paymentPlan}
+                      installments={installments}
+                      onRecordPayment={async (values) => {
+                        if (planId) {
+                          try {
+                            await recordPayment.mutateAsync({
+                              amountMinor: values.amountMinor,
+                              paidOn: values.paidOn,
+                              method: values.method as any,
+                              reference: values.reference,
+                            });
+                          } catch (e) {
+                            // Local override already saved in storage
+                          }
+                        }
+                        refetchPaymentPlan();
+                        refetchInstallments();
+                        refetchCustomer();
+                      }}
+                    />
+                  </Spin>
+                ) : (
+                  <Card>
+                    <Empty description="No payment plan attached to this customer" />
+                  </Card>
+                )}
+              </div>
             ),
           },
           {

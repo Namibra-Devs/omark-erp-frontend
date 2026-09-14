@@ -59,6 +59,10 @@ import {
   useCreatePayrollMutation,
   useBulkPayrollRunMutation,
   useUpdatePayrollMutation,
+  getPayrollNetSalaryMinor,
+  getPayrollBaseSalaryMinor,
+  getPayrollBonusMinor,
+  getPayrollDeductionsMinor,
   type PayrollRecord,
 } from '@/api/payroll';
 import { roleLabels } from '@/constants/enums';
@@ -157,8 +161,8 @@ export const PayrollPage: React.FC = () => {
     };
   };
 
-  const totalNetMinor = payroll.reduce((sum: number, p: any) => sum + (p.netSalaryMinor || 0), 0);
-  const totalBonusMinor = payroll.reduce((sum: number, p: any) => sum + (p.bonusMinor || 0), 0);
+  const totalNetMinor = payroll.reduce((sum: number, p: any) => sum + getPayrollNetSalaryMinor(p), 0);
+  const totalBonusMinor = payroll.reduce((sum: number, p: any) => sum + getPayrollBonusMinor(p), 0);
   const pendingCount = payroll.filter((p: any) => p.status === 'pending').length;
   const approvedCount = payroll.filter((p: any) => p.status === 'approved').length;
 
@@ -333,7 +337,7 @@ export const PayrollPage: React.FC = () => {
           paymentReference: values.paymentReference,
         },
       });
-      message.success(`Salary payment of GH₵ ${((recordToPay.netSalaryMinor || 0) / 100).toLocaleString()} disbursed successfully!`);
+      message.success(`Salary payment of GH₵ ${(getPayrollNetSalaryMinor(recordToPay) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} disbursed successfully!`);
       setPayConfirmModalOpen(false);
       setRecordToPay(null);
       refetch();
@@ -424,15 +428,15 @@ export const PayrollPage: React.FC = () => {
     {
       title: 'Basic Pay',
       key: 'base',
-      render: (_: any, r: PayrollRecord) => `GH₵ ${(r.baseSalaryMinor / 100).toLocaleString()}`,
+      render: (_: any, r: PayrollRecord) => `GH₵ ${(getPayrollBaseSalaryMinor(r) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
     },
     {
       title: 'Allowances',
       key: 'allowances',
       render: (_: any, r: PayrollRecord) => {
-        const allowancesTotal = ((r.transportAllowanceMinor || 0) + (r.housingAllowanceMinor || 0) + (r.mealAllowanceMinor || 0) + (r.otherAllowanceMinor || 0)) / 100;
+        const allowancesTotal = ((Number(r.transportAllowanceMinor) || 0) + (Number(r.housingAllowanceMinor) || 0) + (Number(r.mealAllowanceMinor) || 0) + (Number(r.otherAllowanceMinor) || 0)) / 100;
         return allowancesTotal > 0 ? (
-          <span style={{ color: '#52c41a' }}>+ GH₵ {allowancesTotal.toLocaleString()}</span>
+          <span style={{ color: '#52c41a' }}>+ GH₵ {allowancesTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
         ) : (
           <span style={{ color: '#bbb' }}>—</span>
         );
@@ -441,31 +445,40 @@ export const PayrollPage: React.FC = () => {
     {
       title: 'Bonuses & Commission',
       key: 'bonus',
-      render: (_: any, r: PayrollRecord) => (r.bonusMinor || 0) > 0 ? (
-        <Tag color="green" style={{ fontWeight: 600 }}>
-          + GH₵ {((r.bonusMinor || 0) / 100).toLocaleString()}
-        </Tag>
-      ) : (
-        <span style={{ color: '#bbb' }}>—</span>
-      ),
+      render: (_: any, r: PayrollRecord) => {
+        const bonus = getPayrollBonusMinor(r);
+        return bonus > 0 ? (
+          <Tag color="green" style={{ fontWeight: 600 }}>
+            + GH₵ {(bonus / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </Tag>
+        ) : (
+          <span style={{ color: '#bbb' }}>—</span>
+        );
+      },
     },
     {
       title: 'Deductions',
       key: 'deductions',
-      render: (_: any, r: PayrollRecord) => (r.deductionsMinor || 0) > 0 ? (
-        <span style={{ color: '#cf1322' }}>- GH₵ {((r.deductionsMinor || 0) / 100).toLocaleString()}</span>
-      ) : (
-        <span style={{ color: '#bbb' }}>—</span>
-      ),
+      render: (_: any, r: PayrollRecord) => {
+        const deductions = getPayrollDeductionsMinor(r);
+        return deductions > 0 ? (
+          <span style={{ color: '#cf1322' }}>- GH₵ {(deductions / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+        ) : (
+          <span style={{ color: '#bbb' }}>—</span>
+        );
+      },
     },
     {
       title: 'Net Salary',
       key: 'net',
-      render: (_: any, r: PayrollRecord) => (
-        <strong style={{ color: tokens.primary, fontSize: 14 }}>
-          GH₵ {(r.netSalaryMinor / 100).toLocaleString()}
-        </strong>
-      ),
+      render: (_: any, r: PayrollRecord) => {
+        const net = getPayrollNetSalaryMinor(r);
+        return (
+          <strong style={{ color: tokens.primary, fontSize: 14 }}>
+            GH₵ {(net / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+          </strong>
+        );
+      },
     },
     {
       title: 'Payment Status',
@@ -537,9 +550,9 @@ export const PayrollPage: React.FC = () => {
               onClick={() => {
                 setSelectedPayroll(r);
                 editForm.setFieldsValue({
-                  basePayGHS: r.baseSalaryMinor / 100,
-                  bonusGHS: (r.bonusMinor || 0) / 100,
-                  deductionsGHS: (r.deductionsMinor || 0) / 100,
+                  basePayGHS: getPayrollBaseSalaryMinor(r) / 100,
+                  bonusGHS: getPayrollBonusMinor(r) / 100,
+                  deductionsGHS: getPayrollDeductionsMinor(r) / 100,
                   status: r.status,
                   notes: r.notes || '',
                 });
@@ -1065,7 +1078,7 @@ export const PayrollPage: React.FC = () => {
         width={480}
       >
         <Alert
-          message={`Disbursing GH₵ ${(((recordToPay?.netSalaryMinor || 0) / 100)).toLocaleString()} to ${recordToPay?.staffName || 'Staff Member'}`}
+          message={`Disbursing GH₵ ${(getPayrollNetSalaryMinor(recordToPay) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} to ${recordToPay?.staffName || 'Staff Member'}`}
           type="success"
           showIcon
           style={{ marginBottom: 16 }}

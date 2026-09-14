@@ -115,6 +115,95 @@ export interface BulkPayrollRunPayload {
   staffList?: any[];
 }
 
+// ── Calculation & Sanitization Helpers ─────────────────────────────────────
+export function getPayrollBaseSalaryMinor(r: any): number {
+  if (!r) return 0;
+  const val = r.baseSalaryMinor ?? r.baseSalary ?? r.basePayGHS ?? r.salary ?? r.basePay;
+  const num = Number(val);
+  if (isNaN(num) || num <= 0) return 0;
+  if (r.baseSalaryMinor !== undefined && !isNaN(Number(r.baseSalaryMinor))) {
+    return Math.round(Number(r.baseSalaryMinor));
+  }
+  return Math.round(num >= 10000 ? num : num * 100);
+}
+
+export function getPayrollBonusMinor(r: any): number {
+  if (!r) return 0;
+  if (r.bonusMinor !== undefined && !isNaN(Number(r.bonusMinor))) {
+    return Math.max(0, Math.round(Number(r.bonusMinor)));
+  }
+  const direct = r.bonus ?? r.bonuses ?? r.bonusGHS;
+  if (direct !== undefined && !isNaN(Number(direct))) {
+    const num = Number(direct);
+    return Math.max(0, Math.round(num >= 10000 ? num : num * 100));
+  }
+  const commission = Number(r.commissionMinor) || 0;
+  const sales = Number(r.salesBonusMinor) || 0;
+  const attendance = Number(r.attendanceBonusMinor) || 0;
+  const punctuality = Number(r.punctualityBonusMinor) || 0;
+  const productivity = Number(r.productivityBonusMinor) || 0;
+  const project = Number(r.projectCompletionBonusMinor) || 0;
+  const total = commission + sales + attendance + punctuality + productivity + project;
+  return isNaN(total) ? 0 : Math.max(0, total);
+}
+
+export function getPayrollDeductionsMinor(r: any): number {
+  if (!r) return 0;
+  if (r.deductionsMinor !== undefined && !isNaN(Number(r.deductionsMinor))) {
+    return Math.max(0, Math.round(Number(r.deductionsMinor)));
+  }
+  const direct = r.deductions ?? r.deduction ?? r.deductionsGHS;
+  if (direct !== undefined && !isNaN(Number(direct))) {
+    const num = Number(direct);
+    return Math.max(0, Math.round(num >= 10000 ? num : num * 100));
+  }
+  const tax = Number(r.statutoryDeductionMinor) || 0;
+  const lateness = Number(r.latenessDeductionMinor) || 0;
+  const absence = Number(r.absenceDeductionMinor) || 0;
+  const loan = Number(r.loanDeductionMinor) || 0;
+  const advance = Number(r.advanceDeductionMinor) || 0;
+  const other = Number(r.otherDeductionMinor) || 0;
+  const total = tax + lateness + absence + loan + advance + other;
+  return isNaN(total) ? 0 : Math.max(0, total);
+}
+
+export function getPayrollGrossMinor(r: any): number {
+  if (!r) return 0;
+  if (typeof r.grossEarningsMinor === 'number' && !isNaN(r.grossEarningsMinor) && r.grossEarningsMinor > 0) {
+    return Math.round(r.grossEarningsMinor);
+  }
+  const base = getPayrollBaseSalaryMinor(r);
+  const overtime = Number(r.overtimeMinor) || 0;
+  const transport = Number(r.transportAllowanceMinor) || 0;
+  const housing = Number(r.housingAllowanceMinor) || 0;
+  const meal = Number(r.mealAllowanceMinor) || 0;
+  const other = Number(r.otherAllowanceMinor) || 0;
+  const bonus = getPayrollBonusMinor(r);
+  const gross = base + overtime + transport + housing + meal + other + bonus;
+  return isNaN(gross) ? 0 : Math.max(0, gross);
+}
+
+export function getPayrollNetSalaryMinor(r: any): number {
+  if (!r) return 0;
+  // If a valid positive netSalaryMinor is already set and is not NaN
+  if (typeof r.netSalaryMinor === 'number' && !isNaN(r.netSalaryMinor) && r.netSalaryMinor > 0) {
+    return Math.round(r.netSalaryMinor);
+  }
+  if (typeof r.netSalaryMinor === 'string' && !isNaN(Number(r.netSalaryMinor)) && Number(r.netSalaryMinor) > 0) {
+    return Math.round(Number(r.netSalaryMinor));
+  }
+  // If netSalary is provided in major units (GH₵)
+  const directMajor = r.netSalary ?? r.netPay ?? r.netAmount ?? r.netSalaryGHS;
+  if (directMajor !== undefined && !isNaN(Number(directMajor)) && Number(directMajor) > 0) {
+    const num = Number(directMajor);
+    return Math.round(num >= 10000 ? num : num * 100);
+  }
+  const gross = getPayrollGrossMinor(r);
+  const deductions = getPayrollDeductionsMinor(r);
+  const net = gross - deductions;
+  return isNaN(net) ? 0 : Math.max(0, net);
+}
+
 const STORAGE_KEY = 'omark_payroll_records_store';
 
 const DEFAULT_SEEDED_PAYROLL: PayrollRecord[] = [];
@@ -128,9 +217,33 @@ export const getStoredPayrollRecords = (): PayrollRecord[] => {
     }
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
-      // Remove placeholder seed records (payr-seed-*) so only genuine staff payroll statements exist
-      const cleaned = parsed.filter((item: PayrollRecord) => !item.id?.startsWith('payr-seed-'));
-      if (cleaned.length !== parsed.length) {
+      // Remove placeholder seed records (payr-seed-*) and heal any record with NaN or missing values
+      let needsResave = false;
+      const cleaned = parsed
+        .filter((item: PayrollRecord) => !item.id?.startsWith('payr-seed-'))
+        .map((item: any) => {
+          const baseSalaryMinor = getPayrollBaseSalaryMinor(item);
+          const bonusMinor = getPayrollBonusMinor(item);
+          const deductionsMinor = getPayrollDeductionsMinor(item);
+          const grossEarningsMinor = getPayrollGrossMinor(item);
+          const netSalaryMinor = getPayrollNetSalaryMinor(item);
+          if (
+            item.netSalaryMinor !== netSalaryMinor ||
+            item.baseSalaryMinor !== baseSalaryMinor ||
+            isNaN(item.netSalaryMinor)
+          ) {
+            needsResave = true;
+          }
+          return {
+            ...item,
+            baseSalaryMinor,
+            bonusMinor,
+            deductionsMinor,
+            grossEarningsMinor,
+            netSalaryMinor,
+          };
+        });
+      if (needsResave || cleaned.length !== parsed.length) {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(cleaned));
       }
       return cleaned;
@@ -178,8 +291,29 @@ export function usePayrollQuery(params?: PayrollListParams) {
       const localRecords = getStoredPayrollRecords();
       const mergedMap = new Map<string, PayrollRecord>();
       localRecords.forEach((r) => mergedMap.set(r.id, r));
-      serverRecords.forEach((r) => mergedMap.set(r.id, r));
-      let all = Array.from(mergedMap.values());
+      serverRecords.forEach((r) => {
+        const baseSalaryMinor = getPayrollBaseSalaryMinor(r);
+        const bonusMinor = getPayrollBonusMinor(r);
+        const deductionsMinor = getPayrollDeductionsMinor(r);
+        const grossEarningsMinor = getPayrollGrossMinor(r);
+        const netSalaryMinor = getPayrollNetSalaryMinor(r);
+        mergedMap.set(r.id, {
+          ...r,
+          baseSalaryMinor,
+          bonusMinor,
+          deductionsMinor,
+          grossEarningsMinor,
+          netSalaryMinor,
+        });
+      });
+      let all = Array.from(mergedMap.values()).map((r) => ({
+        ...r,
+        baseSalaryMinor: getPayrollBaseSalaryMinor(r),
+        bonusMinor: getPayrollBonusMinor(r),
+        deductionsMinor: getPayrollDeductionsMinor(r),
+        grossEarningsMinor: getPayrollGrossMinor(r),
+        netSalaryMinor: getPayrollNetSalaryMinor(r),
+      }));
 
       if (params?.month) {
         all = all.filter((r) => r.month === params.month);
@@ -406,18 +540,31 @@ export function useUpdatePayrollMutation() {
       const list = getStoredPayrollRecords();
       const updatedList = list.map((r) => {
         if (r.id === id) {
-          const gross =
-            (payload.baseSalaryMinor ?? r.baseSalaryMinor) +
-            (r.overtimeMinor || 0) +
-            (r.transportAllowanceMinor || 0) +
-            (r.housingAllowanceMinor || 0) +
-            (payload.bonusMinor ?? r.bonusMinor);
-          const net = gross - (payload.deductionsMinor ?? r.deductionsMinor ?? 0);
+          const baseMinor = payload.baseSalaryMinor !== undefined && !isNaN(Number(payload.baseSalaryMinor))
+            ? Number(payload.baseSalaryMinor)
+            : getPayrollBaseSalaryMinor(r);
+          const bonusMinor = payload.bonusMinor !== undefined && !isNaN(Number(payload.bonusMinor))
+            ? Number(payload.bonusMinor)
+            : getPayrollBonusMinor(r);
+          const deductionsMinor = payload.deductionsMinor !== undefined && !isNaN(Number(payload.deductionsMinor))
+            ? Number(payload.deductionsMinor)
+            : getPayrollDeductionsMinor(r);
+
+          const overtime = Number(r.overtimeMinor) || 0;
+          const transport = Number(r.transportAllowanceMinor) || 0;
+          const housing = Number(r.housingAllowanceMinor) || 0;
+          const meal = Number(r.mealAllowanceMinor) || 0;
+          const other = Number(r.otherAllowanceMinor) || 0;
+          const gross = baseMinor + overtime + transport + housing + meal + other + bonusMinor;
+          const net = gross - deductionsMinor;
           return {
             ...r,
             ...payload,
-            grossEarningsMinor: gross,
-            netSalaryMinor: net,
+            baseSalaryMinor: baseMinor,
+            bonusMinor,
+            deductionsMinor,
+            grossEarningsMinor: isNaN(gross) ? 0 : Math.max(0, gross),
+            netSalaryMinor: isNaN(net) ? 0 : Math.max(0, net),
             updatedAt: new Date().toISOString(),
           };
         }

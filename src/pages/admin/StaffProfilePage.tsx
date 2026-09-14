@@ -40,6 +40,8 @@ import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { PayslipModal } from '@/components/payroll/PayslipModal';
 import { CompensationModal } from '@/components/payroll/CompensationModal';
 import { useUsersQuery, useUpdateUserMutation, useUserAssignmentQuery, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, getRoleLabel, getRoleColor, getRoleIcon } from '@/api/users';
+import { getStoredUserAssignment, setStoredUserAssignment, resolveDefaultDepartment } from '@/utils/userAssignmentStorage';
+import { recordEntityBranch } from '@/utils/branchIsolation';
 import { useBonusesQuery, useAwardBonusMutation, bonusTypeLabels, type StaffBonusRecord, type BonusType } from '@/api/bonuses';
 import {
   useStaffCompensationQuery,
@@ -91,7 +93,11 @@ export const StaffProfilePage: React.FC = () => {
 
   // Assignment
   const { data: assignment } = useUserAssignmentQuery(id);
-  const assignedBranch = branches.find((b: any) => b.id === (assignment?.branchId || (staffMember as any)?.branchId));
+  const storedAssignment = getStoredUserAssignment(id);
+  const effectiveBranchId = assignment?.branchId || storedAssignment?.branchId || (staffMember as any)?.branchId;
+  const assignedBranch = branches.find((b: any) => b.id === effectiveBranchId || b.branchCode === effectiveBranchId || b.name === effectiveBranchId);
+  const effectiveDeptId = assignment?.departmentId || storedAssignment?.departmentId;
+  const effectiveDeptName = assignment?.departmentName || storedAssignment?.departmentName || storedAssignment?.department || (effectiveDeptId ? (deptLabels[effectiveDeptId] || effectiveDeptId) : null) || resolveDefaultDepartment(staffMember?.role);
 
   // Compensation Profile
   const { data: compProfile } = useStaffCompensationQuery(id);
@@ -234,11 +240,27 @@ export const StaffProfilePage: React.FC = () => {
 
   const handleAssignBranchDept = async (values: any) => {
     try {
+      const branchObj = branches.find((b: any) => b.id === values.branchId);
+      const deptName = deptLabels[values.departmentId] || values.departmentId;
+      setStoredUserAssignment(staffMember.id, {
+        branchId: values.branchId,
+        branchName: branchObj?.name,
+        departmentId: values.departmentId,
+        departmentName: deptName,
+        department: deptName,
+        role: staffMember.role,
+      });
+      if (values.branchId) {
+        recordEntityBranch('staff', staffMember.id, values.branchId);
+      }
       await updateUserAssignmentMutation.mutateAsync({
         userId: staffMember.id,
         payload: {
           branchId: values.branchId,
+          branchName: branchObj?.name,
           departmentId: values.departmentId,
+          departmentName: deptName,
+          department: deptName,
         },
       });
       message.success('Branch & Department assignment updated');
@@ -457,8 +479,8 @@ export const StaffProfilePage: React.FC = () => {
             label: 'Assign Branch/Dept',
             onClick: () => {
               assignForm.setFieldsValue({
-                branchId: assignment?.branchId || (staffMember as any)?.branchId,
-                departmentId: assignment?.departmentId || (staffMember as any)?.departmentId || (staffMember as any)?.department,
+                branchId: effectiveBranchId,
+                departmentId: effectiveDeptId,
               });
               setAssignModal(true);
             },
@@ -497,9 +519,9 @@ export const StaffProfilePage: React.FC = () => {
                 <Tag color="cyan" icon={<EnvironmentOutlined />} style={{ fontSize: 13, padding: '3px 10px', borderRadius: 12 }}>
                   {branchTitle}
                 </Tag>
-                {assignment?.departmentId && (
+                {effectiveDeptName && (
                   <Tag color="purple" style={{ fontSize: 13, padding: '3px 10px', borderRadius: 12 }}>
-                    {deptLabels[assignment.departmentId] || assignment.departmentId}
+                    {effectiveDeptName}
                   </Tag>
                 )}
                 {compProfile && (
@@ -575,7 +597,7 @@ export const StaffProfilePage: React.FC = () => {
                       </Descriptions.Item>
                       <Descriptions.Item label="Assigned Branch">{branchTitle}</Descriptions.Item>
                       <Descriptions.Item label="Department">
-                        {assignment?.departmentId ? (deptLabels[assignment.departmentId] || assignment.departmentId) : 'General Operations'}
+                        {effectiveDeptName || 'General Operations'}
                       </Descriptions.Item>
                       <Descriptions.Item label="Salary Structure">
                         <Tag color="blue">

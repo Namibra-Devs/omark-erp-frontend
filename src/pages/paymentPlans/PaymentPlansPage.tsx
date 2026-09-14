@@ -1,6 +1,6 @@
 // src/pages/paymentPlans/PaymentPlansPage.tsx
-import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
@@ -75,9 +75,19 @@ import {
   useCreatePaymentPlanMutation,
   getProgressBand,
   type PaymentPlan,
+  type PaymentPlanStatus,
   type ProgressBand,
   type CreatePaymentPlanPayload,
 } from '@/api/paymentPlans';
+import { useSecretaryDashboardQuery } from '@/api/dashboard';
+import { getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
+import { PaymentPlanScheduleTable } from '@/components/paymentPlan/PaymentPlanScheduleTable';
+import {
+  buildPaymentPlanSchedule,
+  getPlanPaymentOverrides,
+  usePaymentPlanScheduleListener
+} from '@/utils/paymentPlanSchedule';
+import { getCachedCustomer } from '@/utils/customerPortalCache';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery } from '@/api/properties';
 import type { Customer } from '@/types';
@@ -94,16 +104,61 @@ const { Text, Title } = Typography;
 
 export const PaymentPlansPage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
+
+  // Listen for real-time payment schedule updates from any screen
+  usePaymentPlanScheduleListener();
   
+  // URL Param synchronization
+  const urlStatus = searchParams.get('status') || searchParams.get('filter') || 'all';
+  const urlBand = searchParams.get('band') || 'all';
+
   // States
   const [searchText, setSearchText] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('all');
-  const [bandFilter, setBandFilter] = useState<string>('all');
+  const [statusFilter, setStatusFilter] = useState<string>(urlStatus);
+  const [bandFilter, setBandFilter] = useState<string>(urlBand);
   const [selectedPlan, setSelectedPlan] = useState<PaymentPlan | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [addModal, setAddModal] = useState(false);
   const [addForm] = Form.useForm();
+
+  // Sync state if URL query params change
+  useEffect(() => {
+    const s = searchParams.get('status') || searchParams.get('filter') || 'all';
+    const b = searchParams.get('band') || 'all';
+    setStatusFilter(s);
+    setBandFilter(b);
+  }, [searchParams]);
+
+  const handleStatusFilterChange = (val: string) => {
+    const nextStatus = val || 'all';
+    setStatusFilter(nextStatus);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (nextStatus !== 'all') {
+        next.set('status', nextStatus);
+      } else {
+        next.delete('status');
+        next.delete('filter');
+      }
+      return next;
+    });
+  };
+
+  const handleBandFilterChange = (val: string) => {
+    const nextBand = val || 'all';
+    setBandFilter(nextBand);
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (nextBand !== 'all') {
+        next.set('band', nextBand);
+      } else {
+        next.delete('band');
+      }
+      return next;
+    });
+  };
 
   // Export states
   const [exportModal, setExportModal] = useState(false);
@@ -111,50 +166,189 @@ export const PaymentPlansPage: React.FC = () => {
   const [exportLoading, setExportLoading] = useState(false);
 
   // ── API Queries ────────────────────────────────────────────────────────────
+  // Fetch full list so client-side filtering and synthesis provide full active & completed data
   const { 
     data: paymentPlansData, 
     isLoading: paymentPlansLoading,
     error: paymentPlansError,
     refetch: refetchPaymentPlans
   } = usePaymentPlansQuery({
-    status: statusFilter !== 'all' ? (statusFilter as any) : undefined,
+    pageSize: 100,
   });
 
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
   const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 100 });
+  const { data: secretaryDashboardData } = useSecretaryDashboardQuery();
 
   // ── API Mutations ──────────────────────────────────────────────────────────
-  // Note: the real API has no update/delete payment-plan endpoints. Only
-  // POST /payment-plans (create) exists, alongside the GET list/detail/installments routes.
   const createPaymentPlan = useCreatePaymentPlanMutation();
 
   // ── Data Mapping with Branch Isolation ────────────────────────────────────
   const { data: branches = [] } = useBranchesQuery();
   const rawPaymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
   const rawCustomers: Customer[] = customersData?.items ?? [];
-
-  const paymentPlans: PaymentPlan[] = filterEntitiesByBranch(rawPaymentPlans, user, branches);
-  const customers: Customer[] = filterEntitiesByBranch(rawCustomers, user, branches);
   const properties = propertiesData?.items ?? [];
 
-  // Create maps for quick lookups
-  const customerMap = React.useMemo(() => {
-    return customers.reduce((acc, customer) => {
-      acc[customer.id] = customer;
-      return acc;
-    }, {} as Record<string, Customer>);
-  }, [customers]);
-
-  const propertyMap = React.useMemo(() => {
+  // Create lookup maps
+  const propertyMap = useMemo(() => {
     return properties.reduce((acc, prop) => {
       acc[prop.id] = prop;
       return acc;
     }, {} as Record<string, any>);
   }, [properties]);
 
+  const customerMap = useMemo(() => {
+    return rawCustomers.reduce((acc, customer) => {
+      acc[customer.id] = customer;
+      return acc;
+    }, {} as Record<string, Customer>);
+  }, [rawCustomers]);
+
+  // Defaulter customer IDs from secretary dashboard & urgent notifications
+  const secretaryDefaulterCustomerIds = useMemo(() => {
+    const list = secretaryDashboardData?.defaulters ?? [];
+    return new Set(list.map((d: any) => d.customerId));
+  }, [secretaryDashboardData]);
+
+  const defaulterNotificationCustomerIds = useMemo(() => {
+    try {
+      const notifs = getStoredNotifications();
+      const defaulterNotifs = notifs.filter((n: SystemNotification) => n.category === 'defaulter');
+      const ids = new Set<string>();
+      rawCustomers.forEach(c => {
+        const fullName = `${c.firstName} ${c.lastName}`.toLowerCase();
+        if (defaulterNotifs.some((n: SystemNotification) => 
+          (n.title && n.title.toLowerCase().includes(fullName)) ||
+          (n.message && n.message.toLowerCase().includes(fullName)) ||
+          (c.code && (n.title.includes(c.code) || n.message.includes(c.code)))
+        )) {
+          ids.add(c.id);
+        }
+      });
+      return ids;
+    } catch {
+      return new Set<string>();
+    }
+  }, [rawCustomers]);
+
+  // ── Merge All Payment Plans (Active, Completed & Defaulted) ───────────────
+  // Resolves the issue where only backend-seeded defaulters were returned,
+  // making sure every customer on a payment plan is represented with their true status.
+  const allRawPaymentPlans = useMemo(() => {
+    const plansMap = new Map<string, PaymentPlan>();
+
+    // 1. Process payment plans from the live API response
+    rawPaymentPlans.forEach(p => {
+      const overrides = getPlanPaymentOverrides(p.id);
+      let adjustedBalanceMinor = p.balanceMinor;
+      let adjustedProgressPercent = p.progressPercent;
+      let adjustedStatus = p.status;
+
+      if (overrides) {
+        const totalPaidMinor = Object.values(overrides.paidInstallments || {}).reduce(
+          (sum, inst) => sum + (inst.amountMinor || 0),
+          0
+        );
+        if (totalPaidMinor > 0) {
+          adjustedBalanceMinor = Math.max((p.balanceMinor || p.totalAmountMinor) - totalPaidMinor, 0);
+          const totalPaid = (p.downPaymentMinor || 0) + totalPaidMinor;
+          adjustedProgressPercent = p.totalAmountMinor > 0 
+            ? Math.min(Math.round((totalPaid / p.totalAmountMinor) * 100), 100) 
+            : p.progressPercent;
+          if (adjustedBalanceMinor === 0) {
+            adjustedStatus = 'completed';
+          }
+        }
+      }
+
+      const updatedPlan: PaymentPlan = {
+        ...p,
+        balanceMinor: adjustedBalanceMinor,
+        progressPercent: adjustedProgressPercent,
+        progressBand: getProgressBand(adjustedProgressPercent),
+        status: adjustedStatus,
+      };
+
+      plansMap.set(p.customerId, updatedPlan);
+    });
+
+    // 2. Include all customers registered under type === 'payment_plan' or who have a plan
+    rawCustomers.forEach(c => {
+      if (plansMap.has(c.id)) return; // Already present from API
+      if (c.type !== 'payment_plan' && !(c as any).plan) return; // Only payment plan customers
+
+      const cached = getCachedCustomer(c.id);
+      const embeddedPlan = (c as any).plan || cached?.paymentPlan;
+      const prop = propertyMap[c.propertyId];
+
+      const totalAmountMinor = embeddedPlan?.totalAmountMinor || prop?.priceMinor || 35000000;
+      const downPaymentMinor = embeddedPlan?.downPaymentMinor !== undefined 
+        ? embeddedPlan.downPaymentMinor 
+        : Math.round(totalAmountMinor * 0.2);
+      const balanceMinor = embeddedPlan?.balanceMinor !== undefined 
+        ? embeddedPlan.balanceMinor 
+        : Math.max(totalAmountMinor - downPaymentMinor, 0);
+      const numMonths = embeddedPlan?.numMonths || 6;
+      const monthlyAmountMinor = embeddedPlan?.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1));
+      
+      const isDefaulter = secretaryDefaulterCustomerIds.has(c.id) || defaulterNotificationCustomerIds.has(c.id);
+      const status: PaymentPlanStatus = embeddedPlan?.status || (isDefaulter ? 'defaulted' : (balanceMinor <= 0 ? 'completed' : 'active'));
+
+      const paidSoFar = totalAmountMinor - balanceMinor;
+      const progressPercent = totalAmountMinor > 0 ? Math.min(Math.round((paidSoFar / totalAmountMinor) * 100), 100) : 0;
+      const progressBand = getProgressBand(progressPercent);
+
+      const planId = embeddedPlan?.id || `plan-${c.id}`;
+
+      // Check local payment overrides
+      const overrides = getPlanPaymentOverrides(planId);
+      let finalBalance = balanceMinor;
+      let finalPercent = progressPercent;
+      let finalStatus = status;
+
+      if (overrides) {
+        const totalPaidMinor = Object.values(overrides.paidInstallments || {}).reduce(
+          (sum, inst) => sum + (inst.amountMinor || 0),
+          0
+        );
+        if (totalPaidMinor > 0) {
+          finalBalance = Math.max(balanceMinor - totalPaidMinor, 0);
+          finalPercent = totalAmountMinor > 0 
+            ? Math.min(Math.round(((paidSoFar + totalPaidMinor) / totalAmountMinor) * 100), 100) 
+            : 100;
+          if (finalBalance === 0) finalStatus = 'completed';
+        }
+      }
+
+      const syntheticPlan: PaymentPlan = {
+        id: planId,
+        customerId: c.id,
+        propertyId: c.propertyId || '',
+        totalAmountMinor,
+        downPaymentMinor,
+        balanceMinor: finalBalance,
+        numMonths,
+        monthlyAmountMinor,
+        currency: embeddedPlan?.currency || prop?.currency || 'GHS',
+        startDate: embeddedPlan?.startDate || (c.createdAt ? dayjs(c.createdAt).format('YYYY-MM-DD') : dayjs().subtract(1, 'month').format('YYYY-MM-DD')),
+        status: finalStatus,
+        progressPercent: finalPercent,
+        progressBand: getProgressBand(finalPercent),
+        createdAt: c.createdAt || new Date().toISOString(),
+        updatedAt: c.updatedAt || new Date().toISOString(),
+      };
+
+      plansMap.set(c.id, syntheticPlan);
+    });
+
+    return Array.from(plansMap.values());
+  }, [rawPaymentPlans, rawCustomers, propertyMap, secretaryDefaulterCustomerIds, defaulterNotificationCustomerIds]);
+
+  const paymentPlans: PaymentPlan[] = filterEntitiesByBranch(allRawPaymentPlans, user, branches);
+  const customers: Customer[] = filterEntitiesByBranch(rawCustomers, user, branches);
+
   // Only customers without an existing plan can have a new one created for them
-  // (the API only supports POST /payment-plans for a customer without one).
-  const customersWithoutPlan = React.useMemo(() => {
+  const customersWithoutPlan = useMemo(() => {
     const withPlan = new Set(paymentPlans.map(p => p.customerId));
     return customers.filter(c => !withPlan.has(c.id));
   }, [customers, paymentPlans]);
@@ -182,16 +376,29 @@ export const PaymentPlansPage: React.FC = () => {
   };
 
   // ── Filter Payment Plans ──────────────────────────────────────────────────
-  const filteredPlans = paymentPlans.filter(plan => {
-    const customerName = getCustomerName(plan.customerId).toLowerCase();
-    const property = getCustomerProperty(plan.customerId).toLowerCase();
-    const matchesSearch = customerName.includes(searchText.toLowerCase()) ||
-                          plan.id.toLowerCase().includes(searchText.toLowerCase()) ||
-                          property.includes(searchText.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || plan.status === statusFilter;
-    const matchesBand = bandFilter === 'all' || plan.progressBand === bandFilter;
-    return matchesSearch && matchesStatus && matchesBand;
-  });
+  const filteredPlans = useMemo(() => {
+    return paymentPlans.filter(plan => {
+      const customerName = getCustomerName(plan.customerId).toLowerCase();
+      const property = getCustomerProperty(plan.customerId).toLowerCase();
+      const matchesSearch = customerName.includes(searchText.toLowerCase()) ||
+                            plan.id.toLowerCase().includes(searchText.toLowerCase()) ||
+                            property.includes(searchText.toLowerCase());
+      const matchesStatus = statusFilter === 'all' || plan.status === statusFilter;
+      const matchesBand = bandFilter === 'all' || plan.progressBand === bandFilter;
+      return matchesSearch && matchesStatus && matchesBand;
+    });
+  }, [paymentPlans, searchText, statusFilter, bandFilter, customerMap, propertyMap]);
+
+  // Priority sorting: Defaulted or Red-band plans float to top when viewing all
+  const sortedAndFilteredPlans = useMemo(() => {
+    return [...filteredPlans].sort((a, b) => {
+      const aUrgent = a.status === 'defaulted' || a.progressBand === 'red';
+      const bUrgent = b.status === 'defaulted' || b.progressBand === 'red';
+      if (aUrgent && !bUrgent) return -1;
+      if (!aUrgent && bUrgent) return 1;
+      return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+    });
+  }, [filteredPlans]);
 
   // ── Stats ──────────────────────────────────────────────────────────────────
   const stats = {
@@ -320,6 +527,105 @@ export const PaymentPlansPage: React.FC = () => {
       setExportModal(false);
       message.success(`Exported ${dataToExport.length} payment plans as ${exportFormat.toUpperCase()}!`);
     }, 1000);
+  };
+
+  // ── Print Schedule Statement ──────────────────────────────────────────────
+  const handlePrintPlan = (plan: PaymentPlan) => {
+    const customer = customerMap[plan.customerId];
+    const property = getCustomerProperty(plan.customerId);
+    const schedule = buildPaymentPlanSchedule(plan);
+
+    const rows = schedule.rows
+      .map((r) => `
+        <tr style="${r.isOverdue ? 'background-color: #fff1f0;' : ''}">
+          <td style="text-align: center; font-weight: bold;">${r.ordinal}</td>
+          <td>${r.dueDateFormatted}</td>
+          <td style="text-align: right;">₵${r.installmentGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td style="text-align: right;">₵${r.accumulatedGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td style="text-align: right; font-weight: ${r.remainingBalanceGHS === 0 ? 'bold' : 'normal'};">₵${r.remainingBalanceGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+          <td style="text-align: center;">
+            <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; ${
+              r.isPaid
+                ? 'background: #f6ffed; color: #52c41a; border: 1px solid #b7eb8f;'
+                : r.isOverdue
+                ? 'background: #fff2f0; color: #ff4d4f; border: 1px solid #ffccc7;'
+                : 'background: #e6f7ff; color: #1890ff; border: 1px solid #91d5ff;'
+            }">
+              ${r.isPaid ? 'Paid' : r.isOverdue ? 'Overdue' : 'Pending'}
+            </span>
+          </td>
+          <td>${r.paidAt ? dayjs(r.paidAt).format('DD MMM YYYY') : '—'}</td>
+        </tr>
+      `)
+      .join('');
+
+    const html = `
+      <!doctype html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Payment Plan Statement — ${customer ? `${customer.firstName} ${customer.lastName}` : 'Customer'}</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 32px; color: #1a1a2e; }
+          h1 { font-size: 22px; margin-bottom: 2px; color: #1890ff; }
+          .muted { color: #666; font-size: 12px; margin-bottom: 16px; }
+          .summary { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 14px 18px; margin-bottom: 20px; }
+          .summary div { margin-bottom: 4px; font-size: 13px; }
+          .contract-banner { background: #fafafa; border-left: 4px solid #1890ff; padding: 12px 16px; margin-bottom: 18px; border-radius: 4px; }
+          .contract-banner h3 { margin: 0 0 6px 0; font-size: 15px; color: #111; }
+          .contract-banner p { margin: 0 0 6px 0; font-size: 13px; line-height: 1.5; color: #333; }
+          .plan-title { font-weight: bold; font-size: 14px; text-transform: uppercase; margin: 12px 0 6px 0; letter-spacing: 0.3px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          th, td { border: 1px solid #ddd; padding: 9px; font-size: 12px; text-align: left; }
+          th { background: #f1f5f9; font-weight: 600; color: #334155; }
+        </style>
+      </head>
+      <body>
+        <h1>Omark Real Estate — Payment Plan Statement</h1>
+        <div class="muted">Official Record • Generated ${dayjs().format('MMMM DD, YYYY HH:mm')}</div>
+        
+        <div class="summary">
+          <div><strong>Customer:</strong> ${customer ? `${customer.firstName} ${customer.lastName}` : 'Customer'}</div>
+          <div><strong>Phone:</strong> ${customer?.phoneNumber || '—'}</div>
+          <div><strong>Property:</strong> ${property}</div>
+          <div><strong>Total Property Value:</strong> ₵${(plan.totalAmountMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+          <div><strong>Down Payment Paid:</strong> ₵${(plan.downPaymentMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+          <div><strong>Installment Balance:</strong> ₵${(plan.balanceMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+        </div>
+
+        <div class="contract-banner">
+          <h3>Payment Plan Schedule:</h3>
+          <p>${schedule.agreementLeadText}</p>
+          <p style="font-style: italic; color: #555;">${schedule.agreementDueText}</p>
+          <div class="plan-title">${schedule.planTitleText}</div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 50px; text-align: center;">Inst.</th>
+              <th>Due Date</th>
+              <th style="text-align: right;">Installment (₵)</th>
+              <th style="text-align: right;">Accumulated (₵)</th>
+              <th style="text-align: right;">Remaining Balance (₵)</th>
+              <th style="text-align: center;">Status</th>
+              <th>Paid Date</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <script>window.onload = function () { window.print(); };</script>
+      </body>
+      </html>
+    `;
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      message.error('Please allow pop-ups for this site to generate the PDF');
+      return;
+    }
+    printWindow.document.write(html);
+    printWindow.document.close();
   };
 
   // ── Table Columns ─────────────────────────────────────────────────────────
@@ -536,11 +842,13 @@ export const PaymentPlansPage: React.FC = () => {
         {/* Quick Actions */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
-            <Button icon={<FileOutlined />}>
-              Generate PDF
-            </Button>
-            <Button icon={<PrinterOutlined />}>
-              Print
+            <Button
+              type="primary"
+              ghost
+              icon={<FilePdfOutlined />}
+              onClick={() => handlePrintPlan(selectedPlan)}
+            >
+              Generate Statement PDF
             </Button>
           </Space>
         </div>
@@ -586,6 +894,16 @@ export const PaymentPlansPage: React.FC = () => {
           </Col>
         </Row>
 
+        {/* Payment Plan Schedule with Actions */}
+        <div style={{ marginTop: 20 }}>
+          <PaymentPlanScheduleTable
+            plan={selectedPlan}
+            onRecordPayment={async () => {
+              refetchPaymentPlans();
+            }}
+          />
+        </div>
+
         {/* Timeline */}
         <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
           <Col span={24}>
@@ -619,12 +937,8 @@ export const PaymentPlansPage: React.FC = () => {
           paddingTop: 16, 
           borderTop: '1px solid #f0f0f0',
           display: 'flex',
-          justifyContent: 'space-between'
+          justifyContent: 'flex-end'
         }}>
-          <Space>
-            <Button icon={<PrinterOutlined />}>Print</Button>
-            <Button icon={<ShareAltOutlined />}>Share</Button>
-          </Space>
           <Button 
             type="primary" 
             onClick={() => navigate(`/customers/${selectedPlan.customerId}`)}
@@ -729,7 +1043,7 @@ export const PaymentPlansPage: React.FC = () => {
           <Card 
             size="small" 
             style={{ borderLeft: `4px solid ${tokens.band.red}` }}
-            onClick={() => setBandFilter('red')}
+            onClick={() => handleBandFilterChange('red')}
             className="cursor-pointer"
           >
             <Statistic
@@ -744,7 +1058,7 @@ export const PaymentPlansPage: React.FC = () => {
           <Card 
             size="small" 
             style={{ borderLeft: `4px solid ${tokens.band.yellow}` }}
-            onClick={() => setBandFilter('yellow')}
+            onClick={() => handleBandFilterChange('yellow')}
             className="cursor-pointer"
           >
             <Statistic
@@ -759,7 +1073,7 @@ export const PaymentPlansPage: React.FC = () => {
           <Card 
             size="small" 
             style={{ borderLeft: `4px solid ${tokens.band.light_green}` }}
-            onClick={() => setBandFilter('light_green')}
+            onClick={() => handleBandFilterChange('light_green')}
             className="cursor-pointer"
           >
             <Statistic
@@ -774,7 +1088,7 @@ export const PaymentPlansPage: React.FC = () => {
           <Card 
             size="small" 
             style={{ borderLeft: `4px solid ${tokens.band.green}` }}
-            onClick={() => setBandFilter('green')}
+            onClick={() => handleBandFilterChange('green')}
             className="cursor-pointer"
           >
             <Statistic
@@ -805,7 +1119,7 @@ export const PaymentPlansPage: React.FC = () => {
               style={{ width: '100%' }}
               placeholder="Filter by status"
               value={statusFilter}
-              onChange={setStatusFilter}
+              onChange={handleStatusFilterChange}
               allowClear
               size="middle"
             >
@@ -821,7 +1135,7 @@ export const PaymentPlansPage: React.FC = () => {
               style={{ width: '100%' }}
               placeholder="Filter by band"
               value={bandFilter}
-              onChange={setBandFilter}
+              onChange={handleBandFilterChange}
               allowClear
               size="middle"
             >
@@ -834,7 +1148,7 @@ export const PaymentPlansPage: React.FC = () => {
           </Col>
           <Col xs={24} md={8}>
             <Text type="secondary" style={{ display: 'block', textAlign: 'right' }}>
-              Total: {filteredPlans.length} payment plans
+              Total: {sortedAndFilteredPlans.length} payment plans
             </Text>
           </Col>
         </Row>
@@ -844,11 +1158,25 @@ export const PaymentPlansPage: React.FC = () => {
       <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
         <Table
           columns={columns}
-          dataSource={filteredPlans}
+          dataSource={sortedAndFilteredPlans}
           rowKey="id"
           loading={paymentPlansLoading}
           size="middle"
           scroll={{ x: 1400 }}
+          expandable={{
+            expandedRowRender: (record) => (
+              <div style={{ padding: '16px 20px', background: '#fafcff', borderRadius: 8, border: '1px solid #e6f4ff' }}>
+                <PaymentPlanScheduleTable
+                  plan={record}
+                  compact
+                  onRecordPayment={async () => {
+                    refetchPaymentPlans();
+                  }}
+                />
+              </div>
+            ),
+            rowExpandable: () => true,
+          }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
@@ -1143,7 +1471,7 @@ export const PaymentPlansPage: React.FC = () => {
         closable={false}
         onClose={() => setViewDrawerOpen(false)}
         open={viewDrawerOpen}
-        width="50%"
+        width="min(1000px, 96vw)"
         style={{ 
           padding: 0,
           boxShadow: '-4px 0 20px rgba(0,0,0,0.1)'
