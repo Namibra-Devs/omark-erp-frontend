@@ -226,12 +226,15 @@ export function unwrapList<T>(response: AxiosResponse<ApiResponse<T[]>>): ListRe
   const body = response.data;
   const items = Array.isArray(body?.data) ? body.data : [];
   const meta = body?.meta;
+  const total = meta?.total ?? items.length;
+  const pageSize = meta?.pageSize ?? items.length;
+  const computedTotalPages = meta?.totalPages ?? (total && pageSize ? Math.ceil(total / pageSize) : 1);
   return {
     items,
-    total: meta?.total ?? items.length,
+    total,
     page: meta?.page ?? 1,
-    pageSize: meta?.pageSize ?? items.length,
-    totalPages: meta?.totalPages ?? 1,
+    pageSize,
+    totalPages: computedTotalPages,
   };
 }
 

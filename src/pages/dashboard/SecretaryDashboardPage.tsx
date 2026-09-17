@@ -84,6 +84,7 @@ import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
+import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
@@ -180,7 +181,7 @@ export const SecretaryDashboardPage: React.FC = () => {
     refetch: refetchCustomers
   } = useCustomersQuery({ pageSize: 100 });
 
-  const { data: prospectsData } = useProspectsQuery();
+  const { data: prospectsData } = useProspectsQuery({ pageSize: 10000 });
   const existingCustomersList = customersData?.items ?? [];
   const existingProspectsList = prospectsData?.items ?? [];
 
@@ -1395,6 +1396,13 @@ export const SecretaryDashboardPage: React.FC = () => {
         <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
           <Col xs={24}>
             <ProspectsSourcePieChart prospects={existingProspectsList} />
+          </Col>
+        </Row>
+
+        {/* Row 4: Staff Prospect Interactions Timeline */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col xs={24}>
+            <ProspectInteractionsTimeline />
           </Col>
         </Row>
       </div>

@@ -32,6 +32,7 @@ import {
   SettingOutlined,
   PlusOutlined,
   UserAddOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -44,6 +45,7 @@ import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
 import { useAppointmentsQuery, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
+import { saveStoredInteraction } from '@/utils/interactionStorage';
 import { usePropertiesQuery } from '@/api/properties';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { prospectStatusLabels } from '@/constants/enums';
@@ -68,6 +70,7 @@ import {
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
+import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
 
 const { Title, Text } = Typography;
 
@@ -109,6 +112,7 @@ export const DirectorOverviewPage: React.FC = () => {
 
   // Search states for dedicated dashboard tabs
   const [prospectsSearch, setProspectsSearch] = useState('');
+  const [prospectsStatusFilter, setProspectsStatusFilter] = useState<string>('all');
   const [customersSearch, setCustomersSearch] = useState('');
 
   // Drill-down Modal State for Marketer's Added Records
@@ -127,12 +131,19 @@ export const DirectorOverviewPage: React.FC = () => {
   } | null>(null);
   const [appointmentStaffId, setAppointmentStaffId] = useState<string | undefined>(undefined);
 
-  // Aggregation of ALL marketing staff in the system
+  // Aggregation of ALL marketing staff and contributors across all departments in the system
   const allMarketingStaffUsers = useMemo(() => {
     return allUsers.filter(
-      (u) => u.role === 'marketing_staff' || u.role === 'marketing_director'
+      (u) =>
+        u.role === 'marketing_staff' ||
+        u.role === 'marketing_director' ||
+        allProspects.some(
+          (p) =>
+            (p.source === 'marketing' || !p.source) &&
+            (p.assignedUserId === u.id || (p as any).createdByUserId === u.id || (p as any).assignedStaffId === u.id)
+        )
     );
-  }, [allUsers]);
+  }, [allUsers, allProspects]);
 
   const rawMarketers: (MarketerPerformance & { role?: string; userObj?: any })[] = useMemo(() => {
     const dashboardMarketers = data?.marketers ?? [];
@@ -156,6 +167,10 @@ export const DirectorOverviewPage: React.FC = () => {
       const statusCompleted = staffProspects.filter((p) => p.status === 'meeting_completed').length;
       const statusPostponed = staffProspects.filter((p) => p.status === 'postponed').length;
       const statusSuspended = staffProspects.filter((p) => p.status === 'suspended').length;
+      const statusCanceled = staffProspects.filter((p) => {
+        const s = String(p.status || '').toLowerCase();
+        return s === 'canceled' || s === 'cancelled';
+      }).length;
       const statusPurchased = staffProspects.filter((p) => p.status === 'purchased').length;
       const converted = staffCustomers.length > 0 ? staffCustomers.length : statusPurchased;
 
@@ -179,6 +194,7 @@ export const DirectorOverviewPage: React.FC = () => {
         meetingCompleted: statusCompleted,
         postponed: statusPostponed,
         suspended: statusSuspended,
+        canceled: statusCanceled,
         converted,
         conversionRate,
         satisfaction: 9.4,
@@ -194,6 +210,7 @@ export const DirectorOverviewPage: React.FC = () => {
           meeting_completed: statusCompleted,
           postponed: statusPostponed,
           suspended: statusSuspended,
+          canceled: statusCanceled,
         },
       });
     });
@@ -227,6 +244,7 @@ export const DirectorOverviewPage: React.FC = () => {
           meetingCompleted: m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0,
           postponed: m.postponed ?? 0,
           suspended: m.suspended ?? 0,
+          canceled: m.canceled ?? (m.byStatus?.canceled ?? (m.byStatus?.cancelled ?? 0)),
           converted,
           conversionRate: m.conversionRate ?? (totalProspects > 0 ? (converted / totalProspects) * 100 : 0),
           satisfaction: m.satisfaction,
@@ -256,8 +274,12 @@ export const DirectorOverviewPage: React.FC = () => {
 
   const marketerCountForAvg = Math.max(marketers.length, 1);
 
+  const allMarketingProspects = useMemo(() => {
+    return allProspects.filter((p) => p.source === 'marketing' || !p.source);
+  }, [allProspects]);
+
   const summary = {
-    totalActive: marketers.reduce((sum, m) => sum + m.totalProspects, 0),
+    totalActive: Math.max(allMarketingProspects.length, marketers.reduce((sum, m) => sum + m.totalProspects, 0)),
     totalMeetingsScheduled: marketers.reduce((sum, m) => sum + m.meetingScheduled, 0),
     totalMeetingsCompleted: marketers.reduce((sum, m) => sum + m.meetingCompleted, 0),
     totalConverted: marketers.reduce((sum, m) => sum + m.converted, 0),
@@ -298,6 +320,7 @@ export const DirectorOverviewPage: React.FC = () => {
       { name: 'Meeting Completed', value: marketers.reduce((sum, m) => sum + m.meetingCompleted, 0) },
       { name: 'Postponed', value: marketers.reduce((sum, m) => sum + m.postponed, 0) },
       { name: 'Suspended', value: marketers.reduce((sum, m) => sum + m.suspended, 0) },
+      { name: 'Canceled', value: marketers.reduce((sum, m) => sum + ((m as any).canceled ?? (m.byStatus?.canceled ?? 0)), 0) },
       { name: 'Converted', value: marketers.reduce((sum, m) => sum + m.converted, 0) },
     ];
     return statuses.filter(s => s.value > 0);
@@ -340,12 +363,13 @@ export const DirectorOverviewPage: React.FC = () => {
         ? `[${values.source || 'marketing'}] ${values.reason.trim()}`
         : `[${values.source || 'marketing'}] Marketing site inspection / consultation`;
 
-      await createAppointmentMutation.mutateAsync({
+      const apptRes = await createAppointmentMutation.mutateAsync({
         prospectId,
         customerId,
         scheduledFor: values.scheduledFor.toISOString(),
         reason: reasonText,
       });
+      const createdApptId = (apptRes as any)?.data?.id || (apptRes as any)?.id;
 
       queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
       window.dispatchEvent(new Event('omark-appointments-changed'));
@@ -358,6 +382,25 @@ export const DirectorOverviewPage: React.FC = () => {
         const c = allCustomers.find((item) => item.id === customerId);
         if (c) clientLabel = `${c.firstName} ${c.lastName}`;
       }
+
+      // Record booking interaction for chronological appointment history
+      saveStoredInteraction({
+        id: `inter_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+        prospectId: prospectId || '',
+        prospectName: clientLabel,
+        channel: 'call',
+        occurredAt: new Date().toISOString(),
+        response: `Appointment booked for ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}. Purpose: ${reasonText}`,
+        appointmentId: createdApptId,
+        customerId: customerId,
+        interactionType: 'booking',
+        loggedByUserId: user?.id || '1',
+        loggedByUserName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Marketing Director',
+        loggedByUserRole: user?.role || 'marketing_director',
+        loggedByUserEmail: user?.email || '',
+        createdAt: new Date().toISOString(),
+      });
+      window.dispatchEvent(new Event('omark-interactions-changed'));
 
       message.success(
         `Appointment successfully booked for ${clientLabel} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
@@ -431,7 +474,16 @@ export const DirectorOverviewPage: React.FC = () => {
 
   // Filtered datasets for dedicated dashboard tabs
   const filteredDashboardProspects = useMemo(() => {
-    let list = allProspects;
+    let list = allProspects.filter((p) => p.source === 'marketing' || !p.source);
+    if (prospectsStatusFilter && prospectsStatusFilter !== 'all') {
+      list = list.filter((p) => {
+        const s = String(p.status || '').toLowerCase();
+        if (prospectsStatusFilter === 'canceled') {
+          return s === 'canceled' || s === 'cancelled';
+        }
+        return s === prospectsStatusFilter.toLowerCase();
+      });
+    }
     if (prospectsSearch.trim()) {
       const q = prospectsSearch.trim().toLowerCase();
       list = list.filter(
@@ -444,7 +496,7 @@ export const DirectorOverviewPage: React.FC = () => {
       );
     }
     return list;
-  }, [allProspects, prospectsSearch]);
+  }, [allProspects, prospectsSearch, prospectsStatusFilter]);
 
   const filteredDashboardCustomers = useMemo(() => {
     let list = allCustomers;
@@ -703,27 +755,44 @@ export const DirectorOverviewPage: React.FC = () => {
     {
       title: 'Added By / Marketer',
       key: 'addedBy',
-      width: 180,
+      width: 190,
       render: (_: any, record: any) => {
-        const staff = getStaffUser(record.assignedUserId || record.createdByUserId);
+        const creatorId = record.createdByUserId || record.assignedUserId;
+        const staff = getStaffUser(creatorId);
         if (!staff) {
-          return <Tag color="default">Direct / Inbound</Tag>;
+          return (
+            <Tooltip title={`Created: ${record.createdAt ? dayjs(record.createdAt).format('MMM D, YYYY h:mm A') : 'Direct entry'}`}>
+              <Tag color="default">Direct / Inbound</Tag>
+            </Tooltip>
+          );
         }
+        const roleConfig: Record<string, { label: string; color: string }> = {
+          admin: { label: 'Admin', color: 'purple' },
+          marketing_director: { label: 'Director', color: 'gold' },
+          marketing_staff: { label: 'Marketer', color: 'blue' },
+          customer_service: { label: 'Customer Service', color: 'green' },
+          secretary: { label: 'Secretary', color: 'cyan' },
+          branch_manager: { label: 'Branch Manager', color: 'geekblue' },
+          accounts: { label: 'Accounts', color: 'orange' },
+        };
+        const roleInfo = roleConfig[staff.role] || { label: staff.role, color: 'blue' };
         return (
-          <Space size={6}>
-            <PhotoUpload entityType="staff" entityId={staff.id} size={26} editable={false} />
-            <div>
-              <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
-                {getUserFullName(staff)}
-              </Text>
-              <Tag
-                color={staff.role === 'marketing_director' ? 'gold' : 'blue'}
-                style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
-              >
-                {staff.role === 'marketing_director' ? 'Director' : 'Marketer'}
-              </Tag>
-            </div>
-          </Space>
+          <Tooltip title={`Added on ${record.createdAt ? dayjs(record.createdAt).format('MMM D, YYYY h:mm A') : 'System record'}`}>
+            <Space size={6}>
+              <PhotoUpload entityType="staff" entityId={staff.id} size={26} editable={false} />
+              <div>
+                <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                  {getUserFullName(staff)}
+                </Text>
+                <Tag
+                  color={roleInfo.color}
+                  style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+                >
+                  {roleInfo.label}
+                </Tag>
+              </div>
+            </Space>
+          </Tooltip>
         );
       },
     },
@@ -965,11 +1034,14 @@ export const DirectorOverviewPage: React.FC = () => {
         <Col xs={24} sm={12} lg={4}>
           <Card>
             <Statistic
-              title="Total Active Prospects"
+              title="Total Marketing Prospects"
               value={summary.totalActive}
               prefix={<TeamOutlined />}
               valueStyle={{ color: tokens.primary, fontSize: 24 }}
             />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Added by all staff ({marketers.length} contributors)
+            </Text>
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={4}>
@@ -1089,24 +1161,39 @@ export const DirectorOverviewPage: React.FC = () => {
           },
           {
             key: 'prospects',
-            label: <span><TeamOutlined /> All Prospects ({allProspects.length})</span>,
+            label: <span><TeamOutlined /> All Marketing Prospects ({allMarketingProspects.length})</span>,
             children: (
               <Card
                 title={
                   <Space>
                     <TeamOutlined style={{ color: '#1890ff' }} />
-                    <span>All Marketing Prospects ({allProspects.length})</span>
+                    <span>All Marketing Prospects ({allMarketingProspects.length})</span>
                   </Space>
                 }
                 extra={
-                  <Space>
+                  <Space wrap>
                     <Input
                       prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
                       placeholder="Search prospects by name, phone, address..."
                       value={prospectsSearch}
                       onChange={(e) => setProspectsSearch(e.target.value)}
                       allowClear
-                      style={{ width: 280 }}
+                      style={{ width: 260 }}
+                    />
+                    <Select
+                      value={prospectsStatusFilter}
+                      onChange={setProspectsStatusFilter}
+                      style={{ width: 160 }}
+                      options={[
+                        { value: 'all', label: 'All Statuses' },
+                        { value: 'new', label: 'New' },
+                        { value: 'meeting_scheduled', label: 'Meeting Scheduled' },
+                        { value: 'meeting_completed', label: 'Meeting Completed' },
+                        { value: 'suspended', label: 'Suspended' },
+                        { value: 'postponed', label: 'Postponed' },
+                        { value: 'canceled', label: 'Canceled' },
+                        { value: 'purchased', label: 'Purchased' },
+                      ]}
                     />
                     <Button
                       type="primary"
@@ -1167,6 +1254,16 @@ export const DirectorOverviewPage: React.FC = () => {
                   columns={dashboardCustomerColumns}
                 />
               </Card>
+            ),
+          },
+          {
+            key: 'interactions',
+            label: <span><HistoryOutlined /> Team Interactions Timeline</span>,
+            children: (
+              <ProspectInteractionsTimeline
+                title="Marketing Team & Staff Prospect Interactions Timeline"
+                style={{ marginBottom: 20 }}
+              />
             ),
           },
           {
@@ -1439,6 +1536,7 @@ export const DirectorOverviewPage: React.FC = () => {
                   <Tag color="green">{selectedMarketer.meetingCompleted} Completed</Tag>
                   <Tag color="gold">{selectedMarketer.postponed} Postponed</Tag>
                   <Tag color="orange">{selectedMarketer.suspended} Suspended</Tag>
+                  <Tag color="red">{(selectedMarketer as any).canceled ?? (selectedMarketer as any).byStatus?.canceled ?? 0} Canceled</Tag>
                 </Space>
               </Descriptions.Item>
             </Descriptions>

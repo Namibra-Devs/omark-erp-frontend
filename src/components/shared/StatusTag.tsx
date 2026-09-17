@@ -34,9 +34,16 @@ export const StatusTag: React.FC<StatusTagProps> = ({ status, type = 'prospect' 
       label = notificationStatusLabels[status as keyof typeof notificationStatusLabels] || status;
       color = notificationStatusColors[status as keyof typeof notificationStatusColors] || 'default';
       break;
-    default:
-      label = prospectStatusLabels[status as keyof typeof prospectStatusLabels] || status;
-      color = prospectStatusColors[status as keyof typeof prospectStatusColors] || 'default';
+    default: {
+      const normStatus = String(status || '').toLowerCase().trim();
+      if (normStatus === 'cancelled' || normStatus === 'canceled') {
+        label = 'Canceled';
+        color = 'red';
+      } else {
+        label = prospectStatusLabels[status as keyof typeof prospectStatusLabels] || status;
+        color = prospectStatusColors[status as keyof typeof prospectStatusColors] || 'default';
+      }
+    }
   }
 
   return <Tag color={color}>{label}</Tag>;

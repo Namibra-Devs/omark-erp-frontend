@@ -13,6 +13,9 @@ import {
   TrophyOutlined,
   SettingOutlined,
   UserAddOutlined,
+  HistoryOutlined,
+  DollarOutlined,
+  CalendarOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdminDashboard } from './admin/hooks/useAdminDashboard';
@@ -25,11 +28,14 @@ import { EditUserDrawer } from './admin/components/EditUserDrawer';
 import { ExportModal } from './admin/components/ExportModal';
 import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { CrossSystemActivity } from './admin/components/CrossSystemActivity';
+import { RoleFilteredExpensesTable } from './admin/components/RoleFilteredExpensesTable';
+import { AppointmentCommunicationHistory } from './admin/components/AppointmentCommunicationHistory';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
+import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
 
 const { Title, Text } = Typography;
 
@@ -166,6 +172,15 @@ export const AdminDashboardPage: React.FC = () => {
           <div style={{ marginBottom: 20 }}>
             <ProspectsSourcePieChart />
           </div>
+          <div style={{ marginBottom: 20 }}>
+            <ProspectInteractionsTimeline />
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <AppointmentCommunicationHistory />
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <RoleFilteredExpensesTable />
+          </div>
           <CrossSystemActivity stats={mockActivityStats} branchName={myBranchName} />
           <RecentActivity
             activities={activityLogs}
@@ -215,6 +230,51 @@ export const AdminDashboardPage: React.FC = () => {
           }}
           onDeleteUser={deleteUser}
           onToggleStatus={toggleUserStatus}
+        />
+      ),
+    },
+    {
+      key: 'interactions',
+      label: (
+        <span className="adp-tab-label">
+          <HistoryOutlined />
+          Staff Interactions
+        </span>
+      ),
+      children: (
+        <ProspectInteractionsTimeline
+          title="Staff Prospect Interactions Timeline — Dedicated View"
+          style={{ marginBottom: 20 }}
+        />
+      ),
+    },
+    {
+      key: 'appointment-comms',
+      label: (
+        <span className="adp-tab-label">
+          <CalendarOutlined />
+          Appointments & History
+        </span>
+      ),
+      children: (
+        <AppointmentCommunicationHistory
+          title="Appointment Communication History & Complete Audit Trail — Dedicated View"
+          style={{ marginBottom: 20 }}
+        />
+      ),
+    },
+    {
+      key: 'role-expenses',
+      label: (
+        <span className="adp-tab-label">
+          <DollarOutlined />
+          Role-Filtered Expenses
+        </span>
+      ),
+      children: (
+        <RoleFilteredExpensesTable
+          title="Role-Filtered Expense Tracking & Disbursement — Dedicated View"
+          style={{ marginBottom: 20 }}
         />
       ),
     },
@@ -364,6 +424,7 @@ export const AdminDashboardPage: React.FC = () => {
           onExport={() => setExportModal(true)}
           onAddProspect={() => setAddProspectModal(true)}
           onAddCustomer={() => setAddCustomerModal(true)}
+          onRoleExpenses={() => setActiveTab('role-expenses')}
         />
       </div>
 

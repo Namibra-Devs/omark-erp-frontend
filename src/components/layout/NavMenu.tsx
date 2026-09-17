@@ -258,7 +258,7 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    if (hasRole(['marketing_staff', 'marketing_director', 'admin', 'branch_manager', 'secretary'])) {
+    if (hasRole(['marketing_staff', 'marketing_director', 'admin', 'branch_manager', 'secretary', 'customer_service', 'accounts'])) {
       items.push({
         key: '/marketing/prospects',
         icon: <UserOutlined />,

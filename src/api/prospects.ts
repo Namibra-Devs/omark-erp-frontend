@@ -8,6 +8,7 @@ import {
   getProspectsFromCache,
   getCustomersFromCache,
 } from '@/utils/duplicateValidation';
+import { getStoredInteractions } from '@/utils/interactionStorage';
 
 export type { ProspectSource, ProspectStatus, InteractionChannel };
 
@@ -28,6 +29,7 @@ export interface ProspectsListResult {
   total: number;
   page: number;
   pageSize: number;
+  totalPages?: number;
 }
 
 export interface CreateProspectPayload {
@@ -109,7 +111,44 @@ export const useProspectsQuery = (filter?: ProspectsFilter, enabled = true) => {
           pageSize: safePageSize,
         };
         const response = await apiClient.get<ApiResponse<Prospect[]>>('/prospects', { params });
-        return unwrapList(response) as ProspectsListResult;
+        const firstPage = unwrapList(response) as ProspectsListResult;
+        const total = firstPage.total ?? firstPage.items.length;
+        const pageItemsCount = firstPage.items.length;
+        const totalPages =
+          firstPage.totalPages && firstPage.totalPages > 1
+            ? firstPage.totalPages
+            : total > pageItemsCount && pageItemsCount > 0
+            ? Math.ceil(total / pageItemsCount)
+            : 1;
+
+        // If caller requested a large page size (e.g. pageSize > 100) and multiple pages exist,
+        // retrieve all pages so the caller gets the complete set of prospects.
+        if (filter?.pageSize && filter.pageSize > 100 && (totalPages > 1 || total > pageItemsCount)) {
+          const allItems = [...firstPage.items];
+          const maxPagesToFetch = Math.min(totalPages, Math.ceil(filter.pageSize / 100));
+          const promises = [];
+          for (let p = 2; p <= maxPagesToFetch; p++) {
+            promises.push(
+              apiClient
+                .get<ApiResponse<Prospect[]>>('/prospects', {
+                  params: { ...filter, page: p, pageSize: 100 },
+                })
+                .then((res) => unwrapList(res).items)
+                .catch(() => [])
+            );
+          }
+          const otherPages = await Promise.all(promises);
+          otherPages.forEach((pageItems) => allItems.push(...pageItems));
+          return {
+            items: allItems,
+            total: Math.max(firstPage.total, allItems.length),
+            page: 1,
+            pageSize: allItems.length,
+            totalPages: 1,
+          };
+        }
+
+        return firstPage;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.warn('Error fetching prospects, providing safe fallback:', {
@@ -117,7 +156,7 @@ export const useProspectsQuery = (filter?: ProspectsFilter, enabled = true) => {
             message: error.response?.data?.message || error.message,
           });
         }
-        return { items: [], total: 0, page: 1, pageSize: 50 };
+        return { items: [], total: 0, page: 1, pageSize: 50, totalPages: 1 };
       }
     },
     enabled,
@@ -151,18 +190,46 @@ export const useInteractionsQuery = (prospectId: string) => {
   return useQuery({
     queryKey: prospectKeys.interactions(prospectId),
     queryFn: async () => {
+      let apiItems: Interaction[] = [];
       try {
         const response = await apiClient.get<ApiResponse<Interaction[]>>(`/prospects/${prospectId}/interactions`);
-        return unwrapList(response).items;
+        apiItems = unwrapList(response).items || [];
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error(`Error fetching interactions for prospect ${prospectId}:`, {
+          console.warn(`Interactions query notice for prospect ${prospectId}:`, {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
         }
-        throw error;
       }
+
+      const stored = getStoredInteractions().filter((i) => i.prospectId === prospectId);
+      if (stored.length === 0) return apiItems;
+
+      const map = new Map<string, any>();
+      apiItems.forEach((it) => map.set(it.id, it));
+      stored.forEach((it) => {
+        if (!map.has(it.id)) {
+          map.set(it.id, {
+            id: it.id,
+            prospectId: it.prospectId,
+            channel: it.channel,
+            occurredAt: it.occurredAt,
+            response: it.response,
+            loggedByUserId: it.loggedByUserId,
+            loggedBy: {
+              firstName: it.loggedByUserName?.split(' ')[0] || 'Staff',
+              lastName: it.loggedByUserName?.split(' ').slice(1).join(' ') || '',
+              email: it.loggedByUserEmail,
+            },
+            createdAt: it.createdAt,
+          });
+        }
+      });
+
+      return Array.from(map.values()).sort(
+        (a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime()
+      );
     },
     enabled: !!prospectId,
   });

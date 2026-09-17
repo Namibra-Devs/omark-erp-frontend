@@ -88,19 +88,8 @@ export const ProspectsPage: React.FC = () => {
     setSearchParams(next);
   };
 
-  // React Query hooks — page/pageSize are sent to the server (not just
-  // applied client-side) so lists longer than one page actually paginate
-  // instead of silently capping at whatever the server's default page returns.
-  const { data: prospectsData, isLoading, refetch } = useProspectsQuery({
-    source: 'marketing',
-    status: statusFilter === 'all' ? undefined : statusFilter,
-    q: searchText || undefined,
-    assignedUserId: assignedUserIdFilter,
-    page,
-    pageSize,
-  });
-
-  const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
+  // Fetch all prospects (pageSize: 10000) for complete, robust marketing dataset
+  const { data: allProspectsData, isLoading, refetch } = useProspectsQuery({ pageSize: 10000 });
   const allExistingProspects = allProspectsData?.items ?? [];
   const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
   const allExistingCustomers = customersData?.items ?? [];
@@ -114,7 +103,7 @@ export const ProspectsPage: React.FC = () => {
   // Opening this page clears the "new prospects" nav badge (see NavMenu.tsx).
   useEffect(() => {
     if (user?.id) markSeen('prospects', user.id);
-  }, [user?.id, prospectsData]);
+  }, [user?.id, allExistingProspects]);
 
   const createProspectMutation = useCreateProspectMutation();
   const updateProspectMutation = useUpdateProspectMutation();
@@ -131,8 +120,6 @@ export const ProspectsPage: React.FC = () => {
   );
 
   const { data: branches = [] } = useBranchesQuery();
-  const rawProspectList: Prospect[] = prospectsData?.items ?? [];
-  const prospectList: Prospect[] = filterEntitiesByBranch(rawProspectList, user, branches);
 
   // Appointments Query to track due dates
   const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 500 });
@@ -181,16 +168,45 @@ export const ProspectsPage: React.FC = () => {
       meetingScheduled: allMarketingProspects.filter((p) => p.status === 'meeting_scheduled').length,
       meetingCompleted: allMarketingProspects.filter((p) => p.status === 'meeting_completed').length,
       purchased: allMarketingProspects.filter((p) => p.status === 'purchased').length,
-      canceled: allMarketingProspects.filter((p) => p.status === 'canceled' || p.status === 'suspended' || p.status === 'postponed').length,
+      canceled: allMarketingProspects.filter((p) => {
+        const s = String(p.status || '').toLowerCase();
+        return s === 'canceled' || s === 'cancelled';
+      }).length,
     };
   }, [allMarketingProspects]);
 
-  // Date-wise filtering (Daily, Weekly, Monthly, Yearly, Custom) + PRIORITY SORTING (Due climbs to top)
-  const filteredByDateList = useMemo(() => {
-    let list = prospectList;
+  // Date-wise, Status, and Search filtering + PRIORITY SORTING (Due appointments climb to top)
+  const filteredMarketingProspects = useMemo(() => {
+    let list = allMarketingProspects;
+
+    // Status filter - supports both 'canceled' and 'cancelled'
+    if (statusFilter && statusFilter !== 'all') {
+      list = list.filter((p) => {
+        const s = String(p.status || '').toLowerCase();
+        if (statusFilter === 'canceled') {
+          return s === 'canceled' || s === 'cancelled';
+        }
+        return s === statusFilter.toLowerCase();
+      });
+    }
+
+    // Search filter
+    if (searchText.trim()) {
+      const q = searchText.trim().toLowerCase();
+      list = list.filter(
+        (p) =>
+          `${p.firstName || ''} ${p.lastName || ''}`.toLowerCase().includes(q) ||
+          (p.phoneNumber || '').toLowerCase().includes(q) ||
+          (p.address || '').toLowerCase().includes(q) ||
+          (p.status || '').toLowerCase().includes(q) ||
+          (p.reasonForContact || '').toLowerCase().includes(q)
+      );
+    }
+
+    // Date filter
     if (dateFilter !== 'all') {
       const now = dayjs();
-      list = prospectList.filter((p) => {
+      list = list.filter((p) => {
         if (!p.createdAt) return true;
         const created = dayjs(p.createdAt);
         if (dateFilter === 'today') {
@@ -227,7 +243,7 @@ export const ProspectsPage: React.FC = () => {
       }
       return dayjs(b.createdAt || 0).valueOf() - dayjs(a.createdAt || 0).valueOf();
     });
-  }, [prospectList, dateFilter, customDateRange, dueProspectMap]);
+  }, [allMarketingProspects, statusFilter, searchText, dateFilter, customDateRange, dueProspectMap]);
 
   const handleAddProspect = async (values: any) => {
     try {
@@ -270,7 +286,7 @@ export const ProspectsPage: React.FC = () => {
       lastName: record.lastName,
       address: record.address,
       phoneNumber: record.phoneNumber,
-      status: record.status,
+      status: (record.status as string) === 'cancelled' ? 'canceled' : record.status,
       reasonForContact: record.reasonForContact,
       notes: record.notes,
     });
@@ -413,29 +429,46 @@ export const ProspectsPage: React.FC = () => {
     {
       title: 'Added By',
       key: 'addedBy',
-      width: 170,
+      width: 190,
       render: (_: any, record: Prospect) => {
+        const creatorId = record.createdByUserId || record.assignedUserId;
         const staff = allStaff.find(
-          (u) => u.id === record.assignedUserId || u.id === (record as any).createdByUserId
+          (u) => u.id === creatorId || (record.createdByUserId && u.id === record.createdByUserId)
         );
         if (!staff) {
-          return <Tag color="default">Direct / Inbound</Tag>;
+          return (
+            <Tooltip title={`Created: ${record.createdAt ? dayjs(record.createdAt).format('MMM D, YYYY h:mm A') : 'Direct entry'}`}>
+              <Tag color="default">Direct / Inbound</Tag>
+            </Tooltip>
+          );
         }
+        const roleConfig: Record<string, { label: string; color: string }> = {
+          admin: { label: 'Admin', color: 'purple' },
+          marketing_director: { label: 'Director', color: 'gold' },
+          marketing_staff: { label: 'Marketing', color: 'blue' },
+          customer_service: { label: 'Customer Service', color: 'green' },
+          secretary: { label: 'Secretary', color: 'cyan' },
+          branch_manager: { label: 'Branch Manager', color: 'geekblue' },
+          accounts: { label: 'Accounts', color: 'orange' },
+        };
+        const roleInfo = roleConfig[staff.role] || { label: staff.role, color: 'blue' };
         return (
-          <Space size={6}>
-            <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
-            <div>
-              <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
-                {getUserFullName(staff)}
-              </Text>
-              <Tag
-                color={staff.role === 'marketing_director' ? 'gold' : 'blue'}
-                style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
-              >
-                {staff.role === 'marketing_director' ? 'Director' : 'Marketing'}
-              </Tag>
-            </div>
-          </Space>
+          <Tooltip title={`Added on ${record.createdAt ? dayjs(record.createdAt).format('MMM D, YYYY h:mm A') : 'System record'}`}>
+            <Space size={6}>
+              <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
+              <div>
+                <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                  {getUserFullName(staff)}
+                </Text>
+                <Tag
+                  color={roleInfo.color}
+                  style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+                >
+                  {roleInfo.label}
+                </Tag>
+              </div>
+            </Space>
+          </Tooltip>
         );
       },
     },
@@ -560,16 +593,12 @@ export const ProspectsPage: React.FC = () => {
                 icon: <TrophyOutlined style={{ color: '#faad14' }} />,
               }]
             : []),
-          // POST /prospects is only granted to admin/marketing_staff/customer_service
-          // on the backend — marketing_director can view this page but can't create,
-          // so the button is hidden rather than showing an action that always 403s.
-          ...(hasRole(['admin', 'marketing_staff'])
-            ? [{
-                label: 'Add Prospect',
-                onClick: () => setIsModalOpen(true),
-                icon: <PlusOutlined />,
-              }]
-            : []),
+          // All staff members are granted permission to add new prospects
+          {
+            label: 'Add Prospect',
+            onClick: () => setIsModalOpen(true),
+            icon: <PlusOutlined />,
+          },
         ]}
       />
 
@@ -769,7 +798,7 @@ export const ProspectsPage: React.FC = () => {
           )}
           <Col xs={24} sm={24} md={dateFilter === 'custom' ? 3 : 8}>
             <Text type="secondary" style={{ display: 'block', textAlign: 'right', fontWeight: 500 }}>
-              Showing {filteredByDateList.length} of {prospectList.length} prospects
+              Showing {filteredMarketingProspects.length} of {allMarketingProspects.length} prospects
             </Text>
           </Col>
         </Row>
@@ -779,7 +808,7 @@ export const ProspectsPage: React.FC = () => {
       <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
         <Table
           columns={columns}
-          dataSource={filteredByDateList}
+          dataSource={filteredMarketingProspects}
           rowKey="id"
           loading={isLoading}
           size="middle"
@@ -787,7 +816,7 @@ export const ProspectsPage: React.FC = () => {
           pagination={{
             current: page,
             pageSize,
-            total: filteredByDateList.length,
+            total: filteredMarketingProspects.length,
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50', '100', '250'],
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} prospects`,

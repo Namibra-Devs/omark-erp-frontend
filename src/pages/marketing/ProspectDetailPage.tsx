@@ -79,7 +79,7 @@ export const ProspectDetailPage: React.FC = () => {
       lastName: prospect.lastName,
       address: prospect.address,
       phoneNumber: prospect.phoneNumber,
-      status: prospect.status,
+      status: (prospect.status as string) === 'cancelled' ? 'canceled' : prospect.status,
       reasonForContact: prospect.reasonForContact,
       notes: prospect.notes,
     });
@@ -150,7 +150,8 @@ export const ProspectDetailPage: React.FC = () => {
       case 'meeting_completed': return 'success';
       case 'suspended': return 'error';
       case 'postponed': return 'warning';
-      case 'canceled': return 'error';
+      case 'canceled':
+      case 'cancelled': return 'error';
       case 'purchased': return 'success';
       default: return 'default';
     }

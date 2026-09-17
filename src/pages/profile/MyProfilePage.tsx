@@ -1055,7 +1055,7 @@ export const MyProfilePage: React.FC = () => {
                 dataIndex: 'status',
                 key: 'status',
                 render: (v: string) => (
-                  <Tag color={v === 'completed' ? 'green' : v === 'cancelled' ? 'red' : 'blue'}>
+                  <Tag color={v === 'completed' ? 'green' : v === 'postponed' ? 'orange' : v === 'canceled' || v === 'cancelled' ? 'red' : v === 'no_show' ? 'gold' : 'blue'}>
                     {(v || 'SCHEDULED').toUpperCase()}
                   </Tag>
                 ),

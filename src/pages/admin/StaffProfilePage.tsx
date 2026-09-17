@@ -4,7 +4,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   Card, Row, Col, Typography, Tag, Button, Space, Tabs, Table,
   Descriptions, Avatar, Badge, Statistic, List, Tooltip, Popconfirm,
-  Modal, Form, Input, Select, InputNumber, Divider, Empty, Spin, message, Alert
+  Modal, Form, Input, Select, InputNumber, Divider, Empty, Spin, message, Alert, Drawer
 } from 'antd';
 import {
   ArrowLeftOutlined,
@@ -34,7 +34,8 @@ import {
   PercentageOutlined,
   ThunderboltOutlined,
   SearchOutlined,
-  FileDoneOutlined
+  FileDoneOutlined,
+  EyeOutlined
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
@@ -66,6 +67,7 @@ import { useBranchesQuery } from '@/api/branches';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import type { Role } from '@/types';
+import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
 
 const deptLabels: Record<string, string> = {
   'dept-admin': 'Administration',
@@ -125,13 +127,18 @@ export const StaffProfilePage: React.FC = () => {
   const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 500 });
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 500 });
 
-  // Merge and deduplicate prospects assigned to this staff member
+  // Merge and deduplicate prospects assigned to or added by this staff member
   const staffProspects = useMemo(() => {
     const direct = prospectsData?.items ?? [];
     const list = allProspectsData?.items ?? [];
     const combined = [...direct];
     list.forEach((p) => {
-      if ((p.assignedUserId === id || (p as any).assignedStaffId === id) && !combined.some((c) => c.id === p.id)) {
+      const isStaffProspect =
+        p.assignedUserId === id ||
+        (p as any).assignedStaffId === id ||
+        p.createdByUserId === id ||
+        (p as any).creatorId === id;
+      if (isStaffProspect && !combined.some((c) => c.id === p.id)) {
         combined.push(p);
       }
     });
@@ -169,6 +176,30 @@ export const StaffProfilePage: React.FC = () => {
   const [compensationModalOpen, setCompensationModalOpen] = useState(false);
   const [payslipModalOpen, setPayslipModalOpen] = useState(false);
   const [payslipRecord, setPayslipRecord] = useState<PayrollRecord | null>(null);
+
+  // Dedicated Prospects & Interaction History Drawer State
+  const [prospectsDrawerOpen, setProspectsDrawerOpen] = useState(false);
+  const [drawerActiveTab, setDrawerActiveTab] = useState<'prospects' | 'interactions'>('prospects');
+  const [prospectSearchText, setProspectSearchText] = useState('');
+  const [prospectStatusFilter, setProspectStatusFilter] = useState<string>('all');
+  const [prospectSourceFilter, setProspectSourceFilter] = useState<string>('all');
+
+  const filteredStaffProspects = useMemo(() => {
+    return staffProspects.filter((p) => {
+      if (prospectStatusFilter !== 'all' && p.status !== prospectStatusFilter) return false;
+      if (prospectSourceFilter !== 'all' && p.source !== prospectSourceFilter) return false;
+      if (prospectSearchText.trim()) {
+        const q = prospectSearchText.trim().toLowerCase();
+        const matches =
+          `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
+          p.phoneNumber?.toLowerCase().includes(q) ||
+          p.address?.toLowerCase().includes(q) ||
+          p.reasonForContact?.toLowerCase().includes(q);
+        if (!matches) return false;
+      }
+      return true;
+    });
+  }, [staffProspects, prospectStatusFilter, prospectSourceFilter, prospectSearchText]);
 
   // Quick Operational Summary Drill-Down Modal State
   const [summaryModalType, setSummaryModalType] = useState<
@@ -561,6 +592,15 @@ export const StaffProfilePage: React.FC = () => {
             icon: <ArrowLeftOutlined />,
             type: 'default',
           },
+          {
+            label: 'View Prospects & Interactions',
+            onClick: () => {
+              setDrawerActiveTab('prospects');
+              setProspectsDrawerOpen(true);
+            },
+            icon: <TeamOutlined />,
+            type: 'primary',
+          },
           ...(isManager
             ? [
                 {
@@ -658,12 +698,47 @@ export const StaffProfilePage: React.FC = () => {
                   />
                 </Col>
                 <Col span={12}>
-                  <Statistic
-                    title="Total Prospects"
-                    value={staffProspects.length}
-                    prefix={<TeamOutlined />}
-                    valueStyle={{ color: '#1890ff', fontWeight: 600, fontSize: 18 }}
-                  />
+                  <Card
+                    size="small"
+                    hoverable
+                    onClick={() => {
+                      setDrawerActiveTab('prospects');
+                      setProspectsDrawerOpen(true);
+                    }}
+                    style={{
+                      background: '#f0f5ff',
+                      borderColor: '#adc6ff',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <Statistic
+                      title={
+                        <Space>
+                          <Text strong style={{ color: '#1d39c4' }}>Total Prospects</Text>
+                          <EyeOutlined style={{ color: '#2f54eb' }} />
+                        </Space>
+                      }
+                      value={staffProspects.length}
+                      prefix={<TeamOutlined style={{ color: '#1890ff' }} />}
+                      valueStyle={{ color: '#1890ff', fontWeight: 600, fontSize: 18 }}
+                      suffix={
+                        <Button
+                          size="small"
+                          type="link"
+                          icon={<EyeOutlined />}
+                          style={{ padding: '0 0 0 6px', fontSize: 12, fontWeight: 600 }}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setDrawerActiveTab('prospects');
+                            setProspectsDrawerOpen(true);
+                          }}
+                        >
+                          View
+                        </Button>
+                      }
+                    />
+                  </Card>
                 </Col>
               </Row>
             </Card>
@@ -1111,35 +1186,119 @@ export const StaffProfilePage: React.FC = () => {
           },
           {
             key: 'prospects',
-            label: <span><TeamOutlined /> Assigned Prospects ({staffProspects.length})</span>,
+            label: <span><TeamOutlined /> Prospects & Interactions ({staffProspects.length})</span>,
             children: (
-              <Card title="Marketer Prospects Portfolio">
-                {staffProspects.length > 0 ? (
-                  <Table
-                    columns={[
-                      {
-                        title: 'Prospect Name',
-                        key: 'name',
-                        render: (_: any, p: any) => (
-                          <a onClick={() => navigate(`/marketing/prospects/${p.id}`)}>
-                            {p.firstName} {p.lastName}
-                          </a>
-                        ),
-                      },
-                      { title: 'Phone', dataIndex: 'phoneNumber', key: 'phone' },
-                      { title: 'Status', dataIndex: 'status', key: 'status', render: (v: string) => <Tag color="blue">{v}</Tag> },
-                      { title: 'Date Registered', dataIndex: 'createdAt', key: 'date', render: (v: string) => dayjs(v).format('MMM D, YYYY') },
-                    ]}
-                    dataSource={staffProspects}
-                    rowKey="id"
-                    pagination={{ pageSize: 5 }}
-                    size="small"
-                    scroll={{ x: 600 }}
+              <div>
+                <Card
+                  title={
+                    <Space>
+                      <TeamOutlined style={{ color: tokens.primary }} />
+                      <span>{fullName} — Prospects Portfolio ({staffProspects.length})</span>
+                    </Space>
+                  }
+                  extra={
+                    <Space>
+                      <Button
+                        type="primary"
+                        icon={<PlusOutlined />}
+                        onClick={() => navigate('/marketing/prospects')}
+                      >
+                        Add Prospect
+                      </Button>
+                      <Button
+                        icon={<EyeOutlined />}
+                        onClick={() => {
+                          setDrawerActiveTab('interactions');
+                          setProspectsDrawerOpen(true);
+                        }}
+                      >
+                        View Interactions
+                      </Button>
+                    </Space>
+                  }
+                >
+                  {staffProspects.length > 0 ? (
+                    <Table
+                      columns={[
+                        {
+                          title: 'Prospect Name',
+                          key: 'name',
+                          render: (_: any, p: any) => (
+                            <Space>
+                              <PhotoUpload entityType="prospect" entityId={p.id} size={28} editable={false} />
+                              <a onClick={() => navigate(p.source === 'customer_service' ? '/cs/prospects' : `/marketing/prospects/${p.id}`)}>
+                                {p.firstName} {p.lastName}
+                              </a>
+                            </Space>
+                          ),
+                        },
+                        { title: 'Phone', dataIndex: 'phoneNumber', key: 'phone' },
+                        {
+                          title: 'Source',
+                          dataIndex: 'source',
+                          key: 'source',
+                          render: (s: string) => (
+                            <Tag color={s === 'customer_service' ? 'green' : 'blue'}>
+                              {s === 'customer_service' ? 'Customer Service' : 'Marketing'}
+                            </Tag>
+                          ),
+                        },
+                        {
+                          title: 'Status',
+                          dataIndex: 'status',
+                          key: 'status',
+                          render: (v: string) => (
+                            <Tag color={v === 'purchased' ? 'green' : v === 'meeting_scheduled' ? 'purple' : v === 'postponed' ? 'gold' : 'blue'}>
+                              {(v || 'NEW').replace('_', ' ').toUpperCase()}
+                            </Tag>
+                          ),
+                        },
+                        {
+                          title: 'Role / Relation',
+                          key: 'relation',
+                          render: (_: any, p: any) => {
+                            const isCreator = p.createdByUserId === id || (p as any).creatorId === id;
+                            return (
+                              <Tag color={isCreator ? 'cyan' : 'geekblue'}>
+                                {isCreator ? 'Added by Staff' : 'Assigned to Staff'}
+                              </Tag>
+                            );
+                          },
+                        },
+                        { title: 'Date Registered', dataIndex: 'createdAt', key: 'date', render: (v: string) => dayjs(v).format('MMM D, YYYY') },
+                        {
+                          title: 'Action',
+                          key: 'action',
+                          render: (_: any, p: any) => (
+                            <Button
+                              size="small"
+                              icon={<EyeOutlined />}
+                              onClick={() => navigate(p.source === 'customer_service' ? '/cs/prospects' : `/marketing/prospects/${p.id}`)}
+                            >
+                              View Details
+                            </Button>
+                          ),
+                        },
+                      ]}
+                      dataSource={staffProspects}
+                      rowKey="id"
+                      pagination={{ pageSize: 5 }}
+                      size="small"
+                      scroll={{ x: 700 }}
+                    />
+                  ) : (
+                    <Empty description="No prospects assigned to or added by this staff member." />
+                  )}
+                </Card>
+
+                {/* Inline Interaction History Timeline Section */}
+                <div style={{ marginTop: 24 }}>
+                  <ProspectInteractionsTimeline
+                    defaultStaffId={id}
+                    title={`Interaction History Timeline — ${fullName}`}
                   />
-                ) : (
-                  <Empty description="No prospects assigned to this staff member." />
-                )}
-              </Card>
+                </div>
+              </div>
             ),
           },
           {
@@ -1633,7 +1792,7 @@ export const StaffProfilePage: React.FC = () => {
                 dataIndex: 'status',
                 key: 'status',
                 render: (v: string) => (
-                  <Tag color={v === 'completed' ? 'green' : v === 'cancelled' ? 'red' : 'blue'}>
+                  <Tag color={v === 'completed' ? 'green' : v === 'postponed' ? 'orange' : v === 'canceled' || v === 'cancelled' ? 'red' : v === 'no_show' ? 'gold' : 'blue'}>
                     {(v || 'SCHEDULED').toUpperCase()}
                   </Tag>
                 ),
@@ -1810,6 +1969,192 @@ export const StaffProfilePage: React.FC = () => {
           }
         }}
       />
+      {/* ── DEDICATED PROSPECTS & INTERACTION HISTORY DRAWER ──────────────── */}
+      <Drawer
+        title={
+          <Space align="center">
+            <TeamOutlined style={{ color: tokens.primary, fontSize: 22 }} />
+            <div>
+              <Title level={4} style={{ margin: 0 }}>
+                {fullName} — Prospects & Interaction History
+              </Title>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {roleName} • {branchTitle} • {staffProspects.length} Total Prospects
+              </Text>
+            </div>
+          </Space>
+        }
+        placement="right"
+        width={900}
+        open={prospectsDrawerOpen}
+        onClose={() => setProspectsDrawerOpen(false)}
+        extra={
+          <Space>
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => {
+                setProspectsDrawerOpen(false);
+                navigate('/marketing/prospects');
+              }}
+            >
+              Add Prospect
+            </Button>
+          </Space>
+        }
+      >
+        <Tabs
+          activeKey={drawerActiveTab}
+          onChange={(k) => setDrawerActiveTab(k as 'prospects' | 'interactions')}
+          items={[
+            {
+              key: 'prospects',
+              label: <span><TeamOutlined /> Prospect Portfolio ({staffProspects.length})</span>,
+              children: (
+                <div>
+                  <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>
+                    <Col xs={24} sm={12}>
+                      <Input
+                        prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+                        placeholder="Search prospect by name, phone, address..."
+                        value={prospectSearchText}
+                        onChange={(e) => setProspectSearchText(e.target.value)}
+                        allowClear
+                      />
+                    </Col>
+                    <Col xs={12} sm={6}>
+                      <Select
+                        value={prospectStatusFilter}
+                        onChange={setProspectStatusFilter}
+                        style={{ width: '100%' }}
+                      >
+                        <Option value="all">All Statuses</Option>
+                        <Option value="new">New</Option>
+                        <Option value="meeting_scheduled">Meeting Scheduled</Option>
+                        <Option value="meeting_completed">Meeting Completed</Option>
+                        <Option value="postponed">Postponed</Option>
+                        <Option value="purchased">Purchased</Option>
+                        <Option value="suspended">Suspended</Option>
+                      </Select>
+                    </Col>
+                    <Col xs={12} sm={6}>
+                      <Select
+                        value={prospectSourceFilter}
+                        onChange={setProspectSourceFilter}
+                        style={{ width: '100%' }}
+                      >
+                        <Option value="all">All Sources</Option>
+                        <Option value="marketing">Marketing</Option>
+                        <Option value="customer_service">Customer Service</Option>
+                      </Select>
+                    </Col>
+                  </Row>
+                  <Table
+                    dataSource={filteredStaffProspects}
+                    rowKey="id"
+                    pagination={{ pageSize: 8 }}
+                    size="middle"
+                    columns={[
+                      {
+                        title: 'Prospect',
+                        key: 'prospect',
+                        render: (_: any, record: any) => (
+                          <Space>
+                            <PhotoUpload entityType="prospect" entityId={record.id} size={36} editable={false} />
+                            <div>
+                              <a
+                                style={{ fontWeight: 600, color: tokens.primary }}
+                                onClick={() => {
+                                  setProspectsDrawerOpen(false);
+                                  navigate(record.source === 'customer_service' ? '/cs/prospects' : `/marketing/prospects/${record.id}`);
+                                }}
+                              >
+                                {record.firstName} {record.lastName}
+                              </a>
+                              <div style={{ fontSize: 12, color: '#64748b' }}>
+                                <PhoneOutlined /> {record.phoneNumber || '—'}
+                              </div>
+                            </div>
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: 'Source',
+                        dataIndex: 'source',
+                        key: 'source',
+                        width: 140,
+                        render: (source: string) => (
+                          <Tag color={source === 'customer_service' ? 'green' : 'blue'}>
+                            {source === 'customer_service' ? 'Customer Service' : 'Marketing'}
+                          </Tag>
+                        ),
+                      },
+                      {
+                        title: 'Status',
+                        dataIndex: 'status',
+                        key: 'status',
+                        width: 140,
+                        render: (v: string) => (
+                          <Tag color={v === 'purchased' ? 'green' : v === 'meeting_scheduled' ? 'purple' : v === 'postponed' ? 'gold' : 'blue'}>
+                            {(v || 'NEW').replace('_', ' ').toUpperCase()}
+                          </Tag>
+                        ),
+                      },
+                      {
+                        title: 'Added / Assigned',
+                        key: 'relation',
+                        width: 150,
+                        render: (_: any, r: any) => {
+                          const isCreator = r.createdByUserId === id || (r as any).creatorId === id;
+                          return (
+                            <div>
+                              <Tag color={isCreator ? 'cyan' : 'geekblue'} style={{ fontSize: 11 }}>
+                                {isCreator ? 'Added by Staff' : 'Assigned Staff'}
+                              </Tag>
+                              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                                {dayjs(r.createdAt).format('MMM D, YYYY')}
+                              </div>
+                            </div>
+                          );
+                        },
+                      },
+                      {
+                        title: 'Action',
+                        key: 'action',
+                        width: 120,
+                        render: (_: any, r: any) => (
+                          <Button
+                            size="small"
+                            icon={<EyeOutlined />}
+                            onClick={() => {
+                              setProspectsDrawerOpen(false);
+                              navigate(r.source === 'customer_service' ? '/cs/prospects' : `/marketing/prospects/${r.id}`);
+                            }}
+                          >
+                            Details
+                          </Button>
+                        ),
+                      },
+                    ]}
+                  />
+                </div>
+              ),
+            },
+            {
+              key: 'interactions',
+              label: <span><ClockCircleOutlined /> Interaction History</span>,
+              children: (
+                <div style={{ marginTop: 8 }}>
+                  <ProspectInteractionsTimeline
+                    defaultStaffId={id}
+                    title={`Communication & Interaction History — ${fullName}`}
+                  />
+                </div>
+              ),
+            },
+          ]}
+        />
+      </Drawer>
     </div>
   );
 };

@@ -21,23 +21,25 @@ export const prospectSourceLabels: Record<ProspectSource, string> = {
   customer_service: 'Customer Service',
 };
 
-export const prospectStatusLabels: Record<ProspectStatus, string> = {
+export const prospectStatusLabels: Record<ProspectStatus, string> & { cancelled?: string } = {
   new: 'New',
   meeting_scheduled: 'Meeting Scheduled',
   meeting_completed: 'Meeting Completed',
   suspended: 'Suspended',
   postponed: 'Postponed',
   canceled: 'Canceled',
+  cancelled: 'Canceled',
   purchased: 'Purchased',
 };
 
-export const prospectStatusColors: Record<ProspectStatus, string> = {
+export const prospectStatusColors: Record<ProspectStatus, string> & { cancelled?: string } = {
   new: 'blue',
   meeting_scheduled: 'cyan',
   meeting_completed: 'green',
   suspended: 'orange',
   postponed: 'gold',
   canceled: 'red',
+  cancelled: 'red',
   purchased: 'purple',
 };
 
@@ -61,13 +63,15 @@ export const appointmentStatusLabels: Record<AppointmentStatus, string> = {
   completed: 'Completed',
   canceled: 'Canceled',
   no_show: 'No Show',
+  postponed: 'Postponed',
 };
 
 export const appointmentStatusColors: Record<AppointmentStatus, string> = {
   scheduled: 'blue',
   completed: 'green',
   canceled: 'red',
-  no_show: 'orange',
+  no_show: 'gold',
+  postponed: 'orange',
 };
 
 export const customerTypeLabels: Record<CustomerType, string> = {

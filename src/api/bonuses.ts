@@ -201,14 +201,112 @@ export const saveStoredBonusRules = (rules: BonusRule[]): void => {
   }
 };
 
+const DEFAULT_SEEDED_BONUSES: StaffBonusRecord[] = [
+  {
+    id: 'bon-seed-1',
+    userId: 'usr-mkt-1',
+    staffUserId: 'usr-mkt-1',
+    staffName: 'Kojo Mensah',
+    staffEmail: 'kojo.mensah@omark.com',
+    branchId: 'branch-el',
+    branchName: 'East Legon Branch',
+    ruleName: 'Prospect Conversion Incentive',
+    bonusType: 'prospect_conversion',
+    amountGHS: 1200,
+    amountMinor: 120000,
+    reason: 'Converted prospect Kwame Mensah to paying customer for East Legon Hills property',
+    status: 'PAID',
+    earnedAt: new Date(Date.now() - 3600000 * 48).toISOString(),
+    createdAt: new Date(Date.now() - 3600000 * 48).toISOString(),
+    updatedAt: new Date(Date.now() - 3600000 * 48).toISOString(),
+  },
+  {
+    id: 'bon-seed-2',
+    userId: 'usr-mkt-2',
+    staffUserId: 'usr-mkt-2',
+    staffName: 'Sarah Baidoo',
+    staffEmail: 'sarah.baidoo@omark.com',
+    branchId: 'branch-el',
+    branchName: 'East Legon Branch',
+    ruleName: 'Sales Target Milestone',
+    bonusType: 'monthly_target_met',
+    amountGHS: 2500,
+    amountMinor: 250000,
+    reason: 'Achieved quarterly revenue target threshold across Tema Community 25 enclaves',
+    status: 'PAID',
+    earnedAt: new Date(Date.now() - 3600000 * 96).toISOString(),
+    createdAt: new Date(Date.now() - 3600000 * 96).toISOString(),
+    updatedAt: new Date(Date.now() - 3600000 * 96).toISOString(),
+  },
+  {
+    id: 'bon-seed-3',
+    userId: 'usr-cs-1',
+    staffUserId: 'usr-cs-1',
+    staffName: 'Grace Asante',
+    staffEmail: 'grace.asante@omark.com',
+    branchId: 'branch-ho',
+    branchName: 'Head Office',
+    ruleName: 'Punctuality & Shift Attendance',
+    bonusType: 'punctuality_streak',
+    amountGHS: 450,
+    amountMinor: 45000,
+    reason: '30-day zero-lateness biometric clock-in streak and client reception excellence',
+    status: 'PAID',
+    earnedAt: new Date(Date.now() - 3600000 * 120).toISOString(),
+    createdAt: new Date(Date.now() - 3600000 * 120).toISOString(),
+    updatedAt: new Date(Date.now() - 3600000 * 120).toISOString(),
+  },
+  {
+    id: 'bon-seed-4',
+    userId: 'usr-sec-1',
+    staffUserId: 'usr-sec-1',
+    staffName: 'Ama Serwaa',
+    staffEmail: 'ama.serwaa@omark.com',
+    branchId: 'branch-ho',
+    branchName: 'Head Office',
+    ruleName: 'Deed Processing Turnaround',
+    bonusType: 'deed_completion',
+    amountGHS: 600,
+    amountMinor: 60000,
+    reason: 'Expedited processing of 12 land purchase agreements and deed documentations',
+    status: 'PAID',
+    earnedAt: new Date(Date.now() - 3600000 * 144).toISOString(),
+    createdAt: new Date(Date.now() - 3600000 * 144).toISOString(),
+    updatedAt: new Date(Date.now() - 3600000 * 144).toISOString(),
+  },
+  {
+    id: 'bon-seed-5',
+    userId: 'usr-mkt-1',
+    staffUserId: 'usr-mkt-1',
+    staffName: 'Prince Boateng',
+    staffEmail: 'prince.boateng@omark.com',
+    branchId: 'branch-el',
+    branchName: 'East Legon Branch',
+    ruleName: 'Cash Recovery Milestone',
+    bonusType: 'cash_recovery',
+    amountGHS: 1500,
+    amountMinor: 150000,
+    reason: 'Resolved overdue payment plan installment with client upfront settlement',
+    status: 'PENDING_PAYROLL',
+    earnedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+    createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+    updatedAt: new Date(Date.now() - 3600000 * 24).toISOString(),
+  },
+];
+
 export const getStoredStaffBonuses = (): StaffBonusRecord[] => {
   try {
     const raw = localStorage.getItem(BONUSES_STORAGE_KEY);
-    if (!raw) return [];
+    if (!raw) {
+      localStorage.setItem(BONUSES_STORAGE_KEY, JSON.stringify(DEFAULT_SEEDED_BONUSES));
+      return DEFAULT_SEEDED_BONUSES;
+    }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+    localStorage.setItem(BONUSES_STORAGE_KEY, JSON.stringify(DEFAULT_SEEDED_BONUSES));
+    return DEFAULT_SEEDED_BONUSES;
   } catch {
-    return [];
+    return DEFAULT_SEEDED_BONUSES;
   }
 };
 

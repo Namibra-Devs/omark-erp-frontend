@@ -27,7 +27,7 @@ export type InteractionChannel =
   | 'social_media' 
   | 'other';
 export type AppointmentSource = 'staff' | 'website';
-export type AppointmentStatus = 'scheduled' | 'completed' | 'canceled' | 'no_show';
+export type AppointmentStatus = 'scheduled' | 'completed' | 'canceled' | 'no_show' | 'postponed';
 export type CustomerType = 'payment_plan' | 'fully_paid';
 export type PaymentPlanStatus = 'active' | 'completed' | 'defaulted' | 'cancelled';
 export type PaymentMethod = 'cash' | 'bank_transfer' | 'mobile_money' | 'cheque' | 'other';
@@ -65,6 +65,9 @@ export interface Prospect {
   phoneNumber: string;
   source: ProspectSource;
   assignedUserId: string;
+  createdByUserId?: string;
+  createdByName?: string;
+  creator?: any;
   status: ProspectStatus;
   reasonForContact: string;
   notes?: string;
@@ -74,7 +77,9 @@ export interface Prospect {
 
 export interface Interaction {
   id: string;
-  prospectId: string;
+  prospectId?: string;
+  customerId?: string;
+  appointmentId?: string;
   channel: InteractionChannel;
   occurredAt: string;
   response: string;

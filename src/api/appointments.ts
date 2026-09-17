@@ -173,6 +173,7 @@ export const getAppointmentStatusConfig = (status: AppointmentStatus) => {
     completed: { color: '#722ed1', icon: '✔️', label: 'Completed' },
     canceled: { color: '#ff4d4f', icon: '❌', label: 'Canceled' },
     no_show: { color: '#faad14', icon: '⚠️', label: 'No Show' },
+    postponed: { color: '#fa8c16', icon: '⏳', label: 'Postponed' },
   };
   return configs[status] || configs.scheduled;
 };

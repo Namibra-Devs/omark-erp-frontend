@@ -57,7 +57,7 @@ import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { useAwardBonusMutation } from '@/api/bonuses';
-import { useUsersQuery } from '@/api/users';
+import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { prospectStatusLabels, prospectSourceLabels, interactionChannelLabels } from '@/constants/enums';
@@ -108,7 +108,7 @@ export const CSProspectsPage: React.FC = () => {
   const [editForm] = Form.useForm();
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
-  const [sourceFilter, setSourceFilter] = useState<'all' | 'customer_service' | 'marketing'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'all' | 'customer_service' | 'marketing'>('customer_service');
   const [addCustomerModal, setAddCustomerModal] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
@@ -134,11 +134,11 @@ export const CSProspectsPage: React.FC = () => {
     source: sourceFilter !== 'all' ? sourceFilter : undefined,
     status: statusFilter !== 'all' ? statusFilter : undefined,
     q: searchText || undefined,
-    pageSize: 100,
+    pageSize: 10000,
   });
 
   // Query all prospects so user can choose from all prospects with a search filter
-  const { data: allProspectsData, isLoading: allProspectsLoading } = useProspectsQuery({ pageSize: 100 });
+  const { data: allProspectsData, isLoading: allProspectsLoading } = useProspectsQuery({ pageSize: 10000 });
   const allProspectsList = useMemo(() => {
     const list = allProspectsData?.items ?? [];
     const map = new Map<string, Prospect>();
@@ -197,8 +197,10 @@ export const CSProspectsPage: React.FC = () => {
   // prospects should just self-assign, matching how the field is hidden
   // for them below.
   const isAdmin = hasRole(['admin']);
+  const { data: allStaffData } = useUsersQuery({ pageSize: 500 });
+  const allStaff = allStaffData?.items ?? [];
   const { data: csStaffData } = useUsersQuery(isAdmin ? { role: 'customer_service' } : undefined);
-  const csStaff = isAdmin ? (csStaffData?.items ?? []) : [];
+  const csStaff = isAdmin ? (csStaffData?.items ?? allStaff.filter((u) => u.role === 'customer_service')) : [];
 
   const { data: branches = [] } = useBranchesQuery();
 
@@ -581,6 +583,52 @@ export const CSProspectsPage: React.FC = () => {
       ),
     },
     {
+      title: 'Added By',
+      key: 'addedBy',
+      width: 190,
+      render: (_: any, record: Prospect) => {
+        const creatorId = record.createdByUserId || record.assignedUserId;
+        const staff = allStaff.find(
+          (u) => u.id === creatorId || (record.createdByUserId && u.id === record.createdByUserId)
+        );
+        if (!staff) {
+          return (
+            <Tooltip title={`Created: ${record.createdAt ? dayjs(record.createdAt).format('MMM D, YYYY h:mm A') : 'Direct entry'}`}>
+              <Tag color="default">Direct / Inbound</Tag>
+            </Tooltip>
+          );
+        }
+        const roleConfig: Record<string, { label: string; color: string }> = {
+          admin: { label: 'Admin', color: 'purple' },
+          marketing_director: { label: 'Director', color: 'gold' },
+          marketing_staff: { label: 'Marketing', color: 'blue' },
+          customer_service: { label: 'Customer Service', color: 'green' },
+          secretary: { label: 'Secretary', color: 'cyan' },
+          branch_manager: { label: 'Branch Manager', color: 'geekblue' },
+          accounts: { label: 'Accounts', color: 'orange' },
+        };
+        const roleInfo = roleConfig[staff.role] || { label: staff.role, color: 'blue' };
+        return (
+          <Tooltip title={`Added on ${record.createdAt ? dayjs(record.createdAt).format('MMM D, YYYY h:mm A') : 'System record'}`}>
+            <Space size={6}>
+              <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
+              <div>
+                <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                  {getUserFullName(staff)}
+                </Text>
+                <Tag
+                  color={roleInfo.color}
+                  style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+                >
+                  {roleInfo.label}
+                </Tag>
+              </div>
+            </Space>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: 'Created',
       dataIndex: 'createdAt',
       key: 'createdAt',
@@ -959,7 +1007,7 @@ export const CSProspectsPage: React.FC = () => {
                                   🚩 DUE TODAY
                                 </Tag>
                               )}
-                              <Tag color={apt.status === 'completed' ? 'green' : apt.status === 'canceled' ? 'default' : 'blue'}>
+                              <Tag color={apt.status === 'completed' ? 'green' : apt.status === 'postponed' ? 'orange' : apt.status === 'canceled' ? 'default' : 'blue'}>
                                 {String(apt.status || 'scheduled').toUpperCase()}
                               </Tag>
                             </Space>

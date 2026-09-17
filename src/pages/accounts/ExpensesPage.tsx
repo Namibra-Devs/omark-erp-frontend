@@ -109,6 +109,7 @@ export const ExpensesPage: React.FC = () => {
   // ── Handle Add Expense ────────────────────────────────────────────────────
   const handleAddExpense = async (values: any) => {
     try {
+      const userName = user ? (user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email) : 'Accounts Officer';
       await createExpenseMutation.mutateAsync({
         branchId: values.branchId || user?.branchId,
         category: values.category,
@@ -116,6 +117,9 @@ export const ExpensesPage: React.FC = () => {
         amountMinor: Math.round(values.amountGHS * 100),
         type: values.type,
         incurredOn: values.date ? values.date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+        recordedByUserId: user?.id,
+        recordedByUserName: userName,
+        recordedByUserRole: user?.role || 'accounts',
       });
       message.success('Expense recorded successfully');
       setAddModalOpen(false);

@@ -96,13 +96,17 @@ export const AccountsDashboardPage: React.FC = () => {
 
   const handleAddExpense = async (values: { branchId?: string; category: string; description?: string; amountGHS: number; type: 'internal' | 'external'; date: dayjs.Dayjs }) => {
     try {
+      const userName = user ? (user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email) : 'Accounts Officer';
       await createExpenseMutation.mutateAsync({
-        branchId: values.branchId,
+        branchId: values.branchId || user?.branchId,
         category: values.category,
         description: values.description,
         amountMinor: Math.round(values.amountGHS * 100),
         type: values.type,
         incurredOn: values.date.format('YYYY-MM-DD'),
+        recordedByUserId: user?.id,
+        recordedByUserName: userName,
+        recordedByUserRole: user?.role || 'accounts',
       });
       message.success('Expense recorded successfully');
       expenseForm.resetFields();

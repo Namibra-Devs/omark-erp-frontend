@@ -20,6 +20,7 @@ interface QuickActionsProps {
   onExport: () => void;
   onAddProspect?: () => void;
   onAddCustomer?: () => void;
+  onRoleExpenses?: () => void;
   onRefresh?: () => void;
   onSettings?: () => void;
   onViewNotifications?: () => void;
@@ -33,6 +34,7 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
   onExport,
   onAddProspect,
   onAddCustomer,
+  onRoleExpenses,
   onRefresh,
   onSettings,
   onViewNotifications,
@@ -66,6 +68,15 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
       color: '#13c2c2',
       bg: '#e6fffb',
       onClick: onAddCustomer,
+    }] : []),
+    ...(onRoleExpenses ? [{
+      key: 'role-expenses',
+      icon: <FileTextOutlined style={{ fontSize: 20 }} />,
+      label: 'Role Expenses',
+      description: 'Secretary, Director, BM outlays',
+      color: '#08979c',
+      bg: '#e6fffb',
+      onClick: onRoleExpenses,
     }] : []),
     {
       key: 'manage-users',
