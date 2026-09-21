@@ -73,15 +73,47 @@ const addAuthInterceptor = (instance: AxiosInstance) => {
 addAuthInterceptor(apiClient);
 addAuthInterceptor(erpClient);
 
+interface CacheEntry {
+  data: any;
+  status: number;
+  statusText: string;
+  headers: any;
+  timestamp: number;
+}
+
+const memoryGetCache = new Map<string, CacheEntry>();
+
+const getCacheKey = (config: InternalAxiosRequestConfig): string => {
+  const url = config.url || '';
+  const params = config.params ? JSON.stringify(config.params) : '';
+  return `${config.baseURL || ''}:${url}:${params}`;
+};
+
+export const clearClientCache = () => {
+  memoryGetCache.clear();
+};
+
 const addResponseInterceptor = (instance: AxiosInstance) => {
   instance.interceptors.response.use(
     (response) => {
-      // Return the full axios response so that hooks can access response.data
-      // Each API hook handles its own unwrapping of the server envelope
+      // Store successful GET requests in memory cache for resilient 429 fallback
+      if (response.config?.method?.toLowerCase() === 'get') {
+        const cacheKey = getCacheKey(response.config);
+        memoryGetCache.set(cacheKey, {
+          data: response.data,
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers,
+          timestamp: Date.now(),
+        });
+      } else if (['post', 'put', 'patch', 'delete'].includes(response.config?.method?.toLowerCase() || '')) {
+        // Clear cached data on mutations to keep views fresh
+        memoryGetCache.clear();
+      }
       return response;
     },
     async (error: AxiosError<any>) => {
-      const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
+      const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean; _rateLimitRetryCount?: number }) | undefined;
 
       // Handle 401 for Customer Portal
       const isPortalRoute = window.location.pathname.startsWith('/portal') || originalRequest?.url?.includes('/portal/');
@@ -155,45 +187,62 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
       const status = error.response?.status;
       const isRateLimited = status === 429 || serverData?.error?.code === 'RATE_LIMITED';
 
-      // Handle 429 Rate Limiting with intelligent exponential backoff and retry
-      const MAX_RATE_LIMIT_RETRIES = 3;
-      const currentRetries = ((originalRequest as any)?._rateLimitRetryCount as number) || 0;
-
-      if (isRateLimited && originalRequest && !isAuthEndpoint && currentRetries < MAX_RATE_LIMIT_RETRIES) {
-        (originalRequest as any)._rateLimitRetryCount = currentRetries + 1;
-
-        // Parse retry headers from server if available
-        const retryAfterHeader = error.response?.headers?.['retry-after'];
-        const rateLimitResetHeader = error.response?.headers?.['ratelimit-reset'];
-
-        let delayMs = 0;
-        if (retryAfterHeader) {
-          const parsed = parseInt(String(retryAfterHeader), 10);
-          if (!isNaN(parsed) && parsed > 0) {
-            delayMs = Math.min(parsed * 1000, 10000);
-          }
-        } else if (rateLimitResetHeader) {
-          const parsed = parseInt(String(rateLimitResetHeader), 10);
-          if (!isNaN(parsed) && parsed > 0) {
-            delayMs = Math.min(parsed * 1000, 10000);
+      // ── Handle 429 Rate Limiting ─────────────────────────────────────────
+      if (isRateLimited && originalRequest && !isAuthEndpoint) {
+        // A. If this is a GET request, serve existing cached data immediately to keep ERP usable
+        if (originalRequest.method?.toLowerCase() === 'get') {
+          const cacheKey = getCacheKey(originalRequest);
+          const cached = memoryGetCache.get(cacheKey);
+          if (cached) {
+            console.warn(
+              `[Omark Rate Guard] 429 Rate limited for ${originalRequest.url}. Serving cached data from ${Math.round((Date.now() - cached.timestamp) / 1000)}s ago.`
+            );
+            return Promise.resolve({
+              data: cached.data,
+              status: cached.status,
+              statusText: cached.statusText,
+              headers: { ...cached.headers, 'x-omark-cache-fallback': 'true' },
+              config: originalRequest,
+            } as AxiosResponse);
           }
         }
 
-        // Fallback to exponential backoff with random jitter:
-        // Attempt 1: ~1.2s - 1.7s, Attempt 2: ~2.2s - 2.7s, Attempt 3: ~4.2s - 4.7s
-        if (!delayMs || delayMs <= 0) {
-          const baseDelay = Math.pow(2, currentRetries) * 1000;
-          const jitter = Math.random() * 600;
-          delayMs = Math.min(baseDelay + jitter, 10000);
-        } else {
-          delayMs += Math.random() * 400;
+        // B. Intelligent exponential backoff retry for essential requests
+        const MAX_RATE_LIMIT_RETRIES = 3;
+        const currentRetries = (originalRequest._rateLimitRetryCount as number) || 0;
+
+        if (currentRetries < MAX_RATE_LIMIT_RETRIES) {
+          originalRequest._rateLimitRetryCount = currentRetries + 1;
+
+          // Parse retry headers from server if available
+          const retryAfterHeader = error.response?.headers?.['retry-after'];
+          const rateLimitResetHeader = error.response?.headers?.['ratelimit-reset'];
+
+          let delayMs = 0;
+          if (retryAfterHeader) {
+            const parsed = parseInt(String(retryAfterHeader), 10);
+            if (!isNaN(parsed) && parsed > 0) {
+              delayMs = Math.min(parsed * 1000, 8000);
+            }
+          } else if (rateLimitResetHeader) {
+            const parsed = parseInt(String(rateLimitResetHeader), 10);
+            if (!isNaN(parsed) && parsed > 0) {
+              delayMs = Math.min(parsed * 1000, 8000);
+            }
+          }
+
+          if (!delayMs || delayMs <= 0) {
+            const baseDelay = Math.pow(2, currentRetries) * 1000;
+            const jitter = Math.random() * 500;
+            delayMs = Math.min(baseDelay + jitter, 8000);
+          } else {
+            delayMs += Math.random() * 300;
+          }
+
+          console.warn(`[Omark API] Retrying rate-limited ${originalRequest.url} in ${Math.round(delayMs)}ms (attempt ${currentRetries + 1}/${MAX_RATE_LIMIT_RETRIES})`);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          return instance(originalRequest);
         }
-
-        // Log soft warning for observability
-        console.warn(`[Omark API] Rate limit encountered for ${originalRequest.url}. Retrying attempt ${currentRetries + 1}/${MAX_RATE_LIMIT_RETRIES} in ${Math.round(delayMs)}ms`);
-
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-        return instance(originalRequest);
       }
 
       const rawMsg =

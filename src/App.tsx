@@ -2,7 +2,8 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider, App as AntdApp, Spin } from 'antd';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { queryClient } from '@/lib/queryClient';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { BranchProvider } from '@/contexts/BranchContext';
 import { CustomerPortalAuthProvider } from '@/contexts/CustomerPortalAuthContext';
@@ -126,17 +127,6 @@ const RoleRedirect: React.FC = () => {
   const redirectPath = defaultRoutes[user.role] || '/';
   return <Navigate to={redirectPath} replace />;
 };
-
-// Query client configuration
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: 1,
-      refetchOnWindowFocus: false,
-      staleTime: 5 * 60 * 1000,
-    },
-  },
-});
 
 // Main App Routes
 const AppRoutes: React.FC = () => {
