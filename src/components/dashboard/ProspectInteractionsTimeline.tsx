@@ -150,11 +150,12 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
     refetch();
   };
 
-  // Auto-refresh every 30 seconds for live continuous tracking
+  // Auto-refresh every 60 seconds for live continuous tracking when tab is active
   useEffect(() => {
     const timer = setInterval(() => {
+      if (document.hidden) return;
       refetch();
-    }, 30000);
+    }, 60000);
     return () => clearInterval(timer);
   }, [refetch]);
 

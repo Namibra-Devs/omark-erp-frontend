@@ -214,7 +214,8 @@ export function useUnseenCountsQuery(userId: string | undefined, enabled = true)
       return unwrapData(res);
     },
     enabled: Boolean(userId) && enabled,
-    refetchInterval: 30000,
+    refetchInterval: 60000,
+    refetchIntervalInBackground: false,
   });
 }
 

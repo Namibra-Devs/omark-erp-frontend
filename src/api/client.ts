@@ -152,10 +152,55 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
 
       // Extract comprehensive error details without dropping NestJS or Express error formats
       const serverData = error.response?.data as any;
+      const status = error.response?.status;
+      const isRateLimited = status === 429 || serverData?.error?.code === 'RATE_LIMITED';
+
+      // Handle 429 Rate Limiting with intelligent exponential backoff and retry
+      const MAX_RATE_LIMIT_RETRIES = 3;
+      const currentRetries = ((originalRequest as any)?._rateLimitRetryCount as number) || 0;
+
+      if (isRateLimited && originalRequest && !isAuthEndpoint && currentRetries < MAX_RATE_LIMIT_RETRIES) {
+        (originalRequest as any)._rateLimitRetryCount = currentRetries + 1;
+
+        // Parse retry headers from server if available
+        const retryAfterHeader = error.response?.headers?.['retry-after'];
+        const rateLimitResetHeader = error.response?.headers?.['ratelimit-reset'];
+
+        let delayMs = 0;
+        if (retryAfterHeader) {
+          const parsed = parseInt(String(retryAfterHeader), 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            delayMs = Math.min(parsed * 1000, 10000);
+          }
+        } else if (rateLimitResetHeader) {
+          const parsed = parseInt(String(rateLimitResetHeader), 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            delayMs = Math.min(parsed * 1000, 10000);
+          }
+        }
+
+        // Fallback to exponential backoff with random jitter:
+        // Attempt 1: ~1.2s - 1.7s, Attempt 2: ~2.2s - 2.7s, Attempt 3: ~4.2s - 4.7s
+        if (!delayMs || delayMs <= 0) {
+          const baseDelay = Math.pow(2, currentRetries) * 1000;
+          const jitter = Math.random() * 600;
+          delayMs = Math.min(baseDelay + jitter, 10000);
+        } else {
+          delayMs += Math.random() * 400;
+        }
+
+        // Log soft warning for observability
+        console.warn(`[Omark API] Rate limit encountered for ${originalRequest.url}. Retrying attempt ${currentRetries + 1}/${MAX_RATE_LIMIT_RETRIES} in ${Math.round(delayMs)}ms`);
+
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        return instance(originalRequest);
+      }
+
       const rawMsg =
         serverData?.error?.message ||
         (Array.isArray(serverData?.message) ? serverData.message.join(', ') : serverData?.message) ||
         (typeof serverData?.error === 'string' ? serverData.error : null) ||
+        (isRateLimited ? 'The system is experiencing high traffic. Please wait a moment and try again.' : null) ||
         error.message ||
         'An unexpected error occurred';
 

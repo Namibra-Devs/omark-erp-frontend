@@ -229,15 +229,17 @@ export const useAdminDashboard = () => {
 
   // There's no push/webhook mechanism in this API, so "live" for the
   // activity feed and its notification count means polling — refetch the
-  // same real entity lists every 60s while this dashboard is mounted.
+  // same real entity lists every 120s while this dashboard is visible.
   useEffect(() => {
     const interval = setInterval(() => {
-      queryClient.invalidateQueries({ queryKey: ['prospects'] });
-      queryClient.invalidateQueries({ queryKey: ['customers'] });
-      queryClient.invalidateQueries({ queryKey: ['appointments'] });
-      queryClient.invalidateQueries({ queryKey: ['properties'] });
-      queryClient.invalidateQueries({ queryKey: ['deeds'] });
-    }, 60000);
+      // Never trigger queries if the tab is hidden or user is elsewhere
+      if (document.hidden) return;
+      queryClient.invalidateQueries({ queryKey: ['prospects'], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ['customers'], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ['appointments'], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ['properties'], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ['deeds'], refetchType: 'active' });
+    }, 120000);
     return () => clearInterval(interval);
   }, [queryClient]);
 

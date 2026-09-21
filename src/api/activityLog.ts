@@ -32,6 +32,7 @@ export function useActivityLogQuery(limit = 20, enabled = true) {
       return unwrapData(res) ?? [];
     },
     enabled,
-    refetchInterval: 30000,
+    refetchInterval: 60000,
+    refetchIntervalInBackground: false,
   });
 }

@@ -100,7 +100,8 @@ export function useInAppNotificationsQuery(userId?: string, unreadOnly = false) 
         return [];
       }
     },
-    refetchInterval: 15000,
+    refetchInterval: 60000,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -117,7 +118,8 @@ export function usePendingNotificationsCountQuery(enabled = true) {
         return 0;
       }
     },
-    refetchInterval: 30000,
+    refetchInterval: 60000,
+    refetchIntervalInBackground: false,
     enabled,
   });
 }
