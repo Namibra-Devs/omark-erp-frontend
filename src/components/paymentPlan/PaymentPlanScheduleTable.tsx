@@ -34,6 +34,7 @@ import dayjs from 'dayjs';
 import { useQueryClient } from '@tanstack/react-query';
 import apiClient from '@/api/client';
 import { paymentPlansKeys } from '@/api/paymentPlans';
+import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 import type { PaymentPlan, Installment, PaymentMethod } from '@/types';
 import {
@@ -130,27 +131,30 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       const method = 'bank_transfer';
       const reference = `QUICK-${row.sequence}-${Date.now().toString().slice(-4)}`;
 
-      // 1. Save locally for instant UI reactivity
-      recordLocalInstallmentPayment(plan.id, row.sequence, amountMinor, method, reference, paidOn);
-
-      // 2. Persist to real backend if valid backend plan ID exists
-      if (plan.id && !plan.id.startsWith('plan-')) {
-        try {
-          await apiClient.post(`/payment-plans/${plan.id}/payments`, {
-            amountMinor,
-            paidOn: dayjs(paidOn).format('YYYY-MM-DD'),
-            method,
-            reference,
-          });
-          queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
-          queryClient.invalidateQueries({ queryKey: ['customers'] });
-          queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-        } catch (apiErr) {
-          console.warn('[PaymentPlanScheduleTable] Backend payment save warning:', apiErr);
+      // 1. Persist permanently to backend database, save local override, and dispatch SMS prompt
+      await recordPlanPaymentWithBackend(
+        plan,
+        {
+          amountMinor,
+          paidOn,
+          method,
+          reference,
+          sequence: row.sequence,
+          installmentOrdinal: row.ordinal,
+        },
+        {
+          name: customerName || (plan as any).customerName || (plan as any).name,
+          phone: customerPhone || (plan as any).customerPhone || (plan as any).phone,
+          propertyName: propertyName || (plan as any).propertyName,
         }
-      }
+      );
 
-      // 3. Call parent callback if provided
+      // Invalidate queries so that real backend balances and plans refresh across all pages
+      queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+
+      // 2. Call parent callback if provided
       if (onRecordPayment) {
         await onRecordPayment({
           sequence: row.sequence,
@@ -160,18 +164,6 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
           reference,
         });
       }
-
-      // 4. Trigger automated SMS receipt to customer
-      dispatchPaymentReceiptSMS({
-        customerPhone: customerPhone || (plan as any).customerPhone || (plan as any).phone,
-        customerName: customerName || (plan as any).customerName || (plan as any).name,
-        amountMinor,
-        remainingBalanceMinor: Math.max(0, (plan.balanceMinor || 0) - amountMinor),
-        propertyName: propertyName || (plan as any).propertyName,
-        reference,
-        method,
-        installmentOrdinal: row.ordinal,
-      });
 
       message.success(`Recorded payment for ${row.ordinal} installment (₵${row.installmentGHS.toLocaleString()})!`);
     } catch (err: any) {
@@ -188,27 +180,29 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       const method = values.method || 'bank_transfer';
       const reference = values.reference || undefined;
 
-      // 1. Save locally for instant UI reactivity
-      recordLocalInstallmentPayment(plan.id, selectedRow.sequence, amountMinor, method, reference, paidOn);
-
-      // 2. Persist to real backend if valid backend plan ID exists
-      if (plan.id && !plan.id.startsWith('plan-')) {
-        try {
-          await apiClient.post(`/payment-plans/${plan.id}/payments`, {
-            amountMinor,
-            paidOn: dayjs(paidOn).format('YYYY-MM-DD'),
-            method,
-            reference,
-          });
-          queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
-          queryClient.invalidateQueries({ queryKey: ['customers'] });
-          queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-        } catch (apiErr) {
-          console.warn('[PaymentPlanScheduleTable] Backend payment save warning:', apiErr);
+      // 1. Persist permanently to backend database, save local override, and dispatch SMS prompt
+      await recordPlanPaymentWithBackend(
+        plan,
+        {
+          amountMinor,
+          paidOn,
+          method,
+          reference,
+          sequence: selectedRow.sequence,
+          installmentOrdinal: selectedRow.ordinal,
+        },
+        {
+          name: customerName || (plan as any).customerName || (plan as any).name,
+          phone: customerPhone || (plan as any).customerPhone || (plan as any).phone,
+          propertyName: propertyName || (plan as any).propertyName,
         }
-      }
+      );
 
-      // 3. Call parent callback if provided
+      queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+
+      // 2. Call parent callback if provided
       if (onRecordPayment) {
         await onRecordPayment({
           sequence: selectedRow.sequence,
@@ -218,18 +212,6 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
           reference,
         });
       }
-
-      // 4. Trigger automated SMS receipt to customer
-      dispatchPaymentReceiptSMS({
-        customerPhone: customerPhone || (plan as any).customerPhone || (plan as any).phone,
-        customerName: customerName || (plan as any).customerName || (plan as any).name,
-        amountMinor,
-        remainingBalanceMinor: Math.max(0, (plan.balanceMinor || 0) - amountMinor),
-        propertyName: propertyName || (plan as any).propertyName,
-        reference,
-        method,
-        installmentOrdinal: selectedRow.ordinal,
-      });
 
       message.success(`Payment recorded successfully for ${selectedRow.ordinal} installment!`);
       setRecordModalOpen(false);

@@ -24,6 +24,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery, useAnalyticsDashboardQuery } from '@/api/dashboard';
 import { usePaymentPlansQuery } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
+import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
 import { useExpensesQuery, useCreateExpenseMutation, useExpenseDecisionMutation } from '@/api/expenses';
 import { usePayrollQuery } from '@/api/payroll';
 import { progressBandLabels } from '@/constants/enums';
@@ -195,15 +196,31 @@ export const AccountsDashboardPage: React.FC = () => {
     }
     try {
       setLoading(true);
-      await recordPayment.mutateAsync({
-        amountMinor: Math.round(values.amount * 100),
-        paidOn: values.paymentDate.format('YYYY-MM-DD'),
-        method: values.method,
-        reference: values.reference || undefined,
-      });
+      const amountMinor = Math.round(values.amount * 100);
+      const paidOn = values.paymentDate.format('YYYY-MM-DD');
+      const method = values.method;
+      const reference = values.reference || undefined;
+
+      await recordPlanPaymentWithBackend(
+        selectedPlan,
+        {
+          amountMinor,
+          paidOn,
+          method,
+          reference,
+          sequence: 1,
+        },
+        {
+          name: selectedCustomer?.name,
+          phone: selectedCustomer?.phone || selectedCustomer?.phoneNumber,
+          recordedBy: user?.firstName ? `${user.firstName} ${user.lastName} (Accounts)` : 'Accounts',
+        }
+      );
+
       message.success('Payment recorded successfully!');
       setAddPaymentModal(false);
       paymentForm.resetFields();
+      setSelectedCustomer(null);
       refetchPaymentPlans();
       refetchDashboard();
     } catch (error: any) {

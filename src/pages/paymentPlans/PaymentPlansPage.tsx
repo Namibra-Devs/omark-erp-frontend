@@ -254,8 +254,10 @@ export const PaymentPlansPage: React.FC = () => {
           0
         );
         if (totalPaidMinor > 0) {
-          adjustedBalanceMinor = Math.max((p.balanceMinor || p.totalAmountMinor) - totalPaidMinor, 0);
-          const totalPaid = (p.downPaymentMinor || 0) + totalPaidMinor;
+          const totalScheduled = Math.max((p.totalAmountMinor || 35000000) - (p.downPaymentMinor || 0), 0);
+          const overrideBalance = Math.max(totalScheduled - totalPaidMinor, 0);
+          adjustedBalanceMinor = Math.min(p.balanceMinor !== undefined ? p.balanceMinor : totalScheduled, overrideBalance);
+          const totalPaid = Math.max((p.totalAmountMinor || 35000000) - adjustedBalanceMinor, 0);
           adjustedProgressPercent = p.totalAmountMinor > 0 
             ? Math.min(Math.round((totalPaid / p.totalAmountMinor) * 100), 100) 
             : p.progressPercent;

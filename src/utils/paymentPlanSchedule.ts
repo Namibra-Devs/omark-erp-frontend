@@ -170,10 +170,10 @@ export function buildPaymentPlanSchedule(
   
   let totalScheduledMinor = totalAmountMinor > downPaymentMinor 
     ? totalAmountMinor - downPaymentMinor 
-    : (plan.balanceMinor || totalAmountMinor || 3500000);
+    : (plan.balanceMinor || totalAmountMinor || 35000000);
 
   if (totalScheduledMinor <= 0) {
-    totalScheduledMinor = plan.balanceMinor || 3500000;
+    totalScheduledMinor = plan.balanceMinor || 35000000;
   }
 
   // Base start date
@@ -192,6 +192,15 @@ export function buildPaymentPlanSchedule(
   const baseMonthlyMinor = Math.floor(totalScheduledMinor / numMonths);
 
   const today = dayjs().startOf('day');
+
+  // Calculate actual total paid towards installments according to verified backend plan state
+  const currentPlanBalance = plan.balanceMinor !== undefined
+    ? plan.balanceMinor
+    : (plan.status === 'completed' ? 0 : totalScheduledMinor);
+
+  const totalPaidTowardsInstallments = plan.status === 'completed' || currentPlanBalance <= 0
+    ? totalScheduledMinor
+    : Math.max(totalScheduledMinor - currentPlanBalance, 0);
 
   for (let i = 1; i <= numMonths; i++) {
     const existing = sortedApi.find(item => item.sequence === i);
@@ -226,11 +235,19 @@ export function buildPaymentPlanSchedule(
     const dueDateStr = dueDateObj.format('YYYY-MM-DD');
     const dueDateFormatted = dueDateObj.format('D MMM YYYY');
 
+    // Check if this installment is marked paid by the verified plan balance or status
+    const isPaidByPlan = Boolean(
+      plan.status === 'completed' ||
+      currentPlanBalance <= 0 ||
+      (totalPaidTowardsInstallments > 0 && totalPaidTowardsInstallments >= (accumulatedMinor - 500)) ||
+      (plan.progressPercent !== undefined && plan.progressPercent >= 100)
+    );
+
     // Determine status
-    const isPaid = Boolean(localPayment || existing?.isPaid);
-    const paidAt = localPayment?.paidAt || existing?.paidAt;
-    const paymentMethod = localPayment?.method;
-    const reference = localPayment?.reference;
+    const isPaid = Boolean(localPayment || existing?.isPaid || isPaidByPlan);
+    const paidAt = localPayment?.paidAt || existing?.paidAt || (isPaidByPlan ? (plan.updatedAt || plan.startDate || dueDateStr) : undefined);
+    const paymentMethod = localPayment?.method || (isPaidByPlan ? 'bank_transfer' : undefined);
+    const reference = localPayment?.reference || (isPaidByPlan ? `VERIFIED-${i}` : undefined);
 
     const isDueToday = !isPaid && dueDateObj.isSame(today, 'day');
     const isOverdue = !isPaid && dueDateObj.isBefore(today, 'day');

@@ -78,6 +78,7 @@ import {
   usePaymentPlanScheduleListener,
 } from '@/utils/paymentPlanSchedule';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
+import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
 import type { PaymentPlan, PaymentPlanStatus } from '@/types';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import {
@@ -261,8 +262,10 @@ export const SecretaryDashboardPage: React.FC = () => {
           0
         );
         if (totalPaidMinor > 0) {
-          adjustedBalanceMinor = Math.max((p.balanceMinor || p.totalAmountMinor) - totalPaidMinor, 0);
-          const totalPaid = (p.downPaymentMinor || 0) + totalPaidMinor;
+          const totalScheduled = Math.max((p.totalAmountMinor || 35000000) - (p.downPaymentMinor || 0), 0);
+          const overrideBalance = Math.max(totalScheduled - totalPaidMinor, 0);
+          adjustedBalanceMinor = Math.min(p.balanceMinor !== undefined ? p.balanceMinor : totalScheduled, overrideBalance);
+          const totalPaid = Math.max((p.totalAmountMinor || 35000000) - adjustedBalanceMinor, 0);
           adjustedProgressPercent = p.totalAmountMinor > 0 
             ? Math.min(Math.round((totalPaid / p.totalAmountMinor) * 100), 100) 
             : p.progressPercent;
@@ -890,40 +893,28 @@ export const SecretaryDashboardPage: React.FC = () => {
       const method = values.method;
       const reference = values.reference || `REC-SEC-${Date.now().toString().slice(-4)}`;
 
-      // 1. Record locally so UI updates reactively and persists across schedule components
-      recordLocalInstallmentPayment(selectedPlan.id, 1, amountMinor, method, reference, paidOn);
-
-      // 2. Persist to real backend if valid backend plan ID exists
-      if (selectedPlan.id && !selectedPlan.id.startsWith('plan-')) {
-        try {
-          await recordPayment.mutateAsync({
-            amountMinor,
-            paidOn,
-            method,
-            reference,
-          });
-        } catch (apiErr) {
-          console.warn('[SecretaryDashboard] Backend payment record fallback:', apiErr);
-        }
-      }
-
-      // 3. Dispatch automated SMS receipt to customer
       const cust = customerMap[selectedPlan.customerId] || selectedCustomer;
       const phone = cust?.phone || cust?.phoneNumber || selectedCustomer?.phone;
       const name = cust?.name || `${cust?.firstName || ''} ${cust?.lastName || ''}`.trim() || selectedCustomer?.name || 'Customer';
-      const remainingBalance = Math.max(0, (selectedPlan.balanceMinor || 0) - amountMinor);
       const prop = propertyMap[selectedPlan.propertyId];
 
-      dispatchPaymentReceiptSMS({
-        customerPhone: phone,
-        customerName: name,
-        amountMinor,
-        remainingBalanceMinor: remainingBalance,
-        propertyName: prop ? prop.houseNumber || prop.title : undefined,
-        reference,
-        method,
-        recordedBy: user?.firstName ? `${user.firstName} ${user.lastName} (Secretary)` : 'Secretary',
-      });
+      // Persist permanently to backend database, save local state, and dispatch automated SMS prompt
+      await recordPlanPaymentWithBackend(
+        selectedPlan,
+        {
+          amountMinor,
+          paidOn,
+          method,
+          reference,
+          sequence: 1,
+        },
+        {
+          name,
+          phone,
+          propertyName: prop ? prop.houseNumber || prop.title : undefined,
+          recordedBy: user?.firstName ? `${user.firstName} ${user.lastName} (Secretary)` : 'Secretary',
+        }
+      );
 
       message.success('Payment recorded successfully!');
       setAddPaymentModal(false);

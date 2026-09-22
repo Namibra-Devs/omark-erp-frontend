@@ -636,6 +636,23 @@ const handleAddCustomer = async (values: any) => {
     const taggedPayload = tagPayloadWithBranch(customerData, user);
     const newCustomer = await createCustomer.mutateAsync(taggedPayload);
 
+    // If customer type is payment_plan, create the real backend payment plan in the database
+    if (newCustomer?.id && customerData.createPlan) {
+      try {
+        await createPaymentPlan.mutateAsync({
+          customerId: newCustomer.id,
+          totalAmountMinor: customerData.createPlan.totalAmountMinor,
+          downPaymentMinor: customerData.createPlan.downPaymentMinor,
+          planBasis: customerData.createPlan.planBasis,
+          numMonths: customerData.createPlan.numMonths,
+          monthlyAmountMinor: customerData.createPlan.monthlyAmountMinor,
+          startDate: customerData.createPlan.startDate,
+        });
+      } catch (planErr) {
+        console.warn('[CustomersPage] Proactive backend payment plan creation notice:', planErr);
+      }
+    }
+
     // Photo upload has no real endpoint (see src/mock/photos.ts) — applied
     // locally once we have the customer's real id back from the server.
     if (values.photo && newCustomer?.id) {

@@ -1029,22 +1029,12 @@ export const CustomerDetailPage: React.FC = () => {
                       customerName={customer ? `${customer.firstName} ${customer.lastName}` : undefined}
                       customerPhone={customer?.phoneNumber}
                       propertyName={property ? property.houseNumber : undefined}
-                      onRecordPayment={async (values) => {
-                        if (planId) {
-                          try {
-                            await recordPayment.mutateAsync({
-                              amountMinor: values.amountMinor,
-                              paidOn: values.paidOn,
-                              method: values.method as any,
-                              reference: values.reference,
-                            });
-                          } catch (e) {
-                            // Local override already saved in storage
-                          }
-                        }
-                        refetchPaymentPlan();
-                        refetchInstallments();
-                        refetchCustomer();
+                      onRecordPayment={async () => {
+                        await Promise.all([
+                          refetchPaymentPlan(),
+                          refetchInstallments(),
+                          refetchCustomer(),
+                        ]);
                       }}
                     />
                   </Spin>
