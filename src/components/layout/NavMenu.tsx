@@ -225,7 +225,7 @@ export const NavMenu: React.FC = () => {
     }
 
     // ── EXPENSES (Critical feature moved to Sidebar) ──────────────────────────
-    if (hasRole(['accounts', 'admin', 'branch_manager'])) {
+    if (hasRole(['accounts', 'admin', 'branch_manager', 'secretary', 'marketing_director', 'marketing_staff'])) {
       items.push({
         key: '/accounts/expenses',
         icon: <DollarOutlined />,

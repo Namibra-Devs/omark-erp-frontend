@@ -12,6 +12,7 @@ import {
   InfoCircleOutlined,
   UserAddOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { tokens } from '@/constants/tokens';
 
 const { Text } = Typography;
@@ -22,15 +23,17 @@ interface StatsCardsProps {
     activeUsers: number;
     totalProspects: number;
     totalCustomers: number;
+    totalPaymentPlans?: number;
+    activePaymentPlans?: number;
     monthlyRevenue: number;
     growthRate: number;
     pendingNotifications?: number;
-    activePaymentPlans?: number;
   };
   loading?: boolean;
 }
 
 export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
+  const navigate = useNavigate();
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
@@ -73,6 +76,7 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
       growth: stats.growthRate || 0,
       description: 'Total registered users in the system',
       delay: 0,
+      link: '/admin/users',
     },
     {
       key: 'prospects',
@@ -85,6 +89,7 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
       growth: 0,
       description: 'Active prospects in the pipeline',
       delay: 100,
+      link: '/marketing/prospects',
     },
     {
       key: 'customers',
@@ -97,26 +102,40 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
       growth: 0,
       description: 'Customers with active accounts',
       delay: 200,
+      link: '/customers',
+    },
+    {
+      key: 'payment-plans',
+      title: 'Active Plans',
+      value: stats.activePaymentPlans || 0,
+      icon: <DollarOutlined />,
+      color: '#fa8c16',
+      bg: '#fa8c1615',
+      subtext: `${stats.totalPaymentPlans || stats.activePaymentPlans || 0} total plans`,
+      growth: 0,
+      description: 'Active installment payment plans',
+      delay: 300,
+      link: '/payment-plans',
     },
     {
       key: 'revenue',
       title: 'Monthly Revenue',
       value: formatCurrency(stats.monthlyRevenue || 0),
-      icon: <DollarOutlined />,
+      icon: <RiseOutlined />,
       color: '#722ed1',
       bg: '#722ed115',
       subtext: 'Current month',
       growth: 0,
       description: 'Total revenue this month',
-      delay: 300,
+      delay: 400,
     },
   ];
 
   if (loading) {
     return (
       <Row gutter={[16, 16]}>
-        {[1, 2, 3, 4].map(i => (
-          <Col xs={24} sm={12} lg={6} key={i}>
+        {[1, 2, 3, 4, 5].map(i => (
+          <Col xs={24} sm={12} lg={i === 5 ? 6 : 4} style={{ flex: 1, minWidth: 200 }} key={i}>
             <Card>
               <Skeleton active paragraph={{ rows: 2 }} />
             </Card>
@@ -129,12 +148,14 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
   return (
     <Row gutter={[16, 16]}>
       {statsCards.map((stat) => (
-        <Col xs={24} sm={12} lg={6} key={stat.key}>
+        <Col xs={24} sm={12} lg={4} xl={4} style={{ flex: 1, minWidth: 200 }} key={stat.key}>
           <Card
+            onClick={() => stat.link && navigate(stat.link)}
             style={{
               height: '100%',
               borderRadius: 12,
               border: '1px solid #f0f0f0',
+              cursor: stat.link ? 'pointer' : 'default',
               transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
               opacity: visible ? 1 : 0,
               transform: visible ? 'translateY(0)' : 'translateY(20px)',

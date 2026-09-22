@@ -913,6 +913,9 @@ export const PaymentPlansPage: React.FC = () => {
         <div style={{ marginTop: 20 }}>
           <PaymentPlanScheduleTable
             plan={selectedPlan}
+            customerName={getCustomerName(selectedPlan.customerId)}
+            customerPhone={getCustomerPhone(selectedPlan.customerId)}
+            propertyName={getCustomerProperty(selectedPlan.customerId)}
             onRecordPayment={async () => {
               refetchPaymentPlans();
             }}
@@ -1184,6 +1187,9 @@ export const PaymentPlansPage: React.FC = () => {
                 <PaymentPlanScheduleTable
                   plan={record}
                   compact
+                  customerName={getCustomerName(record.customerId)}
+                  customerPhone={getCustomerPhone(record.customerId)}
+                  propertyName={getCustomerProperty(record.customerId)}
                   onRecordPayment={async () => {
                     refetchPaymentPlans();
                   }}

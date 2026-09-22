@@ -154,9 +154,15 @@ export const ProspectsPage: React.FC = () => {
 
   // Full marketing prospects list across all pages for status breakdown calculation
   const allMarketingProspects = useMemo(() => {
-    let list = allExistingProspects.filter((p) => p.source === 'marketing' || !p.source);
+    let list = allExistingProspects;
     if (assignedUserIdFilter) {
-      list = list.filter((p) => p.assignedUserId === assignedUserIdFilter);
+      list = list.filter(
+        (p) =>
+          p.assignedUserId === assignedUserIdFilter ||
+          (p as any).assignedStaffId === assignedUserIdFilter ||
+          p.createdByUserId === assignedUserIdFilter ||
+          (p as any).creatorId === assignedUserIdFilter
+      );
     }
     return filterEntitiesByBranch(list, user, branches);
   }, [allExistingProspects, assignedUserIdFilter, user, branches]);

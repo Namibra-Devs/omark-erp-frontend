@@ -1026,6 +1026,9 @@ export const CustomerDetailPage: React.FC = () => {
                     <PaymentPlanScheduleTable
                       plan={paymentPlan}
                       installments={installments}
+                      customerName={customer ? `${customer.firstName} ${customer.lastName}` : undefined}
+                      customerPhone={customer?.phoneNumber}
+                      propertyName={property ? property.houseNumber : undefined}
                       onRecordPayment={async (values) => {
                         if (planId) {
                           try {

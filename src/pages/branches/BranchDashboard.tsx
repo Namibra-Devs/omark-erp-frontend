@@ -21,7 +21,13 @@ import {
   Modal,
   Select,
   message,
+  Form,
+  Input,
+  DatePicker,
+  InputNumber,
+  Alert,
 } from 'antd';
+import dayjs from 'dayjs';
 import {
   ArrowLeftOutlined,
   DollarOutlined,
@@ -32,15 +38,17 @@ import {
   FileTextOutlined,
   MailOutlined,
   UserAddOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { tokens } from '@/constants/tokens';
 import { roleLabels } from '@/constants/enums';
 import { useBranchQuery } from '@/api/branches';
-import { useExpensesQuery } from '@/api/expenses';
+import { useExpensesQuery, useCreateExpenseMutation } from '@/api/expenses';
 import { useComplaintsQuery } from '@/api/complaints';
 import { useUsersQuery, getUserPhone } from '@/api/users';
+import { useAuth } from '@/contexts/AuthContext';
 import { useBranchContext } from '@/contexts/BranchContext';
 import {
   useAssignmentListener,
@@ -126,6 +134,39 @@ export const BranchDashboard: React.FC = () => {
     const currentIds = assignedStaff.map((u) => u.id);
     setSelectedStaffIds(currentIds);
     setAssignModalOpen(true);
+  };
+
+  const { user } = useAuth();
+  const createExpenseMutation = useCreateExpenseMutation();
+  const [addExpenseModal, setAddExpenseModal] = useState(false);
+  const [expenseLoading, setExpenseLoading] = useState(false);
+  const [expenseForm] = Form.useForm();
+
+  const handleInitiateExpense = async (values: any) => {
+    if (!branch) return;
+    try {
+      setExpenseLoading(true);
+      const amountMinor = Math.round(values.amountGHS * 100);
+      await createExpenseMutation.mutateAsync({
+        category: values.category,
+        type: values.type || 'internal',
+        amountMinor,
+        incurredOn: values.incurredOn.format('YYYY-MM-DD'),
+        description: values.description,
+        branchId: branch.id,
+        recordedByUserId: user?.id,
+        recordedByUserName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Branch Manager',
+        recordedByUserRole: user?.role || 'branch_manager',
+        status: 'pending',
+      });
+      message.success(`Expense submitted successfully for Admin & Accounts approval!`);
+      setAddExpenseModal(false);
+      expenseForm.resetFields();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to record expense');
+    } finally {
+      setExpenseLoading(false);
+    }
   };
 
   const handleSaveStaff = () => {
@@ -234,7 +275,10 @@ export const BranchDashboard: React.FC = () => {
     <div>
       <PageHeader
         title={branch.name}
-        actions={[{ label: 'All Branches', onClick: () => navigate('/branches'), icon: <ArrowLeftOutlined /> }]}
+        actions={[
+          { label: 'Record Expense', onClick: () => setAddExpenseModal(true), icon: <DollarOutlined />, type: 'primary' },
+          { label: 'All Branches', onClick: () => navigate('/branches'), icon: <ArrowLeftOutlined /> },
+        ]}
       />
 
       <Card style={{ marginBottom: 24 }}>
@@ -322,15 +366,34 @@ export const BranchDashboard: React.FC = () => {
 
       <Row gutter={16}>
         <Col xs={24} lg={12}>
-          <Card title={<span><DollarOutlined style={{ marginRight: 8 }} />Branch Expenses</span>} style={{ marginBottom: 24 }}>
+          <Card
+            title={
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span><DollarOutlined style={{ marginRight: 8 }} />Branch Expenses</span>
+                <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddExpenseModal(true)}>
+                  Record Expense
+                </Button>
+              </div>
+            }
+            style={{ marginBottom: 24 }}
+          >
             {expenses.length > 0 ? (
               <List
                 dataSource={expenses}
                 renderItem={(e) => (
-                  <List.Item extra={<Text strong>GHS {(e.amountMinor / 100).toLocaleString()}</Text>}>
+                  <List.Item
+                    extra={
+                      <div style={{ textAlign: 'right' }}>
+                        <Text strong style={{ display: 'block' }}>GHS {(e.amountMinor / 100).toLocaleString()}</Text>
+                        <Tag color={e.status === 'approved' ? 'green' : e.status === 'pending' ? 'gold' : 'red'} style={{ marginTop: 4 }}>
+                          {e.status === 'approved' ? 'Approved' : e.status === 'pending' ? 'Pending Approval' : 'Rejected'}
+                        </Tag>
+                      </div>
+                    }
+                  >
                     <List.Item.Meta
                       title={e.category}
-                      description={`${e.code || 'EXP'} · Incurred ${e.incurredOn}`}
+                      description={`${e.code || 'EXP'} · Incurred ${e.incurredOn}${e.description ? ` · ${e.description}` : ''}`}
                     />
                   </List.Item>
                 )}
@@ -389,6 +452,107 @@ export const BranchDashboard: React.FC = () => {
             );
           })}
         </Select>
+      </Modal>
+
+      {/* Record Branch Expense Modal */}
+      <Modal
+        title={
+          <Space>
+            <DollarOutlined style={{ color: '#fa8c16' }} />
+            <span>Record Branch Operational Expense</span>
+          </Space>
+        }
+        open={addExpenseModal}
+        onCancel={() => {
+          setAddExpenseModal(false);
+          expenseForm.resetFields();
+        }}
+        footer={null}
+        destroyOnClose
+        width={540}
+      >
+        <Form form={expenseForm} layout="vertical" onFinish={handleInitiateExpense}>
+          <Alert
+            type="info"
+            showIcon
+            message="Pending Approval Workflow"
+            description="Branch expenses will be placed in 'pending' status for review and authorization by Admin and Accounts dashboards."
+            style={{ marginBottom: 16 }}
+          />
+
+          <Row gutter={12}>
+            <Col span={14}>
+              <Form.Item
+                name="category"
+                label="Expense Category"
+                rules={[{ required: true, message: 'Please pick category' }]}
+                initialValue="Power & Generator Servicing"
+              >
+                <Select placeholder="Select category">
+                  <Select.Option value="Power & Generator Servicing">Power & Generator Servicing</Select.Option>
+                  <Select.Option value="Site Inspection Logistics">Site Inspection Shuttle & Logistics</Select.Option>
+                  <Select.Option value="Facility Maintenance">Facility & AC Maintenance</Select.Option>
+                  <Select.Option value="Branch Security & Sanitation">Security & Sanitation</Select.Option>
+                  <Select.Option value="Office Supplies & Stationery">Office Supplies & Stationery</Select.Option>
+                  <Select.Option value="Client Refreshments">Client Hospitality & Refreshments</Select.Option>
+                  <Select.Option value="Other Branch Operations">Other Branch Operations</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={10}>
+              <Form.Item name="type" label="Expense Type" initialValue="internal" rules={[{ required: true }]}>
+                <Select>
+                  <Select.Option value="internal">🏢 Internal Operations</Select.Option>
+                  <Select.Option value="external">🚚 External / Site Work</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="amountGHS"
+                label="Amount (GH₵)"
+                rules={[{ required: true, message: 'Enter amount' }]}
+              >
+                <InputNumber style={{ width: '100%' }} min={0.01} precision={2} prefix="GH₵" placeholder="0.00" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="incurredOn"
+                label="Incurred Date"
+                initialValue={dayjs()}
+                rules={[{ required: true }]}
+              >
+                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="description"
+            label="Detailed Purpose / Notes"
+            rules={[{ required: true, message: 'Explain what this expense is for' }]}
+          >
+            <Input.TextArea rows={3} placeholder="Vendor, itemized service details, receipt/voucher reference..." />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => {
+                setAddExpenseModal(false);
+                expenseForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+              <Button type="primary" htmlType="submit" loading={expenseLoading}>
+                Submit Expense for Approval
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
       </Modal>
     </div>
   );

@@ -91,8 +91,8 @@ export const MyProfilePage: React.FC = () => {
   // Queries enabled for all staff
   const canSeeDeeds = hasRole(['admin', 'secretary', 'customer_service']);
 
-  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery(
-    { assignedUserId: user?.id },
+  const { data: allProspectsData, isLoading: prospectsLoading } = useProspectsQuery(
+    { pageSize: 500 },
     Boolean(user?.id)
   );
   const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery(
@@ -120,7 +120,13 @@ export const MyProfilePage: React.FC = () => {
   );
 
   const myPayroll: PayrollRecord[] = payrollData?.items ?? [];
-  const myProspects = prospectsData?.items ?? [];
+  const allProspects = allProspectsData?.items ?? [];
+  const myProspects = useMemo(() => {
+    if (!user?.id) return [];
+    return allProspects.filter(
+      (p) => p.assignedUserId === user.id || (p as any).assignedStaffId === user.id || (p as any).createdByUserId === user.id
+    );
+  }, [allProspects, user?.id]);
   const myAppointments = (appointmentsData?.items ?? []).filter(
     (a) => a.createdByUserId === user?.id || (a as any).assignedStaffId === user?.id || isAdmin
   );

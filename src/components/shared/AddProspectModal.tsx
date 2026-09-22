@@ -35,7 +35,7 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
   defaultSource = 'customer_service',
 }) => {
   const { user, hasRole } = useAuth();
-  const isAdmin = hasRole(['admin', 'branch_manager']);
+  const isAdmin = hasRole(['admin', 'branch_manager', 'marketing_director']);
   const [form] = Form.useForm();
   const createProspect = useCreateProspectMutation();
 
@@ -61,10 +61,11 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
       );
 
       const { photo, ...prospectValues } = values;
+      const effectiveSource = values.source || (user?.role === 'marketing_director' || user?.role === 'marketing_staff' ? 'marketing' : defaultSource);
       const payload = {
         ...prospectValues,
-        source: values.source || defaultSource,
-        assignedUserId: isAdmin && values.assignedUserId ? values.assignedUserId : user?.id,
+        source: effectiveSource,
+        assignedUserId: isAdmin && values.assignedUserId ? values.assignedUserId : (values.assignedUserId || user?.id),
       };
 
       const taggedPayload = tagPayloadWithBranch(payload, user);

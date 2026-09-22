@@ -40,6 +40,7 @@ export interface CreateExpensePayload {
   incurredOn: string;
   branchId?: string;
   description?: string;
+  status?: 'pending' | 'approved' | 'rejected';
   recordedByUserId?: string;
   recordedByUserName?: string;
   recordedByUserRole?: string;
@@ -52,288 +53,38 @@ export interface ExpenseDecisionPayload {
 
 export const EXPENSES_STORAGE_KEY = 'omark_expenses_records_store';
 
-const DEFAULT_SEEDED_EXPENSES: ExpenseEntity[] = [
-  // ── Secretary Role Expenses ──────────────────────────────────────────────
-  {
-    id: 'exp-sec-1',
-    code: 'EXP-SEC-001',
-    category: 'Client Hospitality',
-    type: 'internal',
-    amountMinor: 145000, // GHS 1,450.00
-    incurredOn: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-el',
-    branchName: 'East Legon Branch',
-    description: 'Front desk executive lounge refreshments, mineral water packs & coffee beans',
-    status: 'approved',
-    recordedByUserId: 'usr-sec-1',
-    recordedByUserName: 'Ama Serwaa',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(1, 'day').toISOString(),
-    updatedAt: dayjs().subtract(1, 'day').toISOString(),
-  },
-  {
-    id: 'exp-sec-2',
-    code: 'EXP-SEC-002',
-    category: 'Office Supplies',
-    type: 'internal',
-    amountMinor: 85000, // GHS 850.00
-    incurredOn: dayjs().subtract(3, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'Corporate visitor logbooks, branded folders, high-capacity toner & reams',
-    status: 'approved',
-    recordedByUserId: 'usr-sec-1',
-    recordedByUserName: 'Ama Serwaa',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(3, 'day').toISOString(),
-    updatedAt: dayjs().subtract(3, 'day').toISOString(),
-  },
-  {
-    id: 'exp-sec-3',
-    code: 'EXP-SEC-003',
-    category: 'Courier & Dispatch',
-    type: 'internal',
-    amountMinor: 65000, // GHS 650.00
-    incurredOn: dayjs().subtract(5, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-el',
-    branchName: 'East Legon Branch',
-    description: 'Express courier delivery of executed land purchase deeds to clients',
-    status: 'approved',
-    recordedByUserId: 'usr-sec-2',
-    recordedByUserName: 'Beatrice Darko',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(5, 'day').toISOString(),
-    updatedAt: dayjs().subtract(5, 'day').toISOString(),
-  },
-  {
-    id: 'exp-sec-4',
-    code: 'EXP-SEC-004',
-    category: 'Office Maintenance',
-    type: 'internal',
-    amountMinor: 135000, // GHS 1,350.00
-    incurredOn: dayjs().subtract(6, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'Biometric clocking device sensor replacement & visitor badge accessories',
-    status: 'pending',
-    recordedByUserId: 'usr-sec-1',
-    recordedByUserName: 'Ama Serwaa',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(6, 'day').toISOString(),
-    updatedAt: dayjs().subtract(6, 'day').toISOString(),
-  },
-
-  // ── Marketing Director Role Expenses ──────────────────────────────────────
-  {
-    id: 'exp-mkt-1',
-    code: 'EXP-MKT-001',
-    category: 'Mega Billboard & Out-Of-Home',
-    type: 'external',
-    amountMinor: 1250000, // GHS 12,500.00
-    incurredOn: dayjs().subtract(2, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'Airport bypass highway mega-billboard hoarding lease & night floodlight maintenance',
-    status: 'approved',
-    recordedByUserId: 'usr-mkt-dir',
-    recordedByUserName: 'David Osei',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(2, 'day').toISOString(),
-    updatedAt: dayjs().subtract(2, 'day').toISOString(),
-  },
-  {
-    id: 'exp-mkt-2',
-    code: 'EXP-MKT-002',
-    category: 'Exhibitions & Events',
-    type: 'external',
-    amountMinor: 680000, // GHS 6,800.00
-    incurredOn: dayjs().subtract(4, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'Accra International Property Expo prime exhibition booth space & roll-up banners',
-    status: 'approved',
-    recordedByUserId: 'usr-mkt-dir',
-    recordedByUserName: 'David Osei',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(4, 'day').toISOString(),
-    updatedAt: dayjs().subtract(4, 'day').toISOString(),
-  },
-  {
-    id: 'exp-mkt-3',
-    code: 'EXP-MKT-003',
-    category: 'Digital Ads & Media',
-    type: 'external',
-    amountMinor: 450000, // GHS 4,500.00
-    incurredOn: dayjs().subtract(7, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'Targeted Google Ads & Meta video ad placement for Lakeside Hill residential plots',
-    status: 'approved',
-    recordedByUserId: 'usr-mkt-dir',
-    recordedByUserName: 'David Osei',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(7, 'day').toISOString(),
-    updatedAt: dayjs().subtract(7, 'day').toISOString(),
-  },
-  {
-    id: 'exp-mkt-4',
-    code: 'EXP-MKT-004',
-    category: 'Print & Collateral',
-    type: 'external',
-    amountMinor: 320000, // GHS 3,200.00
-    incurredOn: dayjs().subtract(8, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'High-gloss full color project prospectus brochures (2,500 copies) & promo bags',
-    status: 'pending',
-    recordedByUserId: 'usr-mkt-dir',
-    recordedByUserName: 'David Osei',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(8, 'day').toISOString(),
-    updatedAt: dayjs().subtract(8, 'day').toISOString(),
-  },
-
-  // ── Branch Manager Role Expenses ──────────────────────────────────────────
-  {
-    id: 'exp-bm-1',
-    code: 'EXP-BM-001',
-    category: 'Power & Generator Servicing',
-    type: 'internal',
-    amountMinor: 420000, // GHS 4,200.00
-    incurredOn: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-el',
-    branchName: 'East Legon Branch',
-    description: '150kVA Standby Generator quarterly major maintenance & 500L diesel fueling',
-    status: 'approved',
-    recordedByUserId: 'usr-bm-1',
-    recordedByUserName: 'Prince Boateng',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(1, 'day').toISOString(),
-    updatedAt: dayjs().subtract(1, 'day').toISOString(),
-  },
-  {
-    id: 'exp-bm-2',
-    code: 'EXP-BM-002',
-    category: 'Site Inspection Logistics',
-    type: 'internal',
-    amountMinor: 260000, // GHS 2,600.00
-    incurredOn: dayjs().subtract(3, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-el',
-    branchName: 'East Legon Branch',
-    description: 'Weekend client site inspection shuttle fueling, toll tags & chauffeur stipends',
-    status: 'approved',
-    recordedByUserId: 'usr-bm-1',
-    recordedByUserName: 'Prince Boateng',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(3, 'day').toISOString(),
-    updatedAt: dayjs().subtract(3, 'day').toISOString(),
-  },
-  {
-    id: 'exp-bm-3',
-    code: 'EXP-BM-003',
-    category: 'Facility Air Conditioning',
-    type: 'internal',
-    amountMinor: 195000, // GHS 1,950.00
-    incurredOn: dayjs().subtract(5, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-km',
-    branchName: 'Kumasi Branch',
-    description: 'Branch multi-split AC refrigerant top-up, compressor cleaning and filter overhaul',
-    status: 'approved',
-    recordedByUserId: 'usr-bm-2',
-    recordedByUserName: 'Kwame Poku',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(5, 'day').toISOString(),
-    updatedAt: dayjs().subtract(5, 'day').toISOString(),
-  },
-  {
-    id: 'exp-bm-4',
-    code: 'EXP-BM-004',
-    category: 'Branch Security & Sanitation',
-    type: 'internal',
-    amountMinor: 98000, // GHS 980.00
-    incurredOn: dayjs().subtract(9, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-km',
-    branchName: 'Kumasi Branch',
-    description: 'CCTV perimeter surveillance recalibration & municipal waste management fee',
-    status: 'pending',
-    recordedByUserId: 'usr-bm-2',
-    recordedByUserName: 'Kwame Poku',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(9, 'day').toISOString(),
-    updatedAt: dayjs().subtract(9, 'day').toISOString(),
-  },
-
-  // ── Accounts Role Expenses ────────────────────────────────────────────────
-  {
-    id: 'exp-acc-1',
-    code: 'EXP-ACC-001',
-    category: 'Lands Commission Title Searches',
-    type: 'external',
-    amountMinor: 580000, // GHS 5,800.00
-    incurredOn: dayjs().subtract(4, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'Official Lands Commission cadastral search clearances and deed registry stamping fees',
-    status: 'approved',
-    recordedByUserId: 'usr-acc-1',
-    recordedByUserName: 'Kwame Mensah',
-    recordedByUserRole: 'accounts',
-    createdAt: dayjs().subtract(4, 'day').toISOString(),
-    updatedAt: dayjs().subtract(4, 'day').toISOString(),
-  },
-  {
-    id: 'exp-acc-2',
-    code: 'EXP-ACC-002',
-    category: 'Banking & Audit Charges',
-    type: 'internal',
-    amountMinor: 165000, // GHS 1,650.00
-    incurredOn: dayjs().subtract(6, 'day').format('YYYY-MM-DD'),
-    branchId: 'branch-ho',
-    branchName: 'Head Office',
-    description: 'Mid-year financial auditor documentation filing and secure escrow bank charges',
-    status: 'approved',
-    recordedByUserId: 'usr-acc-1',
-    recordedByUserName: 'Kwame Mensah',
-    recordedByUserRole: 'accounts',
-    createdAt: dayjs().subtract(6, 'day').toISOString(),
-    updatedAt: dayjs().subtract(6, 'day').toISOString(),
-  },
-];
-
 export function getStoredExpenses(): ExpenseEntity[] {
   try {
     const raw = localStorage.getItem(EXPENSES_STORAGE_KEY);
     if (!raw) {
-      localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(DEFAULT_SEEDED_EXPENSES));
-      return DEFAULT_SEEDED_EXPENSES;
+      return [];
     }
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      // Ensure each item has a recordedByUserRole attributed
-      const resolved = parsed.map((item: any) => {
-        if (item.recordedByUserRole) return item;
-        const name = (item.recordedByUserName || '').toLowerCase();
-        const desc = (item.description || '').toLowerCase();
-        const cat = (item.category || '').toLowerCase();
-        let role = 'branch_manager';
-        if (name.includes('director') || cat.includes('marketing') || desc.includes('billboard') || desc.includes('ad run') || desc.includes('expo') || desc.includes('brochure')) {
-          role = 'marketing_director';
-        } else if (name.includes('secretary') || name.includes('serwaa') || name.includes('darko') || cat.includes('office supplies') || cat.includes('hospitality') || desc.includes('stationery') || desc.includes('refreshment') || desc.includes('courier')) {
-          role = 'secretary';
-        } else if (name.includes('accounts') || cat.includes('legal') || cat.includes('lands commission') || desc.includes('title search')) {
-          role = 'accounts';
-        } else if (name.includes('admin')) {
-          role = 'admin';
+    if (Array.isArray(parsed)) {
+      // Purge any legacy mock seed data (IDs starting with exp-sec-, exp-mkt-, exp-bm-, exp-acc-, appr-seed-)
+      const clean = parsed.filter((item: any) => {
+        if (!item || !item.id) return false;
+        const id = String(item.id);
+        if (
+          id.startsWith('exp-sec-') ||
+          id.startsWith('exp-mkt-') ||
+          id.startsWith('exp-bm-') ||
+          id.startsWith('exp-acc-') ||
+          id.startsWith('appr-seed-')
+        ) {
+          return false;
         }
-        return { ...item, recordedByUserRole: role };
+        return true;
       });
-      return resolved;
+      if (clean.length !== parsed.length) {
+        localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(clean));
+      }
+      return clean;
     }
-    localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(DEFAULT_SEEDED_EXPENSES));
-    return DEFAULT_SEEDED_EXPENSES;
+    return [];
   } catch (err) {
-    console.warn('Failed to read stored expenses, returning defaults:', err);
-    return DEFAULT_SEEDED_EXPENSES;
+    console.warn('[Omark Expenses] Failed to read stored expenses:', err);
+    return [];
   }
 }
 
@@ -351,7 +102,7 @@ export function saveStoredExpense(expense: ExpenseEntity): void {
     localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(next));
     window.dispatchEvent(new Event('omark-expenses-changed'));
   } catch (err) {
-    console.warn('Failed to save expense locally:', err);
+    console.warn('[Omark Expenses] Failed to save expense locally:', err);
   }
 }
 
@@ -365,22 +116,43 @@ export function useExpensesQuery(params?: ExpensesListParams) {
   return useQuery({
     queryKey: expensesKeys.list(params),
     queryFn: async (): Promise<ListResult<ExpenseEntity>> => {
-      let serverExpenses: ExpenseEntity[] = [];
+      let serverExpenses: ExpenseEntity[] | null = null;
       try {
         const res = await apiClient.get<ApiResponse<ExpenseEntity[]>>('/expenses', { params });
+        const raw = res.data as any;
+        const data = unwrapData(res);
         const unwrapped = unwrapList(res);
-        if (unwrapped && unwrapped.items && unwrapped.items.length > 0) {
+
+        if (Array.isArray(unwrapped?.items)) {
           serverExpenses = unwrapped.items;
+        } else if (Array.isArray(data)) {
+          serverExpenses = data;
+        } else if (Array.isArray((data as any)?.items)) {
+          serverExpenses = (data as any).items;
+        } else if (Array.isArray(raw)) {
+          serverExpenses = raw;
+        } else if (Array.isArray(raw?.items)) {
+          serverExpenses = raw.items;
+        } else if (Array.isArray(raw?.data)) {
+          serverExpenses = raw.data;
         }
       } catch (err: any) {
-        // Backend optional fallback
+        console.warn('[Omark Expenses] Live backend /expenses fetch error:', err?.message || err);
       }
 
       const localExpenses = getStoredExpenses();
-      const map = new Map<string, ExpenseEntity>();
-      localExpenses.forEach((e) => map.set(e.id, e));
-      serverExpenses.forEach((e) => map.set(e.id, e));
-      let all = Array.from(map.values());
+      let all: ExpenseEntity[] = [];
+
+      if (serverExpenses !== null) {
+        // Backend returned live data
+        const serverIds = new Set(serverExpenses.map((e) => e.id));
+        // Keep any unsynced local-only items that are not yet on the server
+        const unsyncedLocal = localExpenses.filter((e) => !serverIds.has(e.id));
+        all = [...serverExpenses, ...unsyncedLocal];
+      } else {
+        // Backend offline or unreachable: fall back to local stored expenses
+        all = localExpenses;
+      }
 
       if (params?.type) {
         all = all.filter((e) => e.type === params.type);
@@ -399,10 +171,12 @@ export function useExpensesQuery(params?: ExpensesListParams) {
         items: all,
         total: all.length,
         page: params?.page ?? 1,
-        pageSize: params?.pageSize ?? all.length,
+        pageSize: params?.pageSize ?? (all.length || 20),
         totalPages: 1,
       };
     },
+    refetchInterval: 30000, // Poll live system every 30s
+    staleTime: 5000,
   });
 }
 
@@ -411,6 +185,7 @@ export function useCreateExpenseMutation() {
 
   return useMutation({
     mutationFn: async (payload: CreateExpensePayload) => {
+      const initialStatus = payload.status || 'pending';
       const newExpense: ExpenseEntity = {
         id: `exp-${Date.now()}`,
         code: `EXP-${Date.now().toString().slice(-4)}`,
@@ -423,20 +198,49 @@ export function useCreateExpenseMutation() {
         recordedByUserId: payload.recordedByUserId,
         recordedByUserName: payload.recordedByUserName,
         recordedByUserRole: payload.recordedByUserRole || 'branch_manager',
-        status: 'approved',
+        status: initialStatus,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
 
+      let saved: ExpenseEntity | null = null;
       try {
-        const res = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', payload);
-        const saved = unwrapData(res);
-        saveStoredExpense(saved || newExpense);
-        return saved || newExpense;
-      } catch (err) {
-        saveStoredExpense(newExpense);
-        return newExpense;
+        const res = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', {
+          ...payload,
+          status: initialStatus,
+        });
+        saved = unwrapData(res);
+      } catch (err: any) {
+        // If backend has strict DTO validation (400 Bad Request on unknown properties),
+        // retry with sanitized standard fields
+        if (err?.status === 400 || err?.response?.status === 400) {
+          try {
+            const cleanPayload: any = {
+              category: payload.category,
+              type: payload.type,
+              amountMinor: payload.amountMinor,
+              incurredOn: payload.incurredOn,
+            };
+            if (payload.branchId) cleanPayload.branchId = payload.branchId;
+            if (payload.description) cleanPayload.description = payload.description;
+            const retryRes = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', cleanPayload);
+            saved = unwrapData(retryRes);
+          } catch (retryErr) {
+            console.warn('[Omark Expenses] Clean payload retry failed:', retryErr);
+          }
+        }
       }
+
+      const finalExpense: ExpenseEntity = {
+        ...newExpense,
+        ...(saved || {}),
+        recordedByUserId: saved?.recordedByUserId || payload.recordedByUserId,
+        recordedByUserName: saved?.recordedByUserName || payload.recordedByUserName,
+        recordedByUserRole: saved?.recordedByUserRole || payload.recordedByUserRole,
+      };
+
+      saveStoredExpense(finalExpense);
+      return finalExpense;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: expensesKeys.all });
@@ -471,9 +275,12 @@ export function useExpenseDecisionMutation() {
 
   return useMutation({
     mutationFn: async ({ id, payload }: { id: string; payload: ExpenseDecisionPayload }) => {
+      let serverRes: any = null;
       try {
         const res = await apiClient.post<ApiResponse<ExpenseEntity>>(`/expenses/${id}/decision`, payload);
-        return unwrapData(res);
+        serverRes = unwrapData(res);
+      } catch (err) {
+        console.warn(`[Omark Expenses] Backend /expenses/${id}/decision error; applying locally:`, err);
       } finally {
         const list = getStoredExpenses();
         const item = list.find((e) => e.id === id);
@@ -484,6 +291,7 @@ export function useExpenseDecisionMutation() {
           saveStoredExpense(item);
         }
       }
+      return serverRes;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: expensesKeys.all });

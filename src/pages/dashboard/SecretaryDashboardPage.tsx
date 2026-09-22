@@ -68,9 +68,16 @@ import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation
 import { useProspectsQuery } from '@/api/prospects';
 import { usePaymentPlansQuery, getProgressBand } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
+import { useCreateExpenseMutation } from '@/api/expenses';
 import { usePropertiesQuery } from '@/api/properties';
 import { useBranchesQuery } from '@/api/branches';
-import { buildPaymentPlanSchedule, getPlanPaymentOverrides, usePaymentPlanScheduleListener } from '@/utils/paymentPlanSchedule';
+import {
+  buildPaymentPlanSchedule,
+  getPlanPaymentOverrides,
+  recordLocalInstallmentPayment,
+  usePaymentPlanScheduleListener,
+} from '@/utils/paymentPlanSchedule';
+import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 import type { PaymentPlan, PaymentPlanStatus } from '@/types';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import {
@@ -204,11 +211,16 @@ export const SecretaryDashboardPage: React.FC = () => {
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
   const [addPaymentModal, setAddPaymentModal] = useState(false);
+  const [addExpenseModal, setAddExpenseModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [form] = Form.useForm();
   const [paymentForm] = Form.useForm();
+  const [expenseForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [expenseLoading, setExpenseLoading] = useState(false);
   const [pipelineMetric, setPipelineMetric] = useState<'amount' | 'count'>('amount');
+
+  const createExpenseMutation = useCreateExpenseMutation();
 
   usePaymentPlanScheduleListener();
 
@@ -428,8 +440,12 @@ export const SecretaryDashboardPage: React.FC = () => {
     });
   }, [branchFilteredDueSoon, defaulters, paymentPlans, customerMap]);
 
+  const selectedCustId = selectedCustomer?.customerId || selectedCustomer?.id;
   const selectedPlan = paymentPlans.find(
-    (p: any) => p.customerId === selectedCustomer?.customerId || p.id === selectedCustomer?.planId
+    (p: any) =>
+      (selectedCustId && p.customerId === selectedCustId) ||
+      (selectedCustomer?.planId && p.id === selectedCustomer.planId) ||
+      (selectedCustomer?.id && p.id === selectedCustomer.id)
   );
   const recordPayment = useRecordPaymentMutation(selectedPlan?.id ?? '');
 
@@ -869,22 +885,81 @@ export const SecretaryDashboardPage: React.FC = () => {
 
     try {
       setLoading(true);
-      await recordPayment.mutateAsync({
-        amountMinor: Math.round(values.amount * 100),
-        paidOn: values.paymentDate.format('YYYY-MM-DD'),
-        method: values.method,
-        reference: values.reference || undefined,
+      const amountMinor = Math.round(values.amount * 100);
+      const paidOn = values.paymentDate.format('YYYY-MM-DD');
+      const method = values.method;
+      const reference = values.reference || `REC-SEC-${Date.now().toString().slice(-4)}`;
+
+      // 1. Record locally so UI updates reactively and persists across schedule components
+      recordLocalInstallmentPayment(selectedPlan.id, 1, amountMinor, method, reference, paidOn);
+
+      // 2. Persist to real backend if valid backend plan ID exists
+      if (selectedPlan.id && !selectedPlan.id.startsWith('plan-')) {
+        try {
+          await recordPayment.mutateAsync({
+            amountMinor,
+            paidOn,
+            method,
+            reference,
+          });
+        } catch (apiErr) {
+          console.warn('[SecretaryDashboard] Backend payment record fallback:', apiErr);
+        }
+      }
+
+      // 3. Dispatch automated SMS receipt to customer
+      const cust = customerMap[selectedPlan.customerId] || selectedCustomer;
+      const phone = cust?.phone || cust?.phoneNumber || selectedCustomer?.phone;
+      const name = cust?.name || `${cust?.firstName || ''} ${cust?.lastName || ''}`.trim() || selectedCustomer?.name || 'Customer';
+      const remainingBalance = Math.max(0, (selectedPlan.balanceMinor || 0) - amountMinor);
+      const prop = propertyMap[selectedPlan.propertyId];
+
+      dispatchPaymentReceiptSMS({
+        customerPhone: phone,
+        customerName: name,
+        amountMinor,
+        remainingBalanceMinor: remainingBalance,
+        propertyName: prop ? prop.houseNumber || prop.title : undefined,
+        reference,
+        method,
+        recordedBy: user?.firstName ? `${user.firstName} ${user.lastName} (Secretary)` : 'Secretary',
       });
 
       message.success('Payment recorded successfully!');
       setAddPaymentModal(false);
       paymentForm.resetFields();
+      setSelectedCustomer(null);
       refetchPaymentPlans();
       refetchDashboard();
     } catch (error: any) {
       message.error(error?.error?.message || error?.message || 'Failed to record payment');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleInitiateExpense = async (values: any) => {
+    try {
+      setExpenseLoading(true);
+      const amountMinor = Math.round(values.amountGHS * 100);
+      await createExpenseMutation.mutateAsync({
+        category: values.category,
+        type: values.type || 'internal',
+        amountMinor,
+        incurredOn: values.incurredOn.format('YYYY-MM-DD'),
+        description: values.description,
+        branchId: user?.branchId,
+        recordedByUserId: user?.id,
+        recordedByUserName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Secretary',
+        recordedByUserRole: 'secretary',
+      });
+      message.success('Expense submitted successfully for Admin & Accounts approval!');
+      setAddExpenseModal(false);
+      expenseForm.resetFields();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to initiate expense');
+    } finally {
+      setExpenseLoading(false);
     }
   };
 
@@ -944,6 +1019,12 @@ export const SecretaryDashboardPage: React.FC = () => {
             style={{ background: '#52c41a', borderColor: '#52c41a' }}
           >
             Add Customer
+          </Button>
+          <Button
+            icon={<DollarOutlined />}
+            onClick={() => setAddExpenseModal(true)}
+          >
+            Record Expense
           </Button>
           <Button 
             icon={<IdcardOutlined />} 
@@ -1791,6 +1872,106 @@ export const SecretaryDashboardPage: React.FC = () => {
           handleRefresh();
         }}
       />
+
+      {/* ── Record Operational Expense Modal ── */}
+      <Modal
+        title={
+          <Space>
+            <DollarOutlined style={{ color: tokens.primary }} />
+            <span>Initiate Operational Expense (Secretary)</span>
+          </Space>
+        }
+        open={addExpenseModal}
+        onCancel={() => {
+          setAddExpenseModal(false);
+          expenseForm.resetFields();
+        }}
+        footer={null}
+        width={540}
+      >
+        <Form form={expenseForm} layout="vertical" onFinish={handleInitiateExpense}>
+          <Alert
+            type="info"
+            showIcon
+            message="Pending Approval Workflow"
+            description="All operational expenses initiated by the Secretary Dashboard will be placed in 'pending' status for review and authorization by Admin and Accounts dashboards."
+            style={{ marginBottom: 16 }}
+          />
+
+          <Row gutter={12}>
+            <Col span={14}>
+              <Form.Item
+                name="category"
+                label="Expense Category"
+                rules={[{ required: true, message: 'Please pick category' }]}
+                initialValue="Office Supplies"
+              >
+                <Select placeholder="Select category">
+                  <Option value="Office Supplies">Office Supplies & Stationery</Option>
+                  <Option value="Client Hospitality">Client Hospitality & Refreshments</Option>
+                  <Option value="Courier & Dispatch">Courier & Dispatch Services</Option>
+                  <Option value="Utilities & Internet">Utilities & Internet</Option>
+                  <Option value="Fuel & Transport">Fuel & Transport</Option>
+                  <Option value="Maintenance & Repairs">Maintenance & Repairs</Option>
+                  <Option value="Other">Other Operational Cost</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={10}>
+              <Form.Item name="type" label="Expense Type" initialValue="internal" rules={[{ required: true }]}>
+                <Select>
+                  <Option value="internal">🏢 Internal Operations</Option>
+                  <Option value="external">🚚 External / Project</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="amountGHS"
+                label="Amount (GH₵)"
+                rules={[{ required: true, message: 'Enter amount' }]}
+              >
+                <InputNumber style={{ width: '100%' }} min={0.01} precision={2} prefix="GH₵" placeholder="0.00" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="incurredOn"
+                label="Incurred Date"
+                initialValue={dayjs()}
+                rules={[{ required: true }]}
+              >
+                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="description"
+            label="Detailed Purpose / Notes"
+            rules={[{ required: true, message: 'Explain what this expense is for' }]}
+          >
+            <Input.TextArea rows={3} placeholder="Provide details on the purchase, receipt number, vendor, or purpose..." />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => {
+                setAddExpenseModal(false);
+                expenseForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+              <Button type="primary" htmlType="submit" loading={expenseLoading}>
+                Submit Expense for Approval
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

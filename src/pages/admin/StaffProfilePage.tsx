@@ -87,6 +87,8 @@ export const StaffProfilePage: React.FC = () => {
   const { user: currentUser, hasRole } = useAuth();
   const isAdmin = hasRole(['admin']);
   const isManager = hasRole(['admin', 'branch_manager']);
+  const isSelf = currentUser?.id === id;
+  const canEditProfile = isAdmin || isManager || isSelf;
 
   // Queries
   const { data: usersData, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
@@ -127,22 +129,26 @@ export const StaffProfilePage: React.FC = () => {
   const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 500 });
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 500 });
 
-  // Merge and deduplicate prospects assigned to or added by this staff member
+  // Merge and deduplicate prospects assigned to or added by this staff member (strictly verified)
   const staffProspects = useMemo(() => {
     const direct = prospectsData?.items ?? [];
     const list = allProspectsData?.items ?? [];
-    const combined = [...direct];
-    list.forEach((p) => {
+    const combined = [...direct, ...list];
+    const seen = new Set<string>();
+    const result: typeof direct = [];
+    combined.forEach((p) => {
+      if (!p || !p.id || seen.has(p.id)) return;
       const isStaffProspect =
         p.assignedUserId === id ||
         (p as any).assignedStaffId === id ||
         p.createdByUserId === id ||
         (p as any).creatorId === id;
-      if (isStaffProspect && !combined.some((c) => c.id === p.id)) {
-        combined.push(p);
+      if (isStaffProspect) {
+        seen.add(p.id);
+        result.push(p);
       }
     });
-    return combined;
+    return result;
   }, [allProspectsData, prospectsData, id]);
 
   const staffAppointments = useMemo(() => {
@@ -167,6 +173,9 @@ export const StaffProfilePage: React.FC = () => {
   // ── UI States ─────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState('overview');
   const [editProfileModal, setEditProfileModal] = useState(false);
+  const [passwordModal, setPasswordModal] = useState(false);
+  const [passwordLoading, setPasswordLoading] = useState(false);
+  const [passwordForm] = Form.useForm();
   const [assignModal, setAssignModal] = useState(false);
   const [addBonusModal, setAddBonusModal] = useState(false);
   const [addPayrollModal, setAddPayrollModal] = useState(false);
@@ -365,16 +374,44 @@ export const StaffProfilePage: React.FC = () => {
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEditProfile = async (values: any) => {
+    if (!staffMember) return;
     try {
+      const payload: any = {
+        firstName: values.firstName?.trim(),
+        lastName: values.lastName?.trim(),
+        email: values.email?.trim(),
+        phoneNumber: values.phoneNumber?.trim(),
+      };
+      if (isAdmin && values.role) {
+        payload.role = values.role;
+      }
       await updateUserMutation.mutateAsync({
         id: staffMember.id,
-        payload: values,
+        payload,
       });
       message.success('Staff profile updated successfully');
       setEditProfileModal(false);
       refetchUsers();
     } catch (err: any) {
       message.error(err?.error?.message || err?.message || 'Failed to update profile');
+    }
+  };
+
+  const handlePasswordReset = async (values: any) => {
+    if (!staffMember?.id) return;
+    setPasswordLoading(true);
+    try {
+      await updateUserMutation.mutateAsync({
+        id: staffMember.id,
+        payload: { password: values.newPassword },
+      });
+      message.success('Password updated successfully!');
+      setPasswordModal(false);
+      passwordForm.resetFields();
+    } catch (error: any) {
+      message.error(error?.message || 'Failed to update password');
+    } finally {
+      setPasswordLoading(false);
     }
   };
 
@@ -610,39 +647,55 @@ export const StaffProfilePage: React.FC = () => {
                 },
               ]
             : []),
-          {
-            label: 'Edit Profile',
-            onClick: () => {
-              form.setFieldsValue({
-                firstName: staffMember.firstName,
-                lastName: staffMember.lastName,
-                email: staffMember.email,
-                phoneNumber: phone,
-                role: staffMember.role,
-              });
-              setEditProfileModal(true);
-            },
-            icon: <EditOutlined />,
-          },
-          {
-            label: 'Assign Branch/Dept',
-            onClick: () => {
-              assignForm.setFieldsValue({
-                branchId: effectiveBranchId,
-                departmentId: effectiveDeptId,
-              });
-              setAssignModal(true);
-            },
-            icon: <EnvironmentOutlined />,
-          },
-          {
-            label: 'Award Bonus',
-            onClick: () => {
-              bonusForm.resetFields();
-              setAddBonusModal(true);
-            },
-            icon: <TrophyOutlined />,
-          },
+          ...(canEditProfile
+            ? [
+                {
+                  label: 'Edit Profile',
+                  onClick: () => {
+                    form.setFieldsValue({
+                      firstName: staffMember.firstName,
+                      lastName: staffMember.lastName,
+                      email: staffMember.email,
+                      phoneNumber: phone,
+                      role: staffMember.role,
+                    });
+                    setEditProfileModal(true);
+                  },
+                  icon: <EditOutlined />,
+                },
+                {
+                  label: 'Change Password',
+                  onClick: () => {
+                    passwordForm.resetFields();
+                    setPasswordModal(true);
+                  },
+                  icon: <LockOutlined />,
+                },
+              ]
+            : []),
+          ...(isManager
+            ? [
+                {
+                  label: 'Assign Branch/Dept',
+                  onClick: () => {
+                    assignForm.setFieldsValue({
+                      branchId: effectiveBranchId,
+                      departmentId: effectiveDeptId,
+                    });
+                    setAssignModal(true);
+                  },
+                  icon: <EnvironmentOutlined />,
+                },
+                {
+                  label: 'Award Bonus',
+                  onClick: () => {
+                    bonusForm.resetFields();
+                    setAddBonusModal(true);
+                  },
+                  icon: <TrophyOutlined />,
+                },
+              ]
+            : []),
         ]}
       />
 
@@ -1443,7 +1496,7 @@ export const StaffProfilePage: React.FC = () => {
             <Input />
           </Form.Item>
           <Form.Item name="role" label="Role" rules={[{ required: true }]}>
-            <Select>
+            <Select disabled={!isAdmin}>
               <Option value="admin">Administrator</Option>
               <Option value="branch_manager">Branch Manager</Option>
               <Option value="marketing_staff">Marketing Staff</Option>
@@ -1457,6 +1510,69 @@ export const StaffProfilePage: React.FC = () => {
             <Space>
               <Button onClick={() => setEditProfileModal(false)}>Cancel</Button>
               <Button type="primary" htmlType="submit" loading={updateUserMutation.isPending}>Save Changes</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ── CHANGE PASSWORD MODAL ─────────────────────────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <LockOutlined style={{ color: tokens.primary }} />
+            <span>Update Account Password</span>
+          </Space>
+        }
+        open={passwordModal}
+        onCancel={() => {
+          setPasswordModal(false);
+          passwordForm.resetFields();
+        }}
+        footer={null}
+        width={480}
+      >
+        <Form form={passwordForm} layout="vertical" onFinish={handlePasswordReset}>
+          <Alert
+            type="info"
+            showIcon
+            message="Secure Password Update"
+            description="Passwords are encrypted. Ensure password is at least 8 characters."
+            style={{ marginBottom: 16 }}
+          />
+          <Form.Item
+            name="newPassword"
+            label="New Password"
+            rules={[
+              { required: true, message: 'Please enter a new password' },
+              { min: 8, message: 'Password must be at least 8 characters' },
+            ]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="Enter new secure password" />
+          </Form.Item>
+          <Form.Item
+            name="confirmPassword"
+            label="Confirm New Password"
+            dependencies={['newPassword']}
+            rules={[
+              { required: true, message: 'Please confirm password' },
+              ({ getFieldValue }) => ({
+                validator(_, value) {
+                  if (!value || getFieldValue('newPassword') === value) {
+                    return Promise.resolve();
+                  }
+                  return Promise.reject(new Error('The two passwords do not match!'));
+                },
+              }),
+            ]}
+          >
+            <Input.Password prefix={<LockOutlined />} placeholder="Confirm new password" />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => setPasswordModal(false)}>Cancel</Button>
+              <Button type="primary" htmlType="submit" loading={passwordLoading}>
+                Update Password
+              </Button>
             </Space>
           </Form.Item>
         </Form>

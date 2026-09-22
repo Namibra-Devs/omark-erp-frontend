@@ -14,6 +14,7 @@ import {
 } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
+import { usePaymentPlansQuery } from '@/api/paymentPlans';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { usePropertiesQuery } from '@/api/properties';
 import { useDeedsQuery } from '@/api/deeds';
@@ -220,6 +221,8 @@ export const useAdminDashboard = () => {
     pageSize: 10,
   });
 
+  const { data: paymentPlansData, isLoading: paymentPlansLoading } = usePaymentPlansQuery({ pageSize: 100 });
+
   // ── Additional live sources for the Recent Activity feed ────────────────
   // There is no activity-log endpoint in this API — these are the real,
   // most-recent rows from each entity type, merged below into one timeline.
@@ -236,6 +239,7 @@ export const useAdminDashboard = () => {
       if (document.hidden) return;
       queryClient.invalidateQueries({ queryKey: ['prospects'], refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ['customers'], refetchType: 'active' });
+      queryClient.invalidateQueries({ queryKey: ['payment-plans'], refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ['appointments'], refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ['properties'], refetchType: 'active' });
       queryClient.invalidateQueries({ queryKey: ['deeds'], refetchType: 'active' });
@@ -267,8 +271,14 @@ export const useAdminDashboard = () => {
   const markActivitySeen = () => setLastSeenActivityAt(new Date().toISOString().replace('T', ' ').slice(0, 19));
 
   const loading =
-    statsLoading || usersLoading || prospectsLoading || customersLoading ||
-    appointmentsLoading || propertiesLoading || deedsLoading ||
+    statsLoading ||
+    usersLoading ||
+    prospectsLoading ||
+    customersLoading ||
+    appointmentsLoading ||
+    propertiesLoading ||
+    deedsLoading ||
+    paymentPlansLoading ||
     createUserMutation.isPending || updateUserMutation.isPending || deleteUserMutation.isPending;
 
   // ── Map live users list to local User shape ────────────────────────────
@@ -276,11 +286,25 @@ export const useAdminDashboard = () => {
   // shape (see src/api/users.ts), so no format-sniffing is needed here.
   const users: User[] = (apiUsers?.items ?? []).map((u) => mapApiUserToLocalUser(u, createdPasswords));
 
-  // ── Extract prospects and customers counts from API ────────────────────
-  // useProspectsQuery/useCustomersQuery also resolve to flat { items, total, ... }
-  // shapes now, so these no longer need defensive fallback-chasing.
-  const totalProspects = apiStats?.totalProspects ?? prospectsData?.total ?? 0;
-  const totalCustomers = apiStats?.totalCustomers ?? customersData?.total ?? 0;
+  // ── Extract prospects, customers and payment plans counts from API ──────
+  const liveProspectsCount = Math.max(prospectsData?.total ?? 0, prospectsData?.items?.length ?? 0);
+  const liveCustomersCount = Math.max(customersData?.total ?? 0, customersData?.items?.length ?? 0);
+  const totalProspects = liveProspectsCount > 0 ? liveProspectsCount : (apiStats?.totalProspects ?? 0);
+  const totalCustomers = liveCustomersCount > 0 ? liveCustomersCount : (apiStats?.totalCustomers ?? 0);
+
+  const rawPaymentPlans = paymentPlansData?.items ?? [];
+  const calculatedTotalPlans = paymentPlansData?.total ?? rawPaymentPlans.length;
+  const calculatedActivePlans = rawPaymentPlans.filter((p: any) => p.status === 'active' || (p.balanceMinor && p.balanceMinor > 0)).length;
+  const calculatedPlanRevenue = rawPaymentPlans.reduce(
+    (sum: number, p: any) => sum + (p.monthlyAmountMinor || p.monthlyInstallmentMinor || 0),
+    0
+  );
+
+  const totalPaymentPlans = Math.max(apiStats?.totalPaymentPlans ?? 0, calculatedTotalPlans);
+  const activePaymentPlans = Math.max(apiStats?.activePaymentPlans ?? 0, calculatedActivePlans);
+  const monthlyRevenue = (apiStats?.monthlyRevenue && apiStats.monthlyRevenue > 0)
+    ? apiStats.monthlyRevenue
+    : calculatedPlanRevenue;
 
   // ── Map API stats to SystemStats shape ────────────────────────────────
   const stats: SystemStats = {
@@ -288,8 +312,8 @@ export const useAdminDashboard = () => {
     activeUsers: apiStats?.activeUsers ?? users.filter(u => u.status === 'active').length,
     totalProspects: totalProspects,
     totalCustomers: totalCustomers,
-    totalPaymentPlans: apiStats?.totalPaymentPlans ?? 0,
-    activePaymentPlans: apiStats?.activePaymentPlans ?? 0,
+    totalPaymentPlans: totalPaymentPlans,
+    activePaymentPlans: activePaymentPlans,
     totalDeeds: apiStats?.totalDeeds ?? 0,
     totalNotifications: apiStats?.totalNotifications ?? 0,
     pendingNotifications: apiStats?.pendingNotifications ?? 0,
@@ -760,6 +784,7 @@ export const useAdminDashboard = () => {
     queryClient.invalidateQueries({ queryKey: ['appointments'] });
     queryClient.invalidateQueries({ queryKey: ['properties'] });
     queryClient.invalidateQueries({ queryKey: ['deeds'] });
+    queryClient.invalidateQueries({ queryKey: ['payment-plans'] });
     refetchUsers();
     setLocalActivityLogs(prev => [
       makeLog('Dashboard Refreshed', 'Manual dashboard refresh', 'info'),

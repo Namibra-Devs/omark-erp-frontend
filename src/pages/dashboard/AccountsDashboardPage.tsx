@@ -1,8 +1,8 @@
-// src/pages/dashboard/AccountsDashboardPage.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Progress, Empty, Spin, Alert,
   Button, Space, Modal, Form, InputNumber, DatePicker, Select, Input, message, Badge, List, Divider,
+  Popconfirm,
 } from 'antd';
 import {
   DollarOutlined,
@@ -24,7 +24,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery, useAnalyticsDashboardQuery } from '@/api/dashboard';
 import { usePaymentPlansQuery } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
-import { useExpensesQuery, useCreateExpenseMutation } from '@/api/expenses';
+import { useExpensesQuery, useCreateExpenseMutation, useExpenseDecisionMutation } from '@/api/expenses';
 import { usePayrollQuery } from '@/api/payroll';
 import { progressBandLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
@@ -61,9 +61,23 @@ export const AccountsDashboardPage: React.FC = () => {
 
   const { data: analyticsData, isLoading: analyticsLoading } = useAnalyticsDashboardQuery();
   const { data: expensesData, refetch: refetchExpenses } = useExpensesQuery();
+
+  // Real-time synchronization for live expenses
+  useEffect(() => {
+    const handleSync = () => {
+      refetchExpenses();
+    };
+    window.addEventListener('omark-expenses-changed', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('omark-expenses-changed', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, [refetchExpenses]);
   const { data: payrollData } = usePayrollQuery();
   const payroll = payrollData?.items ?? [];
   const createExpenseMutation = useCreateExpenseMutation();
+  const decisionMutation = useExpenseDecisionMutation();
 
   // ── Bank Reconciliation API ────────────────────────────────────────────────
   const { data: unmatchedBankEntries = [], refetch: refetchUnmatchedBank } = useUnmatchedBankEntriesQuery();
@@ -88,11 +102,25 @@ export const AccountsDashboardPage: React.FC = () => {
 
   const expenses = filterEntitiesByBranch(rawExpenses, user, branches);
   const paymentPlans = filterEntitiesByBranch(rawPaymentPlans, user, branches);
+  const pendingExpenses = expenses.filter((e: any) => e.status === 'pending');
 
   const internalExpensesMinor = expenses.filter((e: any) => e.type === 'internal').reduce((sum: number, e: any) => sum + (e.amountMinor || 0), 0);
   const externalExpensesMinor = expenses.filter((e: any) => e.type === 'external').reduce((sum: number, e: any) => sum + (e.amountMinor || 0), 0);
   const totalBonusesMinor = (payroll as any[]).reduce((sum: number, p: any) => sum + (p.bonusMinor || 0), 0);
   const pendingPayrollCount = (payroll as any[]).filter((p: any) => p.status === 'pending').length;
+
+  const handleDecision = async (id: string, decision: 'approved' | 'rejected') => {
+    try {
+      await decisionMutation.mutateAsync({
+        id,
+        payload: { decision, note: `Decided by ${user?.firstName || 'Accounts'}` },
+      });
+      message.success(`Expense ${decision === 'approved' ? 'approved' : 'rejected'} successfully!`);
+      refetchExpenses();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to update expense status');
+    }
+  };
 
   const handleAddExpense = async (values: { branchId?: string; category: string; description?: string; amountGHS: number; type: 'internal' | 'external'; date: dayjs.Dayjs }) => {
     try {
@@ -107,8 +135,9 @@ export const AccountsDashboardPage: React.FC = () => {
         recordedByUserId: user?.id,
         recordedByUserName: userName,
         recordedByUserRole: user?.role || 'accounts',
+        status: 'approved',
       });
-      message.success('Expense recorded successfully');
+      message.success('Expense recorded and approved successfully');
       expenseForm.resetFields();
       setAddExpenseModal(false);
       refetchExpenses();
@@ -448,29 +477,73 @@ export const AccountsDashboardPage: React.FC = () => {
       <Row gutter={16} style={{ marginBottom: 24 }}>
         <Col xs={24} lg={8}>
           <Card
-            title={<span><ExperimentOutlined style={{ marginRight: 8 }} />Expenses</span>}
-            extra={<Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddExpenseModal(true)}>Record</Button>}
+            title={
+              <Space>
+                <ExperimentOutlined style={{ marginRight: 4, color: tokens.primary }} />
+                <span>Expenses Hub</span>
+                {pendingExpenses.length > 0 && (
+                  <Badge count={pendingExpenses.length} style={{ backgroundColor: '#faad14' }} title="Pending Approvals" />
+                )}
+              </Space>
+            }
+            extra={
+              <Space>
+                <Button size="small" onClick={() => navigate('/accounts/expenses')}>Hub</Button>
+                <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddExpenseModal(true)}>Record</Button>
+              </Space>
+            }
           >
-            <Row gutter={12} style={{ marginBottom: 12 }}>
-              <Col span={12}><Statistic title="Internal" value={internalExpensesMinor / 100} prefix="GHS" precision={2} valueStyle={{ fontSize: 16 }} /></Col>
-              <Col span={12}><Statistic title="External" value={externalExpensesMinor / 100} prefix="GHS" precision={2} valueStyle={{ fontSize: 16 }} /></Col>
+            <Row gutter={8} style={{ marginBottom: 12 }}>
+              <Col span={8}><Statistic title="Internal" value={internalExpensesMinor / 100} prefix="GH₵" precision={0} valueStyle={{ fontSize: 13 }} /></Col>
+              <Col span={8}><Statistic title="External" value={externalExpensesMinor / 100} prefix="GH₵" precision={0} valueStyle={{ fontSize: 13 }} /></Col>
+              <Col span={8}><Statistic title="Pending" value={pendingExpenses.length} valueStyle={{ fontSize: 13, color: pendingExpenses.length > 0 ? '#faad14' : '#52c41a', fontWeight: 700 }} /></Col>
             </Row>
             <List
               size="small"
-              dataSource={expenses.slice(0, 5)}
+              dataSource={pendingExpenses.length > 0 ? pendingExpenses.slice(0, 4) : expenses.slice(0, 4)}
               locale={{ emptyText: 'No expenses recorded yet.' }}
-              renderItem={(item) => (
-                <List.Item>
-                  <Space direction="vertical" size={0}>
-                    <Text style={{ fontSize: 13 }}>{item.category}</Text>
-                    <Text type="secondary" style={{ fontSize: 11 }}>
-                      {item.code || 'EXP'} · {item.incurredOn}
-                    </Text>
-                  </Space>
-                  <Space direction="vertical" size={0} style={{ textAlign: 'right' }}>
-                    <Text strong style={{ fontSize: 13 }}>GHS {(item.amountMinor / 100).toLocaleString()}</Text>
-                    <Tag color={item.type === 'internal' ? 'blue' : 'purple'} style={{ fontSize: 10 }}>{item.type}</Tag>
-                  </Space>
+              renderItem={(item: any) => (
+                <List.Item
+                  actions={
+                    item.status === 'pending'
+                      ? [
+                          <Popconfirm
+                            key="app"
+                            title="Approve expense?"
+                            onConfirm={() => handleDecision(item.id, 'approved')}
+                            okText="Approve"
+                            cancelText="Cancel"
+                          >
+                            <Button size="small" type="text" style={{ color: '#52c41a', padding: 0, fontWeight: 600 }}>✓ Approve</Button>
+                          </Popconfirm>,
+                          <Popconfirm
+                            key="rej"
+                            title="Reject expense?"
+                            onConfirm={() => handleDecision(item.id, 'rejected')}
+                            okText="Reject"
+                            cancelText="Cancel"
+                            okButtonProps={{ danger: true }}
+                          >
+                            <Button size="small" type="text" danger style={{ padding: 0 }}>✕</Button>
+                          </Popconfirm>,
+                        ]
+                      : [
+                          <Tag key="st" color={item.status === 'approved' ? 'green' : 'gold'} style={{ margin: 0, fontSize: 10 }}>
+                            {item.status === 'approved' ? 'Approved' : 'Pending'}
+                          </Tag>
+                        ]
+                  }
+                >
+                  <List.Item.Meta
+                    title={
+                      <Text strong style={{ fontSize: 12 }}>{item.category}</Text>
+                    }
+                    description={
+                      <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
+                        {item.recordedByUserName || 'Staff'} ({item.recordedByUserRole || 'internal'}) · GH₵ {(item.amountMinor / 100).toLocaleString()}
+                      </Text>
+                    }
+                  />
                 </List.Item>
               )}
             />

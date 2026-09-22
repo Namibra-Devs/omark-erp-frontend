@@ -361,7 +361,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/expenses" 
           element={
-            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager']}>
+            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager', 'secretary', 'marketing_director', 'marketing_staff']}>
               <ExpensesPage />
             </ProtectedRoute>
           } 
@@ -369,7 +369,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/accounts/expenses" 
           element={
-            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager']}>
+            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager', 'secretary', 'marketing_director', 'marketing_staff']}>
               <ExpensesPage />
             </ProtectedRoute>
           } 

@@ -4,7 +4,7 @@ import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Space, Button,
   Progress, Tabs, Tooltip,
   Empty, Alert, List, Descriptions, Drawer, Spin,
-  message, Modal, Form, Input, Select, DatePicker, Avatar, Badge, Divider,
+  message, Modal, Form, Input, Select, DatePicker, Avatar, Badge, Divider, InputNumber,
 } from 'antd';
 import {
   TeamOutlined,
@@ -45,6 +45,7 @@ import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
 import { useAppointmentsQuery, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
+import { useCreateExpenseMutation } from '@/api/expenses';
 import { saveStoredInteraction } from '@/utils/interactionStorage';
 import { usePropertiesQuery } from '@/api/properties';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -84,6 +85,10 @@ export const DirectorOverviewPage: React.FC = () => {
   const [bonusModalOpen, setBonusModalOpen] = useState(false);
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
+  const [addExpenseModal, setAddExpenseModal] = useState(false);
+  const [expenseLoading, setExpenseLoading] = useState(false);
+  const [expenseForm] = Form.useForm();
+  const createExpenseMutation = useCreateExpenseMutation();
 
   // Queries
   const { data, isLoading, isFetching, isError, error, refetch } = useMarketingDashboardQuery();
@@ -104,6 +109,32 @@ export const DirectorOverviewPage: React.FC = () => {
   const properties = propertiesData?.items ?? [];
 
   const createAppointmentMutation = useCreateAppointmentMutation();
+
+  const handleInitiateExpense = async (values: any) => {
+    try {
+      setExpenseLoading(true);
+      const amountMinor = Math.round(values.amountGHS * 100);
+      await createExpenseMutation.mutateAsync({
+        category: values.category,
+        type: values.type || 'external',
+        amountMinor,
+        incurredOn: values.incurredOn.format('YYYY-MM-DD'),
+        description: values.description,
+        branchId: user?.branchId,
+        recordedByUserId: user?.id,
+        recordedByUserName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Marketing Director',
+        recordedByUserRole: 'marketing_director',
+        status: 'pending',
+      });
+      message.success('Marketing expense submitted successfully for Admin & Accounts approval!');
+      setAddExpenseModal(false);
+      expenseForm.resetFields();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to initiate expense');
+    } finally {
+      setExpenseLoading(false);
+    }
+  };
 
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedMarketer, setSelectedMarketer] = useState<MarketerPerformance | null>(null);
@@ -226,8 +257,8 @@ export const DirectorOverviewPage: React.FC = () => {
         const staffCustomers = allCustomers.filter(
           (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || staffProspects.some((p) => p.id === c.prospectId)
         );
-        const totalProspects = Math.max(m.totalProspects ?? 0, staffProspects.length);
-        const converted = Math.max(m.converted ?? 0, staffCustomers.length);
+        const totalProspects = allProspects.length > 0 ? staffProspects.length : (m.totalProspects ?? 0);
+        const converted = allCustomers.length > 0 ? staffCustomers.length : (m.converted ?? 0);
 
         staffMap.set(id, {
           id,
@@ -239,12 +270,15 @@ export const DirectorOverviewPage: React.FC = () => {
           phone: m.phone,
           role: 'marketing_staff',
           totalProspects,
-          new: m.byStatus?.new ?? m.new ?? 0,
-          meetingScheduled: m.byStatus?.meeting_scheduled ?? m.meetingScheduled ?? 0,
-          meetingCompleted: m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0,
-          postponed: m.postponed ?? 0,
-          suspended: m.suspended ?? 0,
-          canceled: m.canceled ?? (m.byStatus?.canceled ?? (m.byStatus?.cancelled ?? 0)),
+          new: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'new').length : (m.byStatus?.new ?? m.new ?? 0),
+          meetingScheduled: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'meeting_scheduled').length : (m.byStatus?.meeting_scheduled ?? m.meetingScheduled ?? 0),
+          meetingCompleted: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'meeting_completed').length : (m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0),
+          postponed: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'postponed').length : (m.postponed ?? 0),
+          suspended: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'suspended').length : (m.suspended ?? 0),
+          canceled: allProspects.length > 0 ? staffProspects.filter((p) => {
+            const s = String(p.status || '').toLowerCase();
+            return s === 'canceled' || s === 'cancelled';
+          }).length : (m.canceled ?? (m.byStatus?.canceled ?? (m.byStatus?.cancelled ?? 0))),
           converted,
           conversionRate: m.conversionRate ?? (totalProspects > 0 ? (converted / totalProspects) * 100 : 0),
           satisfaction: m.satisfaction,
@@ -990,6 +1024,11 @@ export const DirectorOverviewPage: React.FC = () => {
             onClick: () => setAddCustomerModal(true),
             icon: <PlusOutlined />,
           },
+          {
+            label: 'Record Expense',
+            onClick: () => setAddExpenseModal(true),
+            icon: <DollarOutlined />,
+          },
           ...(hasRole(['admin', 'marketing_director'])
             ? [{
                 label: 'Bonus Rules',
@@ -1589,6 +1628,7 @@ export const DirectorOverviewPage: React.FC = () => {
 
       <AddProspectModal
         open={addProspectModal}
+        defaultSource="marketing"
         onClose={() => setAddProspectModal(false)}
         onSuccess={() => {
           handleRefresh();
@@ -1957,6 +1997,108 @@ export const DirectorOverviewPage: React.FC = () => {
                 style={{ background: '#722ed1', borderColor: '#722ed1' }}
               >
                 Schedule Appointment
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Record Marketing Expense Modal */}
+      <Modal
+        title={
+          <Space>
+            <DollarOutlined style={{ color: '#fa8c16' }} />
+            <span>Record Operational / Marketing Expense</span>
+          </Space>
+        }
+        open={addExpenseModal}
+        onCancel={() => {
+          setAddExpenseModal(false);
+          expenseForm.resetFields();
+        }}
+        footer={null}
+        destroyOnClose
+        width={540}
+      >
+        <Form form={expenseForm} layout="vertical" onFinish={handleInitiateExpense}>
+          <Alert
+            type="info"
+            showIcon
+            message="Pending Approval Workflow"
+            description="Expenses initiated by the Marketing Director will be placed in 'pending' status for review and authorization by Admin and Accounts dashboards."
+            style={{ marginBottom: 16 }}
+          />
+
+          <Row gutter={12}>
+            <Col span={14}>
+              <Form.Item
+                name="category"
+                label="Expense Category"
+                rules={[{ required: true, message: 'Please pick category' }]}
+                initialValue="Digital Ads & Media"
+              >
+                <Select placeholder="Select category">
+                  <Select.Option value="Digital Ads & Media">Digital Ads & Social Media Campaigns</Select.Option>
+                  <Select.Option value="Mega Billboard & Out-Of-Home">Mega Billboard & Outdoor Hoardings</Select.Option>
+                  <Select.Option value="Exhibitions & Events">Exhibitions, Expos & Event Sponsorships</Select.Option>
+                  <Select.Option value="Print & Collateral">Print, Brochures & Promotional Collateral</Select.Option>
+                  <Select.Option value="Site Tour Logistics">Site Tour Transport & Client Logistics</Select.Option>
+                  <Select.Option value="Influencer & PR">Influencer Marketing & Press Releases</Select.Option>
+                  <Select.Option value="Client Hospitality">VIP Client Hospitality & Refreshments</Select.Option>
+                  <Select.Option value="Other Marketing Cost">Other Marketing / Sales Cost</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={10}>
+              <Form.Item name="type" label="Expense Type" initialValue="external" rules={[{ required: true }]}>
+                <Select>
+                  <Select.Option value="external">🚚 External / Campaign</Select.Option>
+                  <Select.Option value="internal">🏢 Internal Operations</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="amountGHS"
+                label="Amount (GH₵)"
+                rules={[{ required: true, message: 'Enter amount' }]}
+              >
+                <InputNumber style={{ width: '100%' }} min={0.01} precision={2} prefix="GH₵" placeholder="0.00" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="incurredOn"
+                label="Incurred Date"
+                initialValue={dayjs()}
+                rules={[{ required: true }]}
+              >
+                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="description"
+            label="Detailed Purpose / Notes"
+            rules={[{ required: true, message: 'Explain what this expense is for' }]}
+          >
+            <Input.TextArea rows={3} placeholder="Campaign title, vendor/contractor name, invoice ref, or target development..." />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => {
+                setAddExpenseModal(false);
+                expenseForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+              <Button type="primary" htmlType="submit" loading={expenseLoading}>
+                Submit Expense for Approval
               </Button>
             </Space>
           </Form.Item>
