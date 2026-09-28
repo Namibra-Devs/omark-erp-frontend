@@ -13,7 +13,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
   children, 
   allowedRoles 
 }) => {
-  const { user, isLoading } = useAuth();
+  const { user, isLoading, hasRole } = useAuth();
 
   // Show loading state while checking auth
   if (isLoading) {
@@ -37,7 +37,7 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({
 
   // Check role-based access
   if (allowedRoles && allowedRoles.length > 0) {
-    if (!allowedRoles.includes(user.role)) {
+    if (!hasRole(allowedRoles)) {
       message.error('You do not have permission to access this page');
       return <Navigate to="/" replace />;
     }

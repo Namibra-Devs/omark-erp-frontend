@@ -112,47 +112,132 @@ export const expensesKeys = {
   list: (params?: ExpensesListParams) => [...expensesKeys.lists(), params ?? {}] as const,
 };
 
+export function normalizeExpenseEntity(raw: any): ExpenseEntity {
+  if (!raw) return raw;
+  const id = String(raw.id || raw._id || `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
+
+  // Handle amountMinor vs amount
+  let amountMinor = 0;
+  if (typeof raw.amountMinor === 'number' && !isNaN(raw.amountMinor)) {
+    amountMinor = raw.amountMinor;
+  } else if (raw.amountMinor != null && !isNaN(Number(raw.amountMinor))) {
+    amountMinor = Number(raw.amountMinor);
+  } else if (raw.amount != null && !isNaN(Number(raw.amount))) {
+    amountMinor = Math.round(Number(raw.amount) * 100);
+  } else if (raw.amountPesewas != null && !isNaN(Number(raw.amountPesewas))) {
+    amountMinor = Number(raw.amountPesewas);
+  }
+
+  // Handle incurredOn
+  const incurredOn =
+    raw.incurredOn ||
+    raw.incurredDate ||
+    raw.date ||
+    raw.createdAt ||
+    new Date().toISOString();
+
+  // Handle status casing
+  let status: 'pending' | 'approved' | 'rejected' = 'pending';
+  const rawStatus = String(raw.status || '').toLowerCase().trim();
+  if (rawStatus === 'approved' || rawStatus === 'authorized') {
+    status = 'approved';
+  } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
+    status = 'rejected';
+  } else {
+    status = 'pending';
+  }
+
+  // Handle code
+  const code = raw.code || raw.voucherNo || raw.reference || `EXP-${id.slice(-4).toUpperCase()}`;
+
+  const type: 'internal' | 'external' =
+    String(raw.type || '').toLowerCase() === 'external' ? 'external' : 'internal';
+
+  return {
+    id,
+    code,
+    category: raw.category || 'General Operations',
+    type,
+    amountMinor,
+    incurredOn: dayjs(incurredOn).isValid() ? dayjs(incurredOn).format('YYYY-MM-DD') : incurredOn,
+    branchId: raw.branchId || raw.branch || undefined,
+    branchName: raw.branchName || undefined,
+    description: raw.description || raw.notes || raw.title || undefined,
+    status,
+    recordedByUserId: raw.recordedByUserId || raw.userId || raw.createdById || undefined,
+    recordedByUserName: raw.recordedByUserName || raw.userName || raw.createdByName || undefined,
+    recordedByUserRole: raw.recordedByUserRole || raw.userRole || raw.role || undefined,
+    decisionNote: raw.decisionNote || raw.rejectionNote || undefined,
+    decidedAt: raw.decidedAt || undefined,
+    createdAt: raw.createdAt || new Date().toISOString(),
+    updatedAt: raw.updatedAt || new Date().toISOString(),
+  };
+}
+
 export function useExpensesQuery(params?: ExpensesListParams) {
   return useQuery({
     queryKey: expensesKeys.list(params),
     queryFn: async (): Promise<ListResult<ExpenseEntity>> => {
       let serverExpenses: ExpenseEntity[] | null = null;
       try {
-        const res = await apiClient.get<ApiResponse<ExpenseEntity[]>>('/expenses', { params });
-        const raw = res.data as any;
+        const queryParams = {
+          pageSize: 200,
+          ...params,
+        };
+        const res = await apiClient.get<ApiResponse<ExpenseEntity[]>>('/expenses', { params: queryParams });
+        const raw = res?.data as any;
         const data = unwrapData(res);
         const unwrapped = unwrapList(res);
 
-        if (Array.isArray(unwrapped?.items)) {
-          serverExpenses = unwrapped.items;
-        } else if (Array.isArray(data)) {
-          serverExpenses = data;
-        } else if (Array.isArray((data as any)?.items)) {
-          serverExpenses = (data as any).items;
+        let candidates: any[] = [];
+        if (Array.isArray(unwrapped?.items) && unwrapped.items.length > 0) {
+          candidates = unwrapped.items;
+        } else if (Array.isArray(data) && data.length > 0) {
+          candidates = data;
+        } else if (Array.isArray((data as any)?.items) && (data as any).items.length > 0) {
+          candidates = (data as any).items;
         } else if (Array.isArray(raw)) {
-          serverExpenses = raw;
-        } else if (Array.isArray(raw?.items)) {
-          serverExpenses = raw.items;
-        } else if (Array.isArray(raw?.data)) {
-          serverExpenses = raw.data;
+          candidates = raw;
+        } else if (Array.isArray(raw?.items) && raw.items.length > 0) {
+          candidates = raw.items;
+        } else if (Array.isArray(raw?.data) && raw.data.length > 0) {
+          candidates = raw.data;
+        } else if (Array.isArray(unwrapped?.items)) {
+          candidates = [];
+          serverExpenses = [];
+        }
+
+        if (candidates.length > 0) {
+          serverExpenses = candidates.map(normalizeExpenseEntity);
+        } else if (serverExpenses === null && (Array.isArray(raw) || Array.isArray(raw?.items))) {
+          serverExpenses = [];
         }
       } catch (err: any) {
         console.warn('[Omark Expenses] Live backend /expenses fetch error:', err?.message || err);
       }
 
-      const localExpenses = getStoredExpenses();
+      const localExpenses = getStoredExpenses().map(normalizeExpenseEntity);
       let all: ExpenseEntity[] = [];
 
       if (serverExpenses !== null) {
-        // Backend returned live data
+        if (serverExpenses.length > 0) {
+          try {
+            const existingList = getStoredExpenses();
+            const existingMap = new Map(existingList.map((e) => [e.id, e]));
+            serverExpenses.forEach((se) => existingMap.set(se.id, se));
+            localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(Array.from(existingMap.values())));
+          } catch {
+            // ignore silent sync
+          }
+        }
         const serverIds = new Set(serverExpenses.map((e) => e.id));
-        // Keep any unsynced local-only items that are not yet on the server
         const unsyncedLocal = localExpenses.filter((e) => !serverIds.has(e.id));
         all = [...serverExpenses, ...unsyncedLocal];
       } else {
-        // Backend offline or unreachable: fall back to local stored expenses
         all = localExpenses;
       }
+
+      all.sort((a, b) => dayjs(b.incurredOn || b.createdAt).valueOf() - dayjs(a.incurredOn || a.createdAt).valueOf());
 
       if (params?.type) {
         all = all.filter((e) => e.type === params.type);
@@ -175,7 +260,7 @@ export function useExpensesQuery(params?: ExpensesListParams) {
         totalPages: 1,
       };
     },
-    refetchInterval: 30000, // Poll live system every 30s
+    refetchInterval: 30000,
     staleTime: 5000,
   });
 }
@@ -203,31 +288,35 @@ export function useCreateExpenseMutation() {
         updatedAt: new Date().toISOString(),
       };
 
+      const cleanPayload: Record<string, any> = {
+        category: payload.category,
+        type: payload.type,
+        amountMinor: Math.round(Number(payload.amountMinor)),
+        incurredOn: payload.incurredOn,
+      };
+      if (payload.branchId) cleanPayload.branchId = payload.branchId;
+      if (payload.description) cleanPayload.description = payload.description;
+
       let saved: ExpenseEntity | null = null;
       try {
-        const res = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', {
-          ...payload,
-          status: initialStatus,
-        });
-        saved = unwrapData(res);
+        const res = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', cleanPayload);
+        const data = unwrapData(res) || (res?.data as any)?.data || res?.data;
+        if (data) {
+          saved = normalizeExpenseEntity(data);
+        }
       } catch (err: any) {
-        // If backend has strict DTO validation (400 Bad Request on unknown properties),
-        // retry with sanitized standard fields
-        if (err?.status === 400 || err?.response?.status === 400) {
-          try {
-            const cleanPayload: any = {
-              category: payload.category,
-              type: payload.type,
-              amountMinor: payload.amountMinor,
-              incurredOn: payload.incurredOn,
-            };
-            if (payload.branchId) cleanPayload.branchId = payload.branchId;
-            if (payload.description) cleanPayload.description = payload.description;
-            const retryRes = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', cleanPayload);
-            saved = unwrapData(retryRes);
-          } catch (retryErr) {
-            console.warn('[Omark Expenses] Clean payload retry failed:', retryErr);
+        // Fallback retry with full payload in case backend expects it
+        try {
+          const retryRes = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', {
+            ...payload,
+            status: initialStatus,
+          });
+          const retryData = unwrapData(retryRes) || (retryRes?.data as any)?.data || retryRes?.data;
+          if (retryData) {
+            saved = normalizeExpenseEntity(retryData);
           }
+        } catch (retryErr) {
+          console.warn('[Omark Expenses] Backend creation failed, saving to local store:', retryErr);
         }
       }
 
@@ -242,7 +331,31 @@ export function useCreateExpenseMutation() {
       saveStoredExpense(finalExpense);
       return finalExpense;
     },
-    onSuccess: () => {
+    onSuccess: (finalExpense) => {
+      // Immediately inject into cache so UI updates instantly
+      queryClient.setQueriesData<ListResult<ExpenseEntity>>(
+        { queryKey: expensesKeys.all },
+        (old) => {
+          if (!old) {
+            return {
+              items: [finalExpense],
+              total: 1,
+              page: 1,
+              pageSize: 20,
+              totalPages: 1,
+            };
+          }
+          const exists = old.items.some((e) => e.id === finalExpense.id);
+          const nextItems = exists
+            ? old.items.map((e) => (e.id === finalExpense.id ? finalExpense : e))
+            : [finalExpense, ...old.items];
+          return {
+            ...old,
+            items: nextItems,
+            total: nextItems.length,
+          };
+        }
+      );
       queryClient.invalidateQueries({ queryKey: expensesKeys.all });
       window.dispatchEvent(new Event('omark-expenses-changed'));
     },

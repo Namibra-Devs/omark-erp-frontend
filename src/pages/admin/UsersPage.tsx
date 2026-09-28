@@ -1,5 +1,5 @@
 // src/pages/admin/UsersPage.tsx
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
@@ -90,8 +90,9 @@ import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
 import type { User, Role } from '@/types';
 import apiClient, { unwrapData } from '@/api/client';
-import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone } from '@/api/users';
-import { useBranchesQuery, useDepartmentsQuery } from '@/api/branches';
+import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, toBackendRole, toE164Phone } from '@/api/users';
+import { useBranchesQuery, useDepartmentsQuery, DEFAULT_SYSTEM_BRANCHES, STANDARD_DEPARTMENTS } from '@/api/branches';
+import { useBranchContext } from '@/contexts/BranchContext';
 import {
   getStoredUserAssignment,
   setStoredUserAssignment,
@@ -148,12 +149,69 @@ export const UsersPage: React.FC = () => {
 
   // ── API hooks ────────────────────────────────────────────────────────────
   const { data: usersResponse, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
-  const { data: branches = [] } = useBranchesQuery();
-  const { data: departments = [] } = useDepartmentsQuery();
+  const { branches: contextBranches = [] } = useBranchContext();
+  const { data: apiBranches = [] } = useBranchesQuery();
+  const { data: apiDepartments = [] } = useDepartmentsQuery();
   const createUser = useCreateUserMutation();
   const updateUser = useUpdateUserMutation();
   const updateUserAssignment = useUpdateUserAssignmentMutation();
   const deleteUser = useDeleteUserMutation();
+
+  const allBranches = useMemo(() => {
+    if (contextBranches && contextBranches.length > 0) return contextBranches;
+    if (apiBranches && apiBranches.length > 0) return apiBranches;
+    return DEFAULT_SYSTEM_BRANCHES;
+  }, [contextBranches, apiBranches]);
+
+  const allDepartments = useMemo(() => {
+    if (apiDepartments && apiDepartments.length > 0) return apiDepartments;
+    return STANDARD_DEPARTMENTS;
+  }, [apiDepartments]);
+
+  const resolveBranchValue = (branchIdOrCode?: string): string | undefined => {
+    if (!branchIdOrCode) return undefined;
+    const match = allBranches.find(
+      (b: any) =>
+        b.id === branchIdOrCode ||
+        b.branchCode === branchIdOrCode ||
+        b.code === branchIdOrCode ||
+        b.name === branchIdOrCode ||
+        (b.branchCode && b.branchCode.toLowerCase() === String(branchIdOrCode).toLowerCase()) ||
+        (b.name && b.name.toLowerCase() === String(branchIdOrCode).toLowerCase()) ||
+        (getBranchCanonicalKey(b.id || b.name || b.branchCode) === getBranchCanonicalKey(branchIdOrCode))
+    );
+    return match?.id || branchIdOrCode;
+  };
+
+  const resolveDepartmentValue = (deptIdOrName?: string): string | undefined => {
+    if (!deptIdOrName) return undefined;
+    const match = allDepartments.find(
+      (d: any) =>
+        d.id === deptIdOrName ||
+        d.name === deptIdOrName ||
+        d.name.toLowerCase() === String(deptIdOrName).toLowerCase() ||
+        d.name.toLowerCase().includes(String(deptIdOrName).toLowerCase()) ||
+        String(deptIdOrName).toLowerCase().includes(d.name.toLowerCase())
+    );
+    return match?.id || deptIdOrName;
+  };
+
+  const branchOptions = useMemo(() => {
+    return allBranches.map((b: any) => {
+      const code = b.branchCode || b.code || '';
+      return {
+        value: b.id,
+        label: code ? `${b.name} (${code})` : b.name,
+      };
+    });
+  }, [allBranches]);
+
+  const departmentOptions = useMemo(() => {
+    return allDepartments.map((d: any) => ({
+      value: d.id,
+      label: d.name,
+    }));
+  }, [allDepartments]);
 
   // Extract users array safely. UserEntity.phoneNumber is optional (backend may
   // return phone in a different shape), but the local User type requires a
@@ -164,10 +222,12 @@ export const UsersPage: React.FC = () => {
         const stored = getStoredUserAssignment(u.id);
         const defaultDept = resolveDefaultDepartment(u.role);
         const branchId = stored?.branchId || (u as any).branchId || (u as any).branch || getStoredEntityBranch(u.id);
-        const branchName = stored?.branchName || (branchId ? getUserBranchName({ branchId }, branches) : undefined);
+        const branchName = stored?.branchName || (branchId ? getUserBranchName({ branchId }, allBranches) : undefined);
         const department = stored?.departmentName || stored?.department || u.department || defaultDept;
+        const effectiveRole = (stored?.role as Role) || u.role;
         return {
           ...u,
+          role: effectiveRole,
           phoneNumber: getUserPhone(u),
           branchId,
           branch: branchName || branchId,
@@ -229,40 +289,47 @@ export const UsersPage: React.FC = () => {
   // Add User
   const handleAddUser = async (values: any) => {
     try {
+      const sanitizedPhone = toE164Phone(values.phoneNumber) || values.phoneNumber;
+      const backendRole = toBackendRole(values.role);
+
       const newUserObj = await createUser.mutateAsync({
-        firstName: values.firstName,
-        lastName: values.lastName,
-        email: values.email,
-        phoneNumber: values.phoneNumber,
-        role: values.role,
+        firstName: values.firstName?.trim(),
+        lastName: values.lastName?.trim(),
+        email: values.email?.trim(),
+        phoneNumber: sanitizedPhone,
+        role: backendRole,
         password: values.password,
       });
 
-      if (newUserObj?.id && (values.branchId || values.departmentId)) {
-        const branchObj = branches.find((b: any) => b.id === values.branchId);
-        const deptObj = departments.find((d: any) => d.id === values.departmentId);
+      if (newUserObj?.id && (values.branchId || values.departmentId || values.role)) {
+        const branchObj = allBranches.find((b: any) => b.id === values.branchId || b.branchCode === values.branchId || b.name === values.branchId);
+        const deptObj = allDepartments.find((d: any) => d.id === values.departmentId || d.name === values.departmentId);
+        const branchName = branchObj?.name || (values.branchId ? getUserBranchName({ branchId: values.branchId }, allBranches) : undefined);
         const departmentName = deptObj?.name || values.departmentId;
 
+        const effectiveBranchId = branchObj?.id || values.branchId;
+        const effectiveDeptId = deptObj?.id || values.departmentId;
+
         setStoredUserAssignment(newUserObj.id, {
-          branchId: values.branchId,
-          branchName: branchObj?.name,
-          departmentId: values.departmentId,
+          branchId: effectiveBranchId,
+          branchName: branchName,
+          departmentId: effectiveDeptId,
           departmentName: departmentName,
           department: departmentName,
           role: values.role,
         });
-        if (values.branchId) {
-          recordEntityBranch('staff', newUserObj.id, values.branchId);
-          addStaffToBranchRoster(values.branchId, newUserObj.id, branchObj?.name);
+        if (effectiveBranchId) {
+          recordEntityBranch('staff', newUserObj.id, effectiveBranchId);
+          addStaffToBranchRoster(effectiveBranchId, newUserObj.id, branchName);
         }
 
         try {
           await updateUserAssignment.mutateAsync({
             userId: newUserObj.id,
             payload: {
-              branchId: values.branchId,
-              branchName: branchObj?.name,
-              departmentId: values.departmentId,
+              branchId: effectiveBranchId,
+              branchName: branchName,
+              departmentId: effectiveDeptId,
               departmentName: departmentName,
               department: departmentName,
             },
@@ -274,6 +341,7 @@ export const UsersPage: React.FC = () => {
 
       setAddModal(false);
       addForm.resetFields();
+      refetchUsers();
       message.success(`Staff member ${values.firstName} ${values.lastName} added and assigned successfully!`);
     } catch (err: any) {
       const errMsg = err?.error?.message ||
@@ -289,43 +357,50 @@ export const UsersPage: React.FC = () => {
   const handleEditUser = async (values: any) => {
     if (!selectedUser) return;
     try {
+      const sanitizedPhone = toE164Phone(values.phoneNumber) || values.phoneNumber;
+      const backendRole = toBackendRole(values.role);
+
       await updateUser.mutateAsync({
         id: selectedUser.id,
         payload: {
-          firstName: values.firstName,
-          lastName: values.lastName,
-          email: values.email,
-          phoneNumber: values.phoneNumber,
-          role: values.role,
+          firstName: values.firstName?.trim(),
+          lastName: values.lastName?.trim(),
+          email: values.email?.trim(),
+          phoneNumber: sanitizedPhone,
+          role: backendRole,
           isActive: values.isActive !== undefined ? values.isActive : selectedUser.isActive,
         },
       });
 
-      if (values.branchId || values.departmentId) {
-        const branchObj = branches.find((b: any) => b.id === values.branchId);
-        const deptObj = departments.find((d: any) => d.id === values.departmentId);
+      if (values.branchId || values.departmentId || values.role) {
+        const branchObj = allBranches.find((b: any) => b.id === values.branchId || b.branchCode === values.branchId || b.name === values.branchId);
+        const deptObj = allDepartments.find((d: any) => d.id === values.departmentId || d.name === values.departmentId);
+        const branchName = branchObj?.name || (values.branchId ? getUserBranchName({ branchId: values.branchId }, allBranches) : undefined);
         const departmentName = deptObj?.name || values.departmentId;
 
+        const effectiveBranchId = branchObj?.id || values.branchId;
+        const effectiveDeptId = deptObj?.id || values.departmentId;
+
         setStoredUserAssignment(selectedUser.id, {
-          branchId: values.branchId,
-          branchName: branchObj?.name,
-          departmentId: values.departmentId,
+          branchId: effectiveBranchId,
+          branchName: branchName,
+          departmentId: effectiveDeptId,
           departmentName: departmentName,
           department: departmentName,
           role: values.role,
         });
-        if (values.branchId) {
-          recordEntityBranch('staff', selectedUser.id, values.branchId);
-          addStaffToBranchRoster(values.branchId, selectedUser.id, branchObj?.name);
+        if (effectiveBranchId) {
+          recordEntityBranch('staff', selectedUser.id, effectiveBranchId);
+          addStaffToBranchRoster(effectiveBranchId, selectedUser.id, branchName);
         }
 
         try {
           await updateUserAssignment.mutateAsync({
             userId: selectedUser.id,
             payload: {
-              branchId: values.branchId,
-              branchName: branchObj?.name,
-              departmentId: values.departmentId,
+              branchId: effectiveBranchId,
+              branchName: branchName,
+              departmentId: effectiveDeptId,
               departmentName: departmentName,
               department: departmentName,
             },
@@ -338,6 +413,7 @@ export const UsersPage: React.FC = () => {
       setEditModal(false);
       setSelectedUser(null);
       form.resetFields();
+      refetchUsers();
       message.success('Staff member updated successfully!');
     } catch (err: any) {
       const errMsg = err?.error?.message ||
@@ -523,11 +599,11 @@ export const UsersPage: React.FC = () => {
       render: (_: any, record: User) => {
         const stored = getStoredUserAssignment(record.id);
         const branchId = stored?.branchId || record.branchId || (record as any).branch || getStoredEntityBranch(record.id);
-        const managedBranch = branches.find((b: any) => b.managerUserId === record.id);
-        const branch = branches.find(
+        const managedBranch = allBranches.find((b: any) => b.managerUserId === record.id);
+        const branch = allBranches.find(
           (b: any) => b.id === branchId || b.branchCode === branchId || b.name === branchId || (branchId && getBranchCanonicalKey(b.id) === getBranchCanonicalKey(branchId))
         ) || managedBranch;
-        const name = stored?.branchName || branch?.name || (branchId ? getUserBranchName({ branchId }, branches) : null) || (typeof branchId === 'string' && branchId.length > 0 ? branchId : null);
+        const name = stored?.branchName || branch?.name || (branchId ? getUserBranchName({ branchId }, allBranches) : null) || (typeof branchId === 'string' && branchId.length > 0 ? branchId : null);
         if (name) {
           return <Tag color={tokens.primary}>{name}</Tag>;
         }
@@ -545,7 +621,7 @@ export const UsersPage: React.FC = () => {
       render: (_: any, record: User) => {
         const stored = getStoredUserAssignment(record.id);
         const deptRaw = stored?.departmentName || stored?.department || record.department || stored?.departmentId;
-        const dept = departments.find((d: any) => d.id === deptRaw || d.name === deptRaw);
+        const dept = allDepartments.find((d: any) => d.id === deptRaw || d.name === deptRaw);
         const roleDefault = resolveDefaultDepartment(record.role);
         const name = stored?.departmentName || dept?.name || (typeof deptRaw === 'string' && deptRaw.trim().length > 0 ? deptRaw : null) || roleDefault;
         if (name && name !== 'Unassigned') {
@@ -612,29 +688,41 @@ export const UsersPage: React.FC = () => {
               size="small"
               onClick={async () => {
                 setSelectedUser(record);
+                form.resetFields();
                 setEditModal(true);
+
+                const fullName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim();
+                const nameParts = fullName.split(' ');
+                const fName = record.firstName || nameParts[0] || '';
+                const lName = record.lastName || nameParts.slice(1).join(' ') || '';
+                const phone = toE164Phone(record.phoneNumber) || record.phoneNumber;
+
+                const stored = getStoredUserAssignment(record.id);
+                const rawBranch = stored?.branchId || record.branchId || (record as any).branch || getStoredEntityBranch(record.id);
+                const defaultDept = resolveDefaultDepartment(record.role);
+                const rawDept = stored?.departmentId || stored?.departmentName || stored?.department || record.departmentId || record.department || defaultDept;
+
+                const initialBranchId = resolveBranchValue(rawBranch);
+                const initialDeptId = resolveDepartmentValue(rawDept);
+
                 form.setFieldsValue({
-                  firstName: record.firstName,
-                  lastName: record.lastName,
+                  firstName: fName,
+                  lastName: lName,
                   email: record.email,
-                  phoneNumber: record.phoneNumber,
+                  phoneNumber: phone,
                   role: record.role,
                   isActive: record.isActive,
+                  branchId: initialBranchId,
+                  departmentId: initialDeptId,
                 });
-                const stored = getStoredUserAssignment(record.id);
-                if (stored?.branchId || stored?.departmentId) {
-                  form.setFieldsValue({
-                    branchId: stored.branchId,
-                    departmentId: stored.departmentId,
-                  });
-                }
+
                 try {
                   const res = await apiClient.get(`/users/${record.id}/assignment`);
                   const assignmentData = unwrapData(res) as { branchId?: string; departmentId?: string } | undefined;
                   if (assignmentData && (assignmentData.branchId || assignmentData.departmentId)) {
                     form.setFieldsValue({
-                      branchId: assignmentData.branchId || stored?.branchId,
-                      departmentId: assignmentData.departmentId || stored?.departmentId,
+                      branchId: resolveBranchValue(assignmentData.branchId) || initialBranchId,
+                      departmentId: resolveDepartmentValue(assignmentData.departmentId) || initialDeptId,
                     });
                   }
                 } catch {
@@ -731,14 +819,32 @@ export const UsersPage: React.FC = () => {
               type="primary" 
               icon={<EditOutlined />}
               onClick={() => {
+                form.resetFields();
                 setEditModal(true);
+
+                const fullName = selectedUser.name || `${selectedUser.firstName || ''} ${selectedUser.lastName || ''}`.trim();
+                const nameParts = fullName.split(' ');
+                const fName = selectedUser.firstName || nameParts[0] || '';
+                const lName = selectedUser.lastName || nameParts.slice(1).join(' ') || '';
+                const phone = toE164Phone(selectedUser.phoneNumber) || selectedUser.phoneNumber;
+
+                const stored = getStoredUserAssignment(selectedUser.id);
+                const rawBranch = stored?.branchId || selectedUser.branchId || (selectedUser as any).branch || getStoredEntityBranch(selectedUser.id);
+                const defaultDept = resolveDefaultDepartment(selectedUser.role);
+                const rawDept = stored?.departmentId || stored?.departmentName || stored?.department || selectedUser.departmentId || selectedUser.department || defaultDept;
+
+                const initialBranchId = resolveBranchValue(rawBranch);
+                const initialDeptId = resolveDepartmentValue(rawDept);
+
                 form.setFieldsValue({
-                  firstName: selectedUser.firstName,
-                  lastName: selectedUser.lastName,
+                  firstName: fName,
+                  lastName: lName,
                   email: selectedUser.email,
-                  phoneNumber: selectedUser.phoneNumber,
+                  phoneNumber: phone,
                   role: selectedUser.role,
                   isActive: selectedUser.isActive,
+                  branchId: initialBranchId,
+                  departmentId: initialDeptId,
                 });
                 setViewDrawerOpen(false);
               }}
@@ -1104,7 +1210,12 @@ export const UsersPage: React.FC = () => {
               >
                 <Select
                   placeholder="Select branch"
-                  options={branches.map((b: any) => ({ value: b.id, label: `${b.name} (${b.branchCode})` }))}
+                  options={branchOptions}
+                  showSearch
+                  optionFilterProp="label"
+                  filterOption={(input, option) =>
+                    (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+                  }
                 />
               </Form.Item>
             </Col>
@@ -1116,7 +1227,12 @@ export const UsersPage: React.FC = () => {
               >
                 <Select
                   placeholder="Select department"
-                  options={departments.map((d) => ({ value: d.id, label: d.name }))}
+                  options={departmentOptions}
+                  showSearch
+                  optionFilterProp="label"
+                  filterOption={(input, option) =>
+                    (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+                  }
                 />
               </Form.Item>
             </Col>
@@ -1238,7 +1354,12 @@ export const UsersPage: React.FC = () => {
               >
                 <Select
                   placeholder="Select branch"
-                  options={branches.map((b: any) => ({ value: b.id, label: `${b.name} (${b.branchCode})` }))}
+                  options={branchOptions}
+                  showSearch
+                  optionFilterProp="label"
+                  filterOption={(input, option) =>
+                    (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+                  }
                 />
               </Form.Item>
             </Col>
@@ -1250,7 +1371,12 @@ export const UsersPage: React.FC = () => {
               >
                 <Select
                   placeholder="Select department"
-                  options={departments.map((d) => ({ value: d.id, label: d.name }))}
+                  options={departmentOptions}
+                  showSearch
+                  optionFilterProp="label"
+                  filterOption={(input, option) =>
+                    (option?.label as string || '').toLowerCase().includes(input.toLowerCase())
+                  }
                 />
               </Form.Item>
             </Col>

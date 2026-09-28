@@ -10,7 +10,9 @@ import {
   useUpdateUserAssignmentMutation,
   useDeleteUserMutation,
   usersKeys, 
-  type UserEntity 
+  type UserEntity,
+  toBackendRole,
+  toE164Phone,
 } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
@@ -559,8 +561,8 @@ export const useAdminDashboard = () => {
     if (userData.firstName) payload.firstName = userData.firstName;
     if (userData.lastName) payload.lastName = userData.lastName;
     if (userData.email) payload.email = userData.email;
-    if (userData.phone || userData.phoneNumber) payload.phoneNumber = userData.phone || userData.phoneNumber;
-    if (userData.role) payload.role = userData.role;
+    if (userData.phone || userData.phoneNumber) payload.phoneNumber = toE164Phone(userData.phone || userData.phoneNumber);
+    if (userData.role) payload.role = toBackendRole(userData.role);
     if (userData.status) payload.isActive = userData.status === 'active';
 
     updateUserMutation.mutate(

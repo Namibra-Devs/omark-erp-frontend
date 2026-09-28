@@ -16,6 +16,18 @@ export const roleLabels: Record<Role, string> = {
   accounts: 'Accounts',
 };
 
+/**
+ * Roles authorized to access and view the Expenses hub and sidebar menu.
+ * Specifically: ONLY Admin, Finance/Accounts, Secretary, Branch Manager & Marketing Director.
+ */
+export const EXPENSES_ALLOWED_ROLES: Role[] = [
+  'admin',
+  'accounts',
+  'secretary',
+  'branch_manager',
+  'marketing_director',
+];
+
 export const prospectSourceLabels: Record<ProspectSource, string> = {
   marketing: 'Marketing',
   customer_service: 'Customer Service',

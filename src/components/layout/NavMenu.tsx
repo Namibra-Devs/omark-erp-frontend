@@ -23,6 +23,7 @@ import {
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
+import { EXPENSES_ALLOWED_ROLES } from '@/constants/enums';
 import { usePendingNotificationsCountQuery } from '@/api/notifications';
 import { useUnseenCountsQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
@@ -224,8 +225,8 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    // ── EXPENSES (Critical feature moved to Sidebar) ──────────────────────────
-    if (hasRole(['accounts', 'admin', 'branch_manager', 'secretary', 'marketing_director', 'marketing_staff'])) {
+    // ── EXPENSES (Visible ONLY to Admin, Finance/Accounts, Secretary, Branch Manager & Marketing Director) ────
+    if (hasRole(EXPENSES_ALLOWED_ROLES)) {
       items.push({
         key: '/accounts/expenses',
         icon: <DollarOutlined />,

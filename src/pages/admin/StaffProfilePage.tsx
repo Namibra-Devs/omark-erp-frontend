@@ -43,9 +43,10 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { PayslipModal } from '@/components/payroll/PayslipModal';
 import { CompensationModal } from '@/components/payroll/CompensationModal';
-import { useUsersQuery, useUpdateUserMutation, useUserAssignmentQuery, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, getRoleLabel, getRoleColor, getRoleIcon } from '@/api/users';
-import { getStoredUserAssignment, setStoredUserAssignment, resolveDefaultDepartment } from '@/utils/userAssignmentStorage';
+import { useUsersQuery, useUpdateUserMutation, useUserAssignmentQuery, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, getRoleLabel, getRoleColor, getRoleIcon, toBackendRole, toE164Phone } from '@/api/users';
+import { getStoredUserAssignment, setStoredUserAssignment, resolveDefaultDepartment, addStaffToBranchRoster } from '@/utils/userAssignmentStorage';
 import { recordEntityBranch } from '@/utils/branchIsolation';
+import { useBranchContext } from '@/contexts/BranchContext';
 import { useBonusesQuery, useAwardBonusMutation, bonusTypeLabels, type StaffBonusRecord, type BonusType } from '@/api/bonuses';
 import {
   useStaffCompensationQuery,
@@ -63,7 +64,7 @@ import { useStaffLeaveRequestsQuery } from '@/api/leaves';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
-import { useBranchesQuery } from '@/api/branches';
+import { useBranchesQuery, DEFAULT_SYSTEM_BRANCHES } from '@/api/branches';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import type { Role } from '@/types';
@@ -92,7 +93,13 @@ export const StaffProfilePage: React.FC = () => {
 
   // Queries
   const { data: usersData, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
-  const { data: branches = [] } = useBranchesQuery();
+  const { branches: contextBranches = [] } = useBranchContext();
+  const { data: apiBranches = [] } = useBranchesQuery();
+  const branches = useMemo(() => {
+    if (contextBranches && contextBranches.length > 0) return contextBranches;
+    if (apiBranches && apiBranches.length > 0) return apiBranches;
+    return DEFAULT_SYSTEM_BRANCHES;
+  }, [contextBranches, apiBranches]);
   const updateUserMutation = useUpdateUserMutation();
   const updateUserAssignmentMutation = useUpdateUserAssignmentMutation();
 
@@ -376,24 +383,35 @@ export const StaffProfilePage: React.FC = () => {
   const handleEditProfile = async (values: any) => {
     if (!staffMember) return;
     try {
+      const sanitizedPhone = toE164Phone(values.phoneNumber) || values.phoneNumber?.trim();
+      const backendRole = values.role ? toBackendRole(values.role) : undefined;
+
       const payload: any = {
         firstName: values.firstName?.trim(),
         lastName: values.lastName?.trim(),
         email: values.email?.trim(),
-        phoneNumber: values.phoneNumber?.trim(),
+        phoneNumber: sanitizedPhone,
       };
-      if (isAdmin && values.role) {
-        payload.role = values.role;
+      if (isAdmin && backendRole) {
+        payload.role = backendRole;
       }
       await updateUserMutation.mutateAsync({
         id: staffMember.id,
         payload,
       });
+      if (values.role) {
+        setStoredUserAssignment(staffMember.id, { role: values.role });
+      }
       message.success('Staff profile updated successfully');
       setEditProfileModal(false);
       refetchUsers();
     } catch (err: any) {
-      message.error(err?.error?.message || err?.message || 'Failed to update profile');
+      const errMsg = err?.error?.message ||
+                     err?.response?.data?.error?.message ||
+                     err?.response?.data?.message ||
+                     err?.message ||
+                     'Failed to update profile';
+      message.error(errMsg);
     }
   };
 
@@ -429,6 +447,7 @@ export const StaffProfilePage: React.FC = () => {
       });
       if (values.branchId) {
         recordEntityBranch('staff', staffMember.id, values.branchId);
+        addStaffToBranchRoster(values.branchId, staffMember.id, branchObj?.name);
       }
       await updateUserAssignmentMutation.mutateAsync({
         userId: staffMember.id,
@@ -652,11 +671,16 @@ export const StaffProfilePage: React.FC = () => {
                 {
                   label: 'Edit Profile',
                   onClick: () => {
+                    const nameParts = fullName.split(' ');
+                    const fName = staffMember.firstName || nameParts[0] || '';
+                    const lName = staffMember.lastName || nameParts.slice(1).join(' ') || '';
+                    const ph = toE164Phone(phone) || phone;
+
                     form.setFieldsValue({
-                      firstName: staffMember.firstName,
-                      lastName: staffMember.lastName,
+                      firstName: fName,
+                      lastName: lName,
                       email: staffMember.email,
-                      phoneNumber: phone,
+                      phoneNumber: ph,
                       role: staffMember.role,
                     });
                     setEditProfileModal(true);
@@ -1587,19 +1611,22 @@ export const StaffProfilePage: React.FC = () => {
         width={480}
       >
         <Form form={assignForm} layout="vertical" onFinish={handleAssignBranchDept}>
-          <Form.Item name="branchId" label="Assigned Branch" rules={[{ required: true }]}>
-            <Select>
-              {branches.map((b: any) => (
-                <Option key={b.id} value={b.id}>
-                  🏢 {b.name} ({b.code})
-                </Option>
-              ))}
+          <Form.Item name="branchId" label="Assigned Branch" rules={[{ required: true, message: 'Branch assignment is required' }]}>
+            <Select showSearch optionFilterProp="label" placeholder="Select branch">
+              {branches.map((b: any) => {
+                const code = b.branchCode || b.code;
+                return (
+                  <Option key={b.id} value={b.id} label={`${b.name} ${code ? `(${code})` : ''}`}>
+                    🏢 {b.name} {code ? `(${code})` : ''}
+                  </Option>
+                );
+              })}
             </Select>
           </Form.Item>
-          <Form.Item name="departmentId" label="Department" rules={[{ required: true }]}>
-            <Select>
+          <Form.Item name="departmentId" label="Department" rules={[{ required: true, message: 'Department assignment is required' }]}>
+            <Select showSearch optionFilterProp="label" placeholder="Select department">
               {Object.entries(deptLabels).map(([id, name]) => (
-                <Option key={id} value={id}>
+                <Option key={id} value={id} label={name}>
                   {name}
                 </Option>
               ))}

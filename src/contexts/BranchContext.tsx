@@ -5,6 +5,7 @@ import {
   useCreateBranchMutation,
   useUpdateBranchMutation,
   useDeleteBranchMutation,
+  DEFAULT_SYSTEM_BRANCHES,
   type BranchEntity,
 } from '@/api/branches';
 import {
@@ -20,45 +21,6 @@ import { recordEntityBranch, getBranchCanonicalKey } from '@/utils/branchIsolati
 export type Branch = BranchEntity & { staffUserIds?: string[] };
 
 const VIEWING_STORAGE_KEY = 'omark_viewing_branch_id';
-
-const DEFAULT_SYSTEM_BRANCHES: BranchEntity[] = [
-  {
-    id: 'b1',
-    name: 'Kumasi Main',
-    branchCode: 'KMA',
-    location: 'Central Market, Kumasi',
-    phone: '+233 32 201 1234',
-    createdAt: '2024-01-01T00:00:00.000Z',
-    updatedAt: '2024-01-01T00:00:00.000Z',
-  },
-  {
-    id: 'b2',
-    name: 'Accra Central',
-    branchCode: 'ACC',
-    location: 'Airport Residential Area, Accra',
-    phone: '+233 30 201 5678',
-    createdAt: '2024-01-01T00:00:00.000Z',
-    updatedAt: '2024-01-01T00:00:00.000Z',
-  },
-  {
-    id: 'b3',
-    name: 'Takoradi Branch',
-    branchCode: 'TKD',
-    location: 'Market Circle, Takoradi',
-    phone: '+233 31 201 9012',
-    createdAt: '2024-01-01T00:00:00.000Z',
-    updatedAt: '2024-01-01T00:00:00.000Z',
-  },
-  {
-    id: 'b4',
-    name: 'Tamale Branch',
-    branchCode: 'TML',
-    location: 'Central Business District, Tamale',
-    phone: '+233 37 201 3456',
-    createdAt: '2024-01-01T00:00:00.000Z',
-    updatedAt: '2024-01-01T00:00:00.000Z',
-  },
-];
 
 interface BranchContextType {
   branches: Branch[];

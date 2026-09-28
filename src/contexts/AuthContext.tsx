@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { App } from 'antd'; // Changed from 'message' to 'App'
 import apiClient, { setTokens, clearTokens, getAccessToken, getRefreshToken } from '@/api/client';
 import { getEntityPhoto } from '@/utils/userPhotoStorage';
-import type { User } from '@/types';
+import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import type { User, Role } from '@/types';
 
 interface AuthContextType {
   user: User | null;
@@ -33,7 +34,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Use Ant Design's context-safe messaging API
   const { message } = App.useApp();
 
-  // ── Listen for real-time avatar changes globally ─────────────────────────
+  // ── Listen for real-time avatar and user profile changes globally ──────────
   useEffect(() => {
     const handleAvatarChange = (e: Event) => {
       const customEvent = e as CustomEvent<{ entityType: string; entityId: string; photoUrl: string | undefined }>;
@@ -41,9 +42,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser((prev) => prev ? { ...prev, avatarUrl: customEvent.detail.photoUrl, photoUrl: customEvent.detail.photoUrl } : null);
       }
     };
+
+    const handleUserUpdate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ id: string; data: Partial<User> }>;
+      if (customEvent.detail && user && customEvent.detail.id === user.id) {
+        const updateData = customEvent.detail.data;
+        setUser((prev) => {
+          if (!prev) return null;
+          const nextFirst = updateData.firstName || prev.firstName;
+          const nextLast = updateData.lastName !== undefined ? updateData.lastName : prev.lastName;
+          return {
+            ...prev,
+            ...updateData,
+            firstName: nextFirst,
+            lastName: nextLast,
+            name: `${nextFirst} ${nextLast}`.trim(),
+          };
+        });
+      }
+    };
+
     window.addEventListener('omark-avatar-changed', handleAvatarChange);
+    window.addEventListener('omark-user-updated', handleUserUpdate);
     return () => {
       window.removeEventListener('omark-avatar-changed', handleAvatarChange);
+      window.removeEventListener('omark-user-updated', handleUserUpdate);
     };
   }, [user]);
 
@@ -69,19 +92,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setTokens(accessToken, refreshToken || '');
 
-      const branchId = userData.branchId || userData.branch;
-      const departmentId = userData.departmentId || userData.department;
+      const storedAssignment = getStoredUserAssignment(userData.id);
+      const effectiveRole = (storedAssignment?.role as Role) || userData.role || 'admin';
+      const branchId = storedAssignment?.branchId || userData.branchId || userData.branch;
+      const departmentId = storedAssignment?.departmentId || userData.departmentId || userData.department;
       const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
 
+      const fName = storedAssignment?.firstName || userData.firstName || 'User';
+      const lName = storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || '');
       const userObj: User = {
         id: userData.id,
-        firstName: userData.firstName || 'User',
-        lastName: userData.lastName || '',
-        name: userData.name || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || undefined,
-        email: userData.email,
-        role: userData.role || 'admin',
+        firstName: fName,
+        lastName: lName,
+        name: storedAssignment?.name || userData.name || `${fName} ${lName}`.trim() || undefined,
+        email: storedAssignment?.email || userData.email,
+        role: effectiveRole,
         isActive: userData.isActive !== undefined ? userData.isActive : true,
-        phoneNumber: userData.phoneNumber || userData.phone || '',
+        phoneNumber: storedAssignment?.phoneNumber || userData.phoneNumber || userData.phone || '',
         branchId,
         branch: userData.branch || branchId,
         departmentId,
@@ -112,6 +139,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const role = userObj.role;
       const roleRoutes: Record<string, string> = {
         admin: '/admin/dashboard',
+        branch_manager: branchId ? `/branches/${branchId}` : '/branches',
         marketing_director: '/marketing/overview',
         marketing_staff: '/marketing/prospects',
         customer_service: '/cs/prospects',
@@ -163,19 +191,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userData = dataContainer.user || dataContainer;
 
       if (userData && userData.id) {
-        const branchId = userData.branchId || userData.branch;
-        const departmentId = userData.departmentId || userData.department;
+        const storedAssignment = getStoredUserAssignment(userData.id);
+        const effectiveRole = (storedAssignment?.role as Role) || userData.role || 'admin';
+        const branchId = storedAssignment?.branchId || userData.branchId || userData.branch;
+        const departmentId = storedAssignment?.departmentId || userData.departmentId || userData.department;
         const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
 
+        const fName = storedAssignment?.firstName || userData.firstName || 'User';
+        const lName = storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || '');
         const userObj: User = {
           id: userData.id,
-          firstName: userData.firstName || 'User',
-          lastName: userData.lastName || '',
-          name: userData.name || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || undefined,
-          email: userData.email,
-          role: userData.role || 'admin',
+          firstName: fName,
+          lastName: lName,
+          name: storedAssignment?.name || userData.name || `${fName} ${lName}`.trim() || undefined,
+          email: storedAssignment?.email || userData.email,
+          role: effectiveRole,
           isActive: userData.isActive !== undefined ? userData.isActive : true,
-          phoneNumber: userData.phoneNumber || userData.phone || '',
+          phoneNumber: storedAssignment?.phoneNumber || userData.phoneNumber || userData.phone || '',
           branchId,
           branch: userData.branch || branchId,
           departmentId,
@@ -234,7 +266,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // ── Has Role ──────────────────────────────────────────────────────────────
   const hasRole = useCallback((roles: string[]) => {
     if (!user) return false;
-    return roles.includes(user.role);
+    const stored = getStoredUserAssignment(user.id);
+    const effectiveRole = (stored?.role as string) || user.role;
+    return roles.includes(effectiveRole) || roles.includes(user.role);
   }, [user]);
 
   const value = useMemo(() => ({

@@ -245,13 +245,38 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
         }
       }
 
-      const rawMsg =
+      // Extract specific validation details if available from NestJS, Express, or OpenAPI format
+      const details = serverData?.error?.details || serverData?.details || serverData?.errors;
+      let detailSummary = '';
+      if (Array.isArray(details) && details.length > 0) {
+        detailSummary = details
+          .map((d: any) => {
+            if (typeof d === 'string') return d;
+            if (d?.field && d?.message) return `${d.field}: ${d.message}`;
+            if (d?.message) return d.message;
+            return JSON.stringify(d);
+          })
+          .filter(Boolean)
+          .join(', ');
+      } else if (details && typeof details === 'object') {
+        detailSummary = Object.entries(details)
+          .map(([key, val]) => `${key}: ${Array.isArray(val) ? val.join(', ') : String(val)}`)
+          .join(', ');
+      }
+
+      let rawMsg =
         serverData?.error?.message ||
         (Array.isArray(serverData?.message) ? serverData.message.join(', ') : serverData?.message) ||
         (typeof serverData?.error === 'string' ? serverData.error : null) ||
         (isRateLimited ? 'The system is experiencing high traffic. Please wait a moment and try again.' : null) ||
         error.message ||
         'An unexpected error occurred';
+
+      if (detailSummary && rawMsg && !rawMsg.includes(detailSummary)) {
+        rawMsg = `${rawMsg} (${detailSummary})`;
+      } else if (!rawMsg && detailSummary) {
+        rawMsg = detailSummary;
+      }
 
       const errorCode =
         serverData?.error?.code ||
@@ -317,16 +342,44 @@ export function unwrapData<T>(response: AxiosResponse<ApiResponse<T>>): T {
 }
 
 export function unwrapList<T>(response: AxiosResponse<ApiResponse<T[]>>): ListResult<T> {
-  const body = response.data;
-  const items = Array.isArray(body?.data) ? body.data : [];
-  const meta = body?.meta;
-  const total = meta?.total ?? items.length;
-  const pageSize = meta?.pageSize ?? items.length;
-  const computedTotalPages = meta?.totalPages ?? (total && pageSize ? Math.ceil(total / pageSize) : 1);
+  const body = response?.data as any;
+  let items: T[] = [];
+  if (Array.isArray(body?.data)) {
+    items = body.data;
+  } else if (Array.isArray(body?.data?.items)) {
+    items = body.data.items;
+  } else if (Array.isArray(body?.items)) {
+    items = body.items;
+  } else if (Array.isArray(body)) {
+    items = body;
+  }
+
+  const meta = body?.meta || body?.data?.meta;
+  const total =
+    meta?.total ??
+    body?.total ??
+    body?.data?.total ??
+    items.length;
+  const pageSize =
+    meta?.pageSize ??
+    body?.pageSize ??
+    body?.data?.pageSize ??
+    (items.length || 20);
+  const page =
+    meta?.page ??
+    body?.page ??
+    body?.data?.page ??
+    1;
+  const computedTotalPages =
+    meta?.totalPages ??
+    body?.totalPages ??
+    body?.data?.totalPages ??
+    (total && pageSize ? Math.ceil(total / pageSize) : 1);
+
   return {
     items,
     total,
-    page: meta?.page ?? 1,
+    page,
     pageSize,
     totalPages: computedTotalPages,
   };

@@ -1,5 +1,5 @@
 // src/pages/marketing/DirectorOverviewPage.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Space, Button,
   Progress, Tabs, Tooltip,
@@ -101,6 +101,15 @@ export const DirectorOverviewPage: React.FC = () => {
 
   const { data: allCustomersData, refetch: refetchCustomers } = useCustomersQuery({ pageSize: 10000 });
   const allCustomers = allCustomersData?.items ?? [];
+
+  useEffect(() => {
+    const handleProspectsChanged = () => {
+      refetchProspects();
+      refetchAnalytics();
+    };
+    window.addEventListener('omark-prospects-changed', handleProspectsChanged);
+    return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
+  }, [refetchProspects, refetchAnalytics]);
 
   const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 1000 });
   const appointments = appointmentsData?.items ?? [];

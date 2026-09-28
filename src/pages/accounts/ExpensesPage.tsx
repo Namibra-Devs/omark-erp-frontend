@@ -62,8 +62,9 @@ import {
   getUserPhone,
   type UserEntity,
 } from '@/api/users';
-import { filterEntitiesByBranch } from '@/utils/branchIsolation';
+import { filterEntitiesByBranch, getBranchCanonicalKey } from '@/utils/branchIsolation';
 import { tokens } from '@/constants/tokens';
+import { EXPENSES_ALLOWED_ROLES } from '@/constants/enums';
 
 dayjs.extend(relativeTime);
 
@@ -114,6 +115,21 @@ const getRoleDisplay = (role?: string) => {
 
 export const ExpensesPage: React.FC = () => {
   const { user, hasRole } = useAuth();
+
+  const isAuthorized = hasRole(EXPENSES_ALLOWED_ROLES);
+  if (!isAuthorized) {
+    return (
+      <div style={{ padding: 48, maxWidth: 600, margin: '40px auto', textAlign: 'center' }}>
+        <Alert
+          type="error"
+          message="Access Restricted"
+          description="Expense management is reserved for Administrators, Finance/Accounts, Secretary, Branch Managers, and Marketing Director."
+          showIcon
+        />
+      </div>
+    );
+  }
+
   const { branches: contextBranches } = useBranchContext();
   const { data: apiBranches = [] } = useBranchesQuery();
   const branches: Array<{ id: string; name: string; branchCode?: string; [key: string]: any }> =
@@ -161,14 +177,27 @@ export const ExpensesPage: React.FC = () => {
       const livePhone = matchedUser ? getUserPhone(matchedUser) : undefined;
       const liveAvatar = matchedUser?.avatarUrl || matchedUser?.photoUrl || matchedUser?.profilePictureUrl;
       const branchId = expense.branchId || matchedUser?.branchId;
-      const branchObj = branches.find((b: any) => b.id === branchId);
-      const liveBranchName = expense.branchName || branchObj?.name || 'Head Office';
+      const branchCanon = getBranchCanonicalKey(branchId);
+      const branchObj = branches.find(
+        (b: any) =>
+          b.id === branchId ||
+          b.branchCode === branchId ||
+          (branchCanon && getBranchCanonicalKey(b.name || b.branchCode || b.id) === branchCanon)
+      );
+      const liveBranchName =
+        expense.branchName ||
+        branchObj?.name ||
+        (branchCanon === 'kumasi' ? 'Kumasi Main' : undefined) ||
+        (branchCanon === 'accra' ? 'Accra Central' : undefined) ||
+        (branchCanon === 'takoradi' ? 'Takoradi Branch' : undefined) ||
+        (branchCanon === 'tamale' ? 'Tamale Branch' : undefined) ||
+        'Kumasi Main';
 
       return {
         ...expense,
         recordedByUserName: liveName,
         recordedByUserRole: liveRole,
-        branchId,
+        branchId: branchId || branchObj?.id,
         branchName: liveBranchName,
         liveEmail,
         livePhone,
@@ -178,8 +207,11 @@ export const ExpensesPage: React.FC = () => {
   }, [rawExpenses, usersById, usersByName, branches]);
 
   const branchExpenses = useMemo(() => {
-    return filterEntitiesByBranch(enrichedExpenses, user, branches);
-  }, [enrichedExpenses, user, branches]);
+    // For authorized expenses roles (Admin, Finance/Accounts, Secretary, Branch Manager, Marketing Director),
+    // display all ledger records so cards and counts are fully accurate.
+    // The interactive Branch Filter dropdown allows filtering by specific branch on-demand.
+    return enrichedExpenses;
+  }, [enrichedExpenses]);
 
   // Real-time synchronization across all dashboards and tabs
   useEffect(() => {
@@ -220,6 +252,30 @@ export const ExpensesPage: React.FC = () => {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [form] = Form.useForm();
 
+  const initialBranchId = useMemo(() => {
+    if (user?.branchId) {
+      const direct = branches.find((b: any) => b.id === user.branchId);
+      if (direct) return direct.id;
+      const canon = getBranchCanonicalKey(user.branchId);
+      const byCanon = branches.find((b: any) => getBranchCanonicalKey(b.name || b.branchCode || b.id) === canon);
+      if (byCanon) return byCanon.id;
+      return user.branchId;
+    }
+    return branches[0]?.id;
+  }, [user?.branchId, branches]);
+
+  const openAddExpenseModal = () => {
+    form.setFieldsValue({
+      category: 'Office Supplies',
+      type: 'internal',
+      amountGHS: undefined,
+      date: dayjs(),
+      branchId: initialBranchId,
+      description: '',
+    });
+    setAddModalOpen(true);
+  };
+
   // ── Counts for Tabs ────────────────────────────────────────────────────────
   const counts = useMemo(() => {
     return {
@@ -239,8 +295,15 @@ export const ExpensesPage: React.FC = () => {
       }
 
       // Branch Filter
-      if (branchFilter !== 'all' && e.branchId !== branchFilter) {
-        return false;
+      if (branchFilter !== 'all') {
+        const matchesDirect = e.branchId === branchFilter;
+        const selectedBranch = branches.find((b: any) => b.id === branchFilter);
+        const selectedCanon = getBranchCanonicalKey(selectedBranch?.name || selectedBranch?.branchCode || branchFilter);
+        const expenseCanon = getBranchCanonicalKey(e.branchName || e.branchId);
+        const matchesCanon = Boolean(selectedCanon && expenseCanon && selectedCanon === expenseCanon);
+        if (!matchesDirect && !matchesCanon) {
+          return false;
+        }
       }
 
       // Search
@@ -638,7 +701,7 @@ export const ExpensesPage: React.FC = () => {
         actions={[
           {
             label: 'Record New Expense',
-            onClick: () => setAddModalOpen(true),
+            onClick: openAddExpenseModal,
             icon: <PlusOutlined />,
             type: 'primary',
           },
@@ -1321,11 +1384,11 @@ export const ExpensesPage: React.FC = () => {
             </Col>
           </Row>
 
-          <Form.Item name="branchId" label="Branch Office" initialValue={user?.branchId || branches[0]?.id}>
+          <Form.Item name="branchId" label="Branch Office" initialValue={initialBranchId}>
             <Select placeholder="Select branch office">
               {branches.map((b: any) => (
                 <Option key={b.id} value={b.id}>
-                  🏢 {b.name} ({b.branchCode || b.id})
+                  🏢 {b.name} {b.branchCode ? `(${b.branchCode})` : ''}
                 </Option>
               ))}
             </Select>

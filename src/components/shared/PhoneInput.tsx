@@ -65,6 +65,13 @@ export const PhoneInput: React.FC<PhoneInputProps> = ({
     if (selectedCountry.dialCode !== '+' && value.startsWith(selectedCountry.dialCode)) {
       return value.slice(selectedCountry.dialCode.length).trim();
     }
+    const dialWithoutPlus = selectedCountry.dialCode.replace('+', '');
+    if (dialWithoutPlus && value.startsWith(dialWithoutPlus)) {
+      return value.slice(dialWithoutPlus.length).trim();
+    }
+    if (value.startsWith('0') && value.length === 10) {
+      return value.slice(1);
+    }
     return value;
   }, [value, selectedCountry]);
 

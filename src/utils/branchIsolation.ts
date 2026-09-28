@@ -46,8 +46,18 @@ export const getUserBranchId = (user: any): string | undefined => {
  */
 export const getUserBranchName = (user: any, branches: BranchInfo[] = []): string | undefined => {
   if (!user) return undefined;
-  const bId = getUserBranchId(user);
+  let bId = getUserBranchId(user);
+  if (!bId && (user.branchName || user.branch)) {
+    bId = user.branchName || user.branch;
+  }
   if (!bId) return undefined;
+
+  // If bId is a raw hex ID or MongoDB ObjectID (e.g. 24 hex characters), resolve via branches or default to primary branch
+  if (typeof bId === 'string' && /^[0-9a-fA-F]{20,32}$/.test(bId)) {
+    const directBranch = branches.find((b) => b.id === bId);
+    if (directBranch) return directBranch.name;
+    return 'Kumasi Main';
+  }
 
   const bIdCanonical = getBranchCanonicalKey(bId);
 
@@ -77,9 +87,17 @@ export const getUserBranchName = (user: any, branches: BranchInfo[] = []): strin
     tamale: 'Tamale',
     wa: 'Wa Branch',
     tafo: 'Tafo Branch',
+    b1: 'Kumasi Main',
+    b2: 'Accra Central',
+    b3: 'Takoradi Branch',
+    b4: 'Tamale Branch',
   };
 
-  return fallbackNames[bIdCanonical] || (typeof bId === 'string' && bId.length > 0 ? bId : undefined);
+  if (fallbackNames[bIdCanonical]) {
+    return fallbackNames[bIdCanonical];
+  }
+
+  return typeof bId === 'string' && bId.length > 0 && !bId.startsWith('obj_') ? bId : undefined;
 };
 
 /**
@@ -93,7 +111,10 @@ export const getUserBranchRoleTitle = (user: any, branches: BranchInfo[] = []): 
     return 'Head Office Administrator';
   }
 
-  const branchName = getUserBranchName(user, branches);
+  let branchName = getUserBranchName(user, branches);
+  if (branchName && /^[0-9a-fA-F]{20,32}$/.test(branchName)) {
+    branchName = 'Kumasi Main';
+  }
 
   if (branchName) {
     const formattedBranch = branchName.toLowerCase().includes('branch')
@@ -173,7 +194,7 @@ export const getDeterministicBranchSlot = (itemIdentifier: string | number): str
 
 /**
  * Filters any list of entities (prospects, customers, complaints, payments, plans) by a target branch ID.
- * Admins get all items unless a specific branch filter is passed.
+ * Admins, Accounts, and Marketing Director get all items unless a specific branch filter is passed.
  * Head office staff or users without an explicit branch assignment see all records.
  * Non-admins strictly get records matching their branch canonical key or records in the general shared pool.
  */
@@ -185,21 +206,50 @@ export const filterEntitiesByBranch = <T extends Record<string, any>>(
 ): T[] => {
   if (!Array.isArray(items)) return [];
 
-  // Admins see all data across all branches unless an explicit override branch filter is applied
-  if (user?.role === 'admin' && !overrideBranchId) {
+  // Admins and company-wide executive / financial oversight roles see all data across all branches
+  // unless an explicit override branch filter is applied
+  const normalizedRole = String(user?.role || '').toLowerCase().trim().replace(/[\s-]+/g, '_');
+  const isGlobalOversightRole =
+    normalizedRole === 'admin' ||
+    normalizedRole === 'accounts' ||
+    normalizedRole === 'marketing_director' ||
+    normalizedRole.includes('director') ||
+    normalizedRole.includes('admin') ||
+    normalizedRole.includes('account');
+
+  if (isGlobalOversightRole && !overrideBranchId) {
     return items;
   }
 
   const targetBranch = overrideBranchId || getUserBranchId(user);
   
-  // If user has no branch constraint (e.g. accounts, general management, unassigned), show all items
+  // If user has no branch constraint (e.g. unassigned), show all items
   if (!targetBranch && !overrideBranchId) {
     return items;
   }
 
-  const userCanonical = getBranchCanonicalKey(targetBranch);
+  const resolveCanonical = (val?: string) => {
+    if (!val) return '';
+    if (branches && branches.length > 0) {
+      const found = branches.find(
+        (b) => b.id === val || b.branchCode === val || b.name === val
+      );
+      if (found) {
+        return getBranchCanonicalKey(found.name || found.branchCode || found.id);
+      }
+    }
+    return getBranchCanonicalKey(val);
+  };
+
+  const userCanonical = resolveCanonical(targetBranch);
 
   return items.filter((item) => {
+    // 0. If current user created or was assigned to this item, it is ALWAYS visible to them!
+    const assignedId = item.assignedUserId || item.recordedByUserId || item.generatedByUserId || item.userId;
+    if (user?.id && assignedId && String(assignedId) === String(user.id)) {
+      return true;
+    }
+
     // 1. Direct branch ID or name on item, or stored branch mapping
     const itemBranch = 
       item.branchId || 
@@ -209,25 +259,29 @@ export const filterEntitiesByBranch = <T extends Record<string, any>>(
       getStoredEntityBranch(item.id);
 
     if (itemBranch) {
-      const itemCanonical = getBranchCanonicalKey(itemBranch);
-      return itemCanonical === userCanonical;
+      if (itemBranch === targetBranch) {
+        return true;
+      }
+      const itemCanonical = resolveCanonical(itemBranch);
+      if (itemCanonical && userCanonical && itemCanonical === userCanonical) {
+        return true;
+      }
+      return false;
     }
 
     // 2. User assignment match on item creator / assigned staff
-    const assignedId = item.assignedUserId || item.recordedByUserId || item.generatedByUserId;
     if (assignedId) {
-      // If the current user created or was assigned to this item, it is visible to them
-      if (user?.id && assignedId === user.id) {
-        return true;
-      }
       const creatorBranch = getStoredEntityBranch(assignedId) || getUserBranchId({ id: assignedId });
-      if (creatorBranch && getBranchCanonicalKey(creatorBranch) === userCanonical) {
-        return true;
+      if (creatorBranch) {
+        if (creatorBranch === targetBranch) return true;
+        const creatorCanon = resolveCanonical(creatorBranch);
+        if (creatorCanon && userCanonical && creatorCanon === userCanonical) {
+          return true;
+        }
       }
     }
 
-    // 3. If item has no explicit branch metadata at all (e.g. customer table in backend without branchId),
-    // treat it as part of the accessible shared entity pool rather than discarding it via hash partitioning
+    // 3. If item has no explicit branch metadata at all, treat it as part of shared pool
     return true;
   });
 };
@@ -244,7 +298,7 @@ export const tagPayloadWithBranch = <T extends Record<string, any>>(
   const tagged = {
     ...payload,
     branchId,
-    assignedUserId: user?.id || payload.assignedUserId,
+    assignedUserId: payload.assignedUserId || user?.id,
   };
   if (payload.id) {
     recordEntityBranch('entity', payload.id, branchId, user?.id);

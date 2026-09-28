@@ -45,7 +45,7 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
-import { useUpdateUserMutation, useUserActivityQuery, type UpdateUserPayload } from '@/api/users';
+import { useUpdateUserMutation, useUserActivityQuery, toE164Phone, type UpdateUserPayload } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
@@ -257,11 +257,12 @@ export const MyProfilePage: React.FC = () => {
   const handleSave = async (values: any) => {
     if (!user?.id) return;
     try {
+      const sanitizedPhone = toE164Phone(values.phoneNumber) || values.phoneNumber?.trim();
       const payload: UpdateUserPayload = {
         firstName: values.firstName?.trim(),
         lastName: values.lastName?.trim(),
         email: values.email?.trim(),
-        phoneNumber: values.phoneNumber?.trim(),
+        phoneNumber: sanitizedPhone,
       };
 
       await updateUser.mutateAsync({ id: user.id, payload });

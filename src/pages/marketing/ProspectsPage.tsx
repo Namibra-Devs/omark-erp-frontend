@@ -131,6 +131,12 @@ export const ProspectsPage: React.FC = () => {
     return () => window.removeEventListener('omark-appointments-changed', handleAptsChanged);
   }, [refetchAppointments]);
 
+  useEffect(() => {
+    const handleProspectsChanged = () => refetch();
+    window.addEventListener('omark-prospects-changed', handleProspectsChanged);
+    return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
+  }, [refetch]);
+
   // Due appointments map
   const dueProspectMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -271,7 +277,9 @@ export const ProspectsPage: React.FC = () => {
           {
             ...prospectValues,
             source: 'marketing',
-            assignedUserId: isAdmin ? values.assignedUserId : user?.id,
+            assignedUserId: values.assignedUserId || user?.id,
+            createdByUserId: user?.id,
+            createdByName: user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined,
           },
           user
         )

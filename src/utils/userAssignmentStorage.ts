@@ -8,6 +8,13 @@ const BRANCH_OVERRIDES_STORAGE_KEY = 'omark_branch_overrides';
 
 export interface StoredUserAssignment {
   userId: string;
+  firstName?: string;
+  lastName?: string;
+  name?: string;
+  email?: string;
+  phoneNumber?: string;
+  avatarUrl?: string;
+  photoUrl?: string;
   branchId?: string;
   branchName?: string;
   departmentId?: string;

@@ -13,6 +13,7 @@ import { AppShell } from '@/components/layout/AppShell';
 import { ScrollToTop } from '@/components/layout/ScrollToTop';
 import { ErrorBoundary } from '@/components/shared/ErrorBoundary';
 import { tokens } from '@/constants/tokens';
+import { EXPENSES_ALLOWED_ROLES } from '@/constants/enums';
 import type { Role } from '@/types';
 
 export const ALL_STAFF_ROLES: Role[] = [
@@ -361,7 +362,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/expenses" 
           element={
-            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager', 'secretary', 'marketing_director', 'marketing_staff']}>
+            <ProtectedRoute allowedRoles={EXPENSES_ALLOWED_ROLES}>
               <ExpensesPage />
             </ProtectedRoute>
           } 
@@ -369,7 +370,7 @@ const AppRoutes: React.FC = () => {
         <Route 
           path="/accounts/expenses" 
           element={
-            <ProtectedRoute allowedRoles={['accounts', 'admin', 'branch_manager', 'secretary', 'marketing_director', 'marketing_staff']}>
+            <ProtectedRoute allowedRoles={EXPENSES_ALLOWED_ROLES}>
               <ExpensesPage />
             </ProtectedRoute>
           } 

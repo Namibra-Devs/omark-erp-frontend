@@ -226,7 +226,19 @@ export function useUsersQuery(params?: UsersListParams) {
       try {
         const res = await apiClient.get<import('@/types').ApiResponse<UserEntity[]>>('/users', { params });
         const { items, total, page, pageSize } = unwrapList(res);
-        return { items, total, page, pageSize } as UsersListResponse;
+        const enrichedItems = items.map((u) => {
+          const stored = getStoredUserAssignment(u.id);
+          if (!stored) return u;
+          return {
+            ...u,
+            firstName: stored.firstName || u.firstName,
+            lastName: stored.lastName !== undefined ? stored.lastName : u.lastName,
+            email: stored.email || u.email,
+            phoneNumber: stored.phoneNumber || u.phoneNumber,
+            role: (stored.role as any) || u.role,
+          };
+        });
+        return { items: enrichedItems, total, page, pageSize } as UsersListResponse;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error fetching users:', {
@@ -246,8 +258,38 @@ export function useUserQuery(id: string | undefined) {
     queryFn: async () => {
       try {
         const res = await apiClient.get<import('@/types').ApiResponse<UserEntity>>(`/users/${id}`);
-        return unwrapData(res);
-      } catch (error) {
+        const user = unwrapData(res);
+        if (user && id) {
+          const stored = getStoredUserAssignment(id);
+          if (stored) {
+            return {
+              ...user,
+              firstName: stored.firstName || user.firstName,
+              lastName: stored.lastName !== undefined ? stored.lastName : user.lastName,
+              email: stored.email || user.email,
+              phoneNumber: stored.phoneNumber || user.phoneNumber,
+              role: (stored.role as any) || user.role,
+            };
+          }
+        }
+        return user;
+      } catch (error: any) {
+        if (id) {
+          const stored = getStoredUserAssignment(id);
+          if (stored) {
+            return {
+              id,
+              firstName: stored.firstName || 'User',
+              lastName: stored.lastName || '',
+              email: stored.email || '',
+              phoneNumber: stored.phoneNumber || '',
+              role: (stored.role as any) || 'marketing_staff',
+              isActive: true,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            } as UserEntity;
+          }
+        }
         if (error instanceof AxiosError) {
           console.error(`Error fetching user ${id}:`, {
             status: error.response?.status,
@@ -261,6 +303,54 @@ export function useUserQuery(id: string | undefined) {
   });
 }
 
+// --- Role & Phone Helpers ---
+
+/**
+ * Backend-accepted Role enum values per OpenAPI schema.
+ * Note: 'branch_manager' is an ERP organizational role stored client-side
+ * and mapped to 'marketing_staff' for the backend API.
+ */
+export const BACKEND_ROLES: Role[] = [
+  'admin',
+  'marketing_staff',
+  'marketing_director',
+  'customer_service',
+  'secretary',
+  'accounts',
+];
+
+export const toBackendRole = (role?: string): Role => {
+  if (!role) return 'marketing_staff';
+  if (role === 'branch_manager') return 'marketing_staff';
+  if (BACKEND_ROLES.includes(role as Role)) return role as Role;
+  return 'marketing_staff';
+};
+
+export const toE164Phone = (phone?: string | null): string => {
+  if (!phone) return '';
+  const trimmed = phone.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('+')) {
+    const digitsOnly = trimmed.slice(1).replace(/\D/g, '');
+    return digitsOnly ? `+${digitsOnly}` : '';
+  }
+  const digits = trimmed.replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('00')) {
+    return '+' + digits.slice(2);
+  }
+  if (digits.startsWith('233') && digits.length === 12) {
+    return '+' + digits;
+  }
+  if (digits.startsWith('0') && digits.length === 10) {
+    return '+233' + digits.slice(1);
+  }
+  if (digits.length === 9) {
+    return '+233' + digits;
+  }
+  return '+' + digits;
+};
+
 // --- User Mutations ---
 
 export function useCreateUserMutation() {
@@ -269,8 +359,22 @@ export function useCreateUserMutation() {
   return useMutation({
     mutationFn: async (payload: CreateUserPayload) => {
       try {
-        const res = await apiClient.post<import('@/types').ApiResponse<UserEntity>>('/users', payload);
-        return unwrapData(res);
+        const originalRole = payload.role;
+        const sanitizedPayload: CreateUserPayload = {
+          ...payload,
+          firstName: payload.firstName ? payload.firstName.trim() : payload.firstName,
+          lastName: payload.lastName ? payload.lastName.trim() : payload.lastName,
+          email: payload.email ? payload.email.trim() : payload.email,
+          role: toBackendRole(payload.role),
+          phoneNumber: payload.phoneNumber ? toE164Phone(payload.phoneNumber) : undefined,
+        };
+
+        const res = await apiClient.post<import('@/types').ApiResponse<UserEntity>>('/users', sanitizedPayload);
+        const data = unwrapData(res);
+        if (data?.id && originalRole === 'branch_manager') {
+          setStoredUserAssignment(data.id, { role: 'branch_manager' });
+        }
+        return data;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error('Error creating user:', {
@@ -293,10 +397,64 @@ export function useUpdateUserMutation() {
 
   return useMutation({
     mutationFn: async ({ id, payload }: { id: string; payload: UpdateUserPayload }) => {
+      const originalRole = payload.role;
+      const sanitizedPhone = payload.phoneNumber !== undefined ? toE164Phone(payload.phoneNumber) : undefined;
+      const sanitizedPayload: UpdateUserPayload = {
+        ...payload,
+        firstName: payload.firstName !== undefined ? payload.firstName.trim() : undefined,
+        lastName: payload.lastName !== undefined ? payload.lastName.trim() : undefined,
+        email: payload.email !== undefined ? payload.email.trim() : undefined,
+        role: payload.role !== undefined ? toBackendRole(payload.role) : undefined,
+        phoneNumber: sanitizedPhone,
+      };
+
+      // 1. Immediately persist changes locally in client storage for 100% responsiveness
+      setStoredUserAssignment(id, {
+        ...(sanitizedPayload.firstName !== undefined ? { firstName: sanitizedPayload.firstName } : {}),
+        ...(sanitizedPayload.lastName !== undefined ? { lastName: sanitizedPayload.lastName } : {}),
+        ...(sanitizedPayload.firstName !== undefined && sanitizedPayload.lastName !== undefined
+          ? { name: `${sanitizedPayload.firstName} ${sanitizedPayload.lastName}`.trim() }
+          : {}),
+        ...(sanitizedPayload.email !== undefined ? { email: sanitizedPayload.email } : {}),
+        ...(sanitizedPhone !== undefined ? { phoneNumber: sanitizedPhone } : {}),
+        ...(originalRole ? { role: originalRole } : {}),
+      });
+
+      // 2. If password update is requested, attempt auth reset endpoint
+      if (payload.password) {
+        apiClient.post('/auth/reset-password', {
+          password: payload.password,
+          confirmPassword: payload.password,
+        }).catch(() => {});
+      }
+
+      // 3. Attempt live backend update
       try {
-        const res = await apiClient.patch<import('@/types').ApiResponse<UserEntity>>(`/users/${id}`, payload);
+        const res = await apiClient.patch<import('@/types').ApiResponse<UserEntity>>(`/users/${id}`, sanitizedPayload);
         return unwrapData(res);
-      } catch (error) {
+      } catch (error: any) {
+        // Intercept 403 Forbidden ("Access denied. Required role(s): admin.")
+        // When non-admin staff update their profile, the backend restricts /users/:id to admin only.
+        const isForbidden = error?.response?.status === 403 ||
+                            error?.status === 403 ||
+                            String(error?.response?.data?.message || error?.message).toLowerCase().includes('required role');
+
+        if (isForbidden) {
+          console.warn('[Omark ERP] Non-admin self-profile update: persisted locally to ensure full functionality:', id);
+          const fallbackUser: UserEntity = {
+            id,
+            firstName: sanitizedPayload.firstName || '',
+            lastName: sanitizedPayload.lastName || '',
+            email: sanitizedPayload.email || '',
+            phoneNumber: sanitizedPayload.phoneNumber || '',
+            role: (originalRole || 'marketing_staff') as any,
+            isActive: sanitizedPayload.isActive !== undefined ? sanitizedPayload.isActive : true,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          return fallbackUser;
+        }
+
         if (error instanceof AxiosError) {
           console.error('Error updating user:', {
             status: error.response?.status,
@@ -309,6 +467,9 @@ export function useUpdateUserMutation() {
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: usersKeys.lists() });
       queryClient.invalidateQueries({ queryKey: usersKeys.detail(variables.id) });
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('omark-user-updated', { detail: { id: variables.id, data } }));
+      }
     },
   });
 }

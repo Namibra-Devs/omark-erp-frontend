@@ -65,7 +65,9 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
       const payload = {
         ...prospectValues,
         source: effectiveSource,
-        assignedUserId: isAdmin && values.assignedUserId ? values.assignedUserId : (values.assignedUserId || user?.id),
+        assignedUserId: values.assignedUserId || user?.id,
+        createdByUserId: user?.id,
+        createdByName: user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined,
       };
 
       const taggedPayload = tagPayloadWithBranch(payload, user);
