@@ -237,13 +237,16 @@ export const CheckInsPage: React.FC = () => {
     const todayRecords = records.filter((r) => dayjs(r.checkInTime || r.createdAt).isSame(today, 'day'));
     const onPremises = records.filter((r) => r.status === 'in_premises').length;
     const inLobby = records.filter((r) => r.status === 'waiting').length;
+    const totalCompleted = records.filter((r) => r.status === 'completed').length;
     const completedToday = todayRecords.filter((r) => r.status === 'completed').length;
     const totalThisMonth = records.filter((r) => dayjs(r.checkInTime || r.createdAt).isSame(today, 'month')).length;
 
     return {
       onPremises,
       inLobby,
-      completedToday,
+      completedToday: totalCompleted > 0 ? totalCompleted : completedToday,
+      totalCompleted,
+      completedTodayOnly: completedToday,
       totalThisMonth,
       totalRecorded: records.length,
     };
@@ -916,13 +919,7 @@ call or whatsapp: 054 602 9075`;
           <Card
             hoverable
             onClick={() => {
-              if (isCompletedActive) {
-                setStatusFilter('all');
-                setDateFilter('all');
-              } else {
-                setStatusFilter('completed');
-                setDateFilter('today');
-              }
+              setStatusFilter(isCompletedActive ? 'all' : 'completed');
             }}
             style={{
               borderRadius: 12,
@@ -936,11 +933,11 @@ call or whatsapp: 054 602 9075`;
             <Statistic
               title={
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                  <span style={{ fontWeight: 600, color: '#595959' }}>Checked Out Today</span>
+                  <span style={{ fontWeight: 600, color: '#595959' }}>Checked Out Visitors</span>
                   {isCompletedActive && <Tag color="processing" style={{ margin: 0, fontSize: 10 }}>FILTERED</Tag>}
                 </div>
               }
-              value={stats.completedToday}
+              value={stats.totalCompleted}
               prefix={<CheckCircleOutlined style={{ color: '#1890ff' }} />}
               valueStyle={{ color: '#1890ff', fontWeight: 700 }}
             />

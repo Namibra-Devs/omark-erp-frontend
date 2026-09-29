@@ -635,6 +635,7 @@ export const useLogInteractionMutation = () => {
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: prospectKeys.interactions(variables.prospectId) });
       queryClient.invalidateQueries({ queryKey: prospectKeys.detail(variables.prospectId) });
+      queryClient.invalidateQueries({ queryKey: ['all-staff-interactions'] });
     },
   });
 };

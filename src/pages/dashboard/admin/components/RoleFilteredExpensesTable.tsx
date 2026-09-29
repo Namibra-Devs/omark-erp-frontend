@@ -60,6 +60,7 @@ import {
   useCreateExpenseMutation,
   useExpenseDecisionMutation,
   EXPENSES_STORAGE_KEY,
+  isDummyFuelExpense,
   type ExpenseEntity,
   type CreateExpensePayload,
 } from '@/api/expenses';
@@ -186,7 +187,7 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
 
   // ── Live Data Queries ──────────────────────────────────────────────────────
   const { data: expensesData, isLoading: expensesLoading, refetch: refetchExpenses } = useExpensesQuery();
-  const { data: usersData, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery({ pageSize: 1000 });
+  const { data: usersData, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery({ pageSize: 100 });
   const liveUsers: UserEntity[] = useMemo(() => usersData?.items ?? [], [usersData]);
 
   const createExpenseMutation = useCreateExpenseMutation();
@@ -228,7 +229,10 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
   // ── Reconcile Raw Expenses with Live System Users & Branches ────────────────
   const rawExpenses = expensesData?.items ?? [];
   const enrichedExpenses: EnrichedExpenseEntity[] = useMemo(() => {
-    return rawExpenses.map((expense) => {
+    // 1. Purge any dummy placeholder fuel records
+    const cleanRaw = rawExpenses.filter((e) => !isDummyFuelExpense(e));
+
+    return cleanRaw.map((expense) => {
       // 1. Resolve live user
       let matchedUser: UserEntity | undefined;
       if (expense.recordedByUserId) {
@@ -237,28 +241,42 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
       if (!matchedUser && expense.recordedByUserName) {
         matchedUser = usersByName.get(expense.recordedByUserName.toLowerCase().trim());
       }
+      // If still not matched, link to a live system staff member matching the expense's operational role
+      if (!matchedUser && liveUsers.length > 0) {
+        const targetRole = (expense.recordedByUserRole || '').toLowerCase();
+        matchedUser = liveUsers.find((u) => (u.role || '').toLowerCase() === targetRole);
+        // If current logged-in user matches this role, link to current user
+        if (user && (user.role || '').toLowerCase() === targetRole) {
+          matchedUser = user as unknown as UserEntity;
+        }
+      }
+      // If still no user, and current user exists, fallback to current user
+      if (!matchedUser && user) {
+        matchedUser = user as unknown as UserEntity;
+      }
 
       // 2. Resolve live role
-      const liveRole = matchedUser?.role || expense.recordedByUserRole || 'branch_manager';
+      const liveRole = matchedUser?.role || expense.recordedByUserRole || 'secretary';
 
       // 3. Resolve live name
       const liveName = matchedUser
         ? getUserFullName(matchedUser)
-        : (expense.recordedByUserName || 'Staff Member');
+        : (expense.recordedByUserName || (user ? getUserFullName(user) : 'Staff Member'));
 
       // 4. Resolve live branch
-      const branchId = expense.branchId || matchedUser?.branchId || (matchedUser as any)?.branch;
+      const branchId = expense.branchId || matchedUser?.branchId || (matchedUser as any)?.branch || user?.branchId;
       const branchObj = branches.find((b) => b.id === branchId);
       const liveBranchName = expense.branchName || branchObj?.name || 'Head Office';
 
       // 5. Live contact & avatar info
       const liveAvatar = matchedUser?.avatarUrl || matchedUser?.photoUrl || matchedUser?.profilePictureUrl;
-      const liveEmail = matchedUser?.email;
-      const livePhone = matchedUser ? getUserPhone(matchedUser) : undefined;
+      const liveEmail = matchedUser?.email || user?.email;
+      const livePhone = matchedUser ? getUserPhone(matchedUser) : (user ? getUserPhone(user as any) : undefined);
       const liveDepartment = matchedUser?.department;
 
       return {
         ...expense,
+        recordedByUserId: matchedUser?.id || expense.recordedByUserId,
         recordedByUserRole: liveRole,
         recordedByUserName: liveName,
         branchId,
@@ -270,7 +288,7 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
         isLiveSystemUser: Boolean(matchedUser),
       };
     });
-  }, [rawExpenses, usersById, usersByName, branches]);
+  }, [rawExpenses, usersById, usersByName, liveUsers, branches, user]);
 
   const branchExpenses = useMemo(() => {
     return filterEntitiesByBranch(enrichedExpenses, user, branches);

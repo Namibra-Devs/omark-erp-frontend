@@ -48,12 +48,13 @@ import { useAppointmentsQuery, appointmentsKeys } from '@/api/appointments';
 import { useAllStaffInteractionsQuery } from '@/api/interactions';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
-import { useUsersQuery, getUserFullName } from '@/api/users';
+import { useUsersQuery, getUserFullName, type UserEntity } from '@/api/users';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { StatusTag } from '@/components/shared/StatusTag';
-import { interactionChannelLabels } from '@/constants/enums';
-import type { Appointment, AppointmentStatus, Prospect, Customer, InteractionChannel } from '@/types';
-import type { StaffInteraction } from '@/utils/interactionStorage';
+import { interactionChannelLabels, roleLabels } from '@/constants/enums';
+import { useAuth } from '@/contexts/AuthContext';
+import type { Appointment, AppointmentStatus, Prospect, Customer, InteractionChannel, Role, AppointmentSource } from '@/types';
+import { type StaffInteraction, isFakeOrSeedInteraction } from '@/utils/interactionStorage';
 
 dayjs.extend(relativeTime);
 
@@ -117,6 +118,8 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
   title = 'Appointment Communication History & Audit Trail',
   style,
 }) => {
+  const { user: currentUser } = useAuth();
+
   // ── Search & Filter States ──────────────────────────────────────────────────
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -135,7 +138,7 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
     data: appointmentsData,
     isLoading: appointmentsLoading,
     refetch: refetchAppointments,
-  } = useAppointmentsQuery({ pageSize: 200 });
+  } = useAppointmentsQuery({ pageSize: 100 });
 
   const {
     interactions: allInteractions,
@@ -143,13 +146,17 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
     refetch: refetchInteractions,
   } = useAllStaffInteractionsQuery();
 
-  const { data: prospectsData } = useProspectsQuery({ pageSize: 500 });
-  const { data: customersData } = useCustomersQuery({ pageSize: 500 });
-  const { data: usersData } = useUsersQuery();
+  const { data: prospectsData, refetch: refetchProspects } = useProspectsQuery({ pageSize: 1000 });
+  const { data: customersData, refetch: refetchCustomers } = useCustomersQuery({ pageSize: 1000 });
+  const { data: usersData, refetch: refetchUsers } = useUsersQuery({ pageSize: 1000 });
 
   const allProspects: Prospect[] = useMemo(() => prospectsData?.items ?? [], [prospectsData]);
   const allCustomers: Customer[] = useMemo(() => customersData?.items ?? [], [customersData]);
-  const allUsers = useMemo(() => (Array.isArray(usersData) ? usersData : []), [usersData]);
+  const allUsers: UserEntity[] = useMemo(() => {
+    if (Array.isArray(usersData)) return usersData as UserEntity[];
+    if (Array.isArray((usersData as any)?.items)) return (usersData as any).items as UserEntity[];
+    return [];
+  }, [usersData]);
 
   // Listen to system events for live real-time sync
   useEffect(() => {
@@ -167,13 +174,91 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
     };
   }, [refetchAppointments, refetchInteractions]);
 
-  // Raw list of appointments
+  // Raw list of appointments: combine live API appointments with live booking interactions and prospect meetings
   const appointmentsList: Appointment[] = useMemo(() => {
-    const items = appointmentsData?.items;
-    if (Array.isArray(items)) return items;
-    if (Array.isArray(appointmentsData)) return appointmentsData;
-    return [];
-  }, [appointmentsData]);
+    const list: Appointment[] = [];
+    const seenIds = new Set<string>();
+    const seenProspects = new Set<string>();
+
+    // 1. Live appointments returned from backend API
+    const apiItems = appointmentsData?.items ?? (Array.isArray(appointmentsData) ? appointmentsData : []);
+    apiItems.forEach((appt) => {
+      if (appt && appt.id && !seenIds.has(appt.id)) {
+        seenIds.add(appt.id);
+        if (appt.prospectId) seenProspects.add(appt.prospectId);
+        list.push(appt);
+      }
+    });
+
+    // 2. Any booking records tracked in staff interactions
+    allInteractions.forEach((inter) => {
+      if (inter.appointmentId && !seenIds.has(inter.appointmentId)) {
+        seenIds.add(inter.appointmentId);
+        if (inter.prospectId) seenProspects.add(inter.prospectId);
+        list.push({
+          id: inter.appointmentId,
+          prospectId: inter.prospectId,
+          customerId: inter.customerId,
+          source: (inter.prospectSource === 'marketing' ? 'staff' : 'staff') as AppointmentSource,
+          scheduledFor: inter.occurredAt,
+          status: 'scheduled' as AppointmentStatus,
+          reason: inter.response,
+          createdByUserId: inter.loggedByUserId,
+          createdAt: inter.createdAt || inter.occurredAt,
+          updatedAt: inter.createdAt || inter.occurredAt,
+        });
+      }
+    });
+
+    // 3. Any prospects whose current CRM status is meeting_scheduled or meeting_completed (or postponed/canceled meetings)
+    allProspects.forEach((p) => {
+      const isMeetingStatus =
+        p.status === 'meeting_scheduled' ||
+        p.status === 'meeting_completed' ||
+        (p.status === 'postponed' &&
+          (p.notes?.toLowerCase().includes('meet') ||
+            p.notes?.toLowerCase().includes('appoint') ||
+            p.reasonForContact?.toLowerCase().includes('meet'))) ||
+        (p.status === 'canceled' &&
+          (p.notes?.toLowerCase().includes('meet') ||
+            p.notes?.toLowerCase().includes('appoint') ||
+            p.reasonForContact?.toLowerCase().includes('meet')));
+
+      if (isMeetingStatus && !seenProspects.has(p.id)) {
+        seenProspects.add(p.id);
+        const meetingId = `prospect_meeting_${p.id}`;
+        if (!seenIds.has(meetingId)) {
+          seenIds.add(meetingId);
+          const mappedStatus: AppointmentStatus =
+            p.status === 'meeting_completed'
+              ? 'completed'
+              : p.status === 'postponed'
+              ? 'postponed'
+              : p.status === 'canceled'
+              ? 'canceled'
+              : 'scheduled';
+
+          list.push({
+            id: meetingId,
+            prospectId: p.id,
+            source: (p.source === 'customer_service' ? 'staff' : 'staff') as AppointmentSource,
+            scheduledFor: p.updatedAt || p.createdAt,
+            status: mappedStatus,
+            reason: p.notes || p.reasonForContact || 'Consultation Meeting Scheduled',
+            createdByUserId: p.assignedUserId || p.createdByUserId,
+            createdAt: p.createdAt,
+            updatedAt: p.updatedAt,
+          });
+        }
+      }
+    });
+
+    return list.sort(
+      (a, b) =>
+        new Date(b.scheduledFor || b.createdAt).getTime() -
+        new Date(a.scheduledFor || a.createdAt).getTime()
+    );
+  }, [appointmentsData, allInteractions, allProspects]);
 
   // Helper to map entity details (client/prospect/customer)
   const getEntityDetails = (app: Appointment) => {
@@ -188,6 +273,17 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
           type: 'prospect' as const,
           source: p.source || 'N/A',
           prospect: p,
+        };
+      }
+      const linkedInter = allInteractions.find((item) => item.prospectId === app.prospectId);
+      if (linkedInter && linkedInter.prospectName) {
+        return {
+          id: app.prospectId,
+          name: linkedInter.prospectName,
+          phone: linkedInter.prospectPhone || 'N/A',
+          email: 'N/A',
+          type: 'prospect' as const,
+          source: linkedInter.prospectSource || 'N/A',
         };
       }
     }
@@ -207,7 +303,7 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
     }
     return {
       id: app.id,
-      name: (app as any).clientName || (app as any).customerName || 'Direct Client',
+      name: (app as any).fullName || (app as any).clientName || (app as any).customerName || 'Direct Client',
       phone: (app as any).phoneNumber || (app as any).phone || 'N/A',
       email: (app as any).email || 'N/A',
       type: 'direct' as const,
@@ -218,18 +314,48 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
   // Helper to resolve staff user who logged or created
   const getStaffName = (userId?: string, fallback = 'Staff Member') => {
     if (!userId) return fallback;
-    const found = allUsers.find((u) => u.id === userId);
-    return found ? getUserFullName(found) : fallback;
+    const found = allUsers.find((u: UserEntity) => u.id === userId);
+    if (found) return getUserFullName(found);
+    if (currentUser && currentUser.id === userId) {
+      return `${currentUser.firstName || ''} ${currentUser.lastName || ''}`.trim() || currentUser.email || fallback;
+    }
+    return fallback;
+  };
+
+  const getStaffRole = (userId?: string, fallback = 'Staff') => {
+    if (!userId) return fallback;
+    const found = allUsers.find((u: UserEntity) => u.id === userId);
+    if (found) return (roleLabels[found.role as Role] || found.role || fallback);
+    if (currentUser && currentUser.id === userId) {
+      return (roleLabels[currentUser.role as Role] || currentUser.role || fallback);
+    }
+    return fallback;
   };
 
   // Helper to compile appointment history and chronological audit trail
   const getAppointmentHistory = (appointment: Appointment) => {
-    const linked = allInteractions.filter(
-      (i) =>
+    const linked = allInteractions.filter((i) => {
+      // Exclude synthetic seed items that have dummy placeholder data
+      if (isFakeOrSeedInteraction(i)) {
+        return false;
+      }
+      return (
         (appointment.id && i.appointmentId === appointment.id) ||
         (appointment.prospectId && i.prospectId === appointment.prospectId) ||
         (appointment.customerId && i.customerId === appointment.customerId)
-    );
+      );
+    });
+
+    const matchedProspect = appointment.prospectId
+      ? allProspects.find((p) => p.id === appointment.prospectId)
+      : undefined;
+    const creatorId =
+      (appointment as any).userId ||
+      appointment.createdByUserId ||
+      (appointment as any).assignedUserId ||
+      matchedProspect?.assignedUserId ||
+      matchedProspect?.createdByUserId ||
+      currentUser?.id;
 
     const events: Array<{
       id: string;
@@ -243,6 +369,19 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
     }> = [];
 
     linked.forEach((item) => {
+      let staffName = item.loggedByUserName || 'Staff Member';
+      let staffRole = item.loggedByUserRole
+        ? (roleLabels[item.loggedByUserRole as Role] || String(item.loggedByUserRole).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
+        : undefined;
+
+      if (item.loggedByUserId) {
+        const found = allUsers.find((u: UserEntity) => u.id === item.loggedByUserId);
+        if (found) {
+          staffName = getUserFullName(found) || staffName;
+          staffRole = roleLabels[found.role as Role] || found.role;
+        }
+      }
+
       events.push({
         id: item.id,
         channel: item.channel,
@@ -254,8 +393,8 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
             : `${interactionChannelLabels[item.channel as InteractionChannel] || item.channel} Log`,
         note: item.response,
         timestamp: item.occurredAt || item.createdAt,
-        user: item.loggedByUserName || 'Staff Member',
-        role: item.loggedByUserRole ? String(item.loggedByUserRole) : undefined,
+        user: staffName,
+        role: staffRole,
         type: (item.interactionType as any) || 'interaction',
       });
     });
@@ -268,8 +407,8 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
         title: appointment.source === 'website' ? 'Website Online Booking' : 'Staff Booking Scheduled',
         note: appointment.reason || 'Appointment scheduled by client/staff',
         timestamp: appointment.createdAt,
-        user: appointment.source === 'website' ? 'Website Client' : getStaffName((appointment as any).userId || appointment.createdByUserId),
-        role: appointment.source === 'website' ? 'Client' : 'Staff',
+        user: appointment.source === 'website' ? 'Website Client' : getStaffName(creatorId),
+        role: appointment.source === 'website' ? 'Client' : getStaffRole(creatorId),
         type: 'booking',
       });
     }
@@ -281,7 +420,8 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
         title: `Appointment Feedback (${appointment.status.toUpperCase()})`,
         note: appointment.feedback,
         timestamp: appointment.updatedAt || appointment.createdAt,
-        user: 'Staff Member',
+        user: getStaffName(creatorId),
+        role: getStaffRole(creatorId),
         type: 'status_update',
       });
     }
@@ -297,7 +437,7 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
         staffSet.set(i.loggedByUserId, i.loggedByUserName);
       }
     });
-    allUsers.forEach((u) => {
+    allUsers.forEach((u: UserEntity) => {
       staffSet.set(u.id, getUserFullName(u));
     });
     return Array.from(staffSet.entries()).map(([id, name]) => ({ id, name }));
@@ -591,14 +731,30 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
       key: 'staff',
       width: 140,
       render: (_: any, record: Appointment) => {
-        const staffName = getStaffName((record as any).userId || record.createdByUserId, record.source === 'website' ? 'Website Online' : 'Staff');
+        const matchedProspect = record.prospectId
+          ? allProspects.find((p) => p.id === record.prospectId)
+          : undefined;
+        const staffUserId =
+          (record as any).userId ||
+          record.createdByUserId ||
+          (record as any).assignedUserId ||
+          matchedProspect?.assignedUserId ||
+          matchedProspect?.createdByUserId;
+        const staffName = getStaffName(
+          staffUserId,
+          record.source === 'website' ? 'Website Online' : 'Staff Member'
+        );
+        const staffRole = getStaffRole(
+          staffUserId,
+          record.source === 'website' ? 'Client' : 'Staff Assigned'
+        );
         return (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#87d068' }} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#1677ff' }} />
             <div>
               <div style={{ fontSize: 12, fontWeight: 500, color: '#262626' }}>{staffName}</div>
               <div style={{ fontSize: 10, color: '#8c8c8c' }}>
-                {record.source === 'website' ? 'Client Self-Book' : 'Staff Assigned'}
+                {record.source === 'website' ? 'Client Self-Book' : staffRole}
               </div>
             </div>
           </div>
@@ -774,8 +930,8 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
                               {conf.label}
                             </Tag>
                             {event.role && (
-                              <Tag style={{ margin: 0, fontSize: 10, lineHeight: '18px', padding: '0 4px' }}>
-                                {event.role}
+                              <Tag color="cyan" style={{ margin: 0, fontSize: 10, lineHeight: '18px', padding: '0 4px' }}>
+                                {roleLabels[event.role as Role] || event.role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
                               </Tag>
                             )}
                           </Space>
@@ -846,6 +1002,9 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
               onClick={() => {
                 refetchAppointments();
                 refetchInteractions();
+                refetchProspects();
+                refetchCustomers();
+                refetchUsers();
               }}
               size="small"
             >

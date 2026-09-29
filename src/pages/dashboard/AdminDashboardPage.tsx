@@ -16,6 +16,7 @@ import {
   HistoryOutlined,
   DollarOutlined,
   CalendarOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdminDashboard } from './admin/hooks/useAdminDashboard';
@@ -30,6 +31,8 @@ import { AnalyticsSection } from './admin/components/AnalyticsSection';
 import { CrossSystemActivity } from './admin/components/CrossSystemActivity';
 import { RoleFilteredExpensesTable } from './admin/components/RoleFilteredExpensesTable';
 import { AppointmentCommunicationHistory } from './admin/components/AppointmentCommunicationHistory';
+import { ClientCheckInsTable } from './admin/components/ClientCheckInsTable';
+import { useCheckIns } from '@/utils/visitorCheckIns';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
@@ -127,6 +130,10 @@ export const AdminDashboardPage: React.FC = () => {
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
 
+  // Live visitor check-in records and on-premises counter
+  const { records: visitorRecords } = useCheckIns();
+  const activeVisitorsCount = visitorRecords.filter((r) => r.status === 'in_premises').length;
+
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleExport = (format: 'excel' | 'csv' | 'pdf' | 'json') => {
     exportData(format);
@@ -180,6 +187,9 @@ export const AdminDashboardPage: React.FC = () => {
           </div>
           <div style={{ marginBottom: 20 }}>
             <RoleFilteredExpensesTable />
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <ClientCheckInsTable />
           </div>
           <CrossSystemActivity stats={mockActivityStats} branchName={myBranchName} />
           <RecentActivity
@@ -274,6 +284,29 @@ export const AdminDashboardPage: React.FC = () => {
       children: (
         <RoleFilteredExpensesTable
           title="Role-Filtered Expense Tracking & Disbursement — Dedicated View"
+          style={{ marginBottom: 20 }}
+        />
+      ),
+    },
+    {
+      key: 'client-check-ins',
+      label: (
+        <span className="adp-tab-label">
+          <IdcardOutlined />
+          Client Check-Ins
+          {activeVisitorsCount > 0 && (
+            <Badge
+              count={activeVisitorsCount}
+              size="small"
+              style={{ backgroundColor: '#52c41a', marginLeft: 4 }}
+              title={`${activeVisitorsCount} visitors currently on premises`}
+            />
+          )}
+        </span>
+      ),
+      children: (
+        <ClientCheckInsTable
+          title="Front-Desk Client & Visitor Check-Ins — Dedicated Management"
           style={{ marginBottom: 20 }}
         />
       ),
@@ -400,6 +433,17 @@ export const AdminDashboardPage: React.FC = () => {
             </Button>
 
             <Button
+              icon={<IdcardOutlined />}
+              onClick={() => setActiveTab('client-check-ins')}
+              style={{ borderRadius: 8 }}
+            >
+              Client Check-Ins
+              {activeVisitorsCount > 0 && (
+                <Badge count={activeVisitorsCount} size="small" style={{ backgroundColor: '#52c41a', marginLeft: 6 }} />
+              )}
+            </Button>
+
+            <Button
               type="primary"
               icon={<PlusOutlined />}
               onClick={() => setAddUserModal(true)}
@@ -425,6 +469,8 @@ export const AdminDashboardPage: React.FC = () => {
           onAddProspect={() => setAddProspectModal(true)}
           onAddCustomer={() => setAddCustomerModal(true)}
           onRoleExpenses={() => setActiveTab('role-expenses')}
+          onClientCheckIns={() => setActiveTab('client-check-ins')}
+          activeCheckInsCount={activeVisitorsCount}
         />
       </div>
 

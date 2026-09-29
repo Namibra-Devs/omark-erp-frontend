@@ -9,11 +9,12 @@ import { CalendarOutlined, ClockCircleOutlined, CheckCircleOutlined, UserOutline
 import dayjs from 'dayjs';
 import { useLogInteractionMutation, useProspectsQuery } from '@/api/prospects';
 import { useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
+import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
-import { interactionChannelLabels } from '@/constants/enums';
+import { interactionChannelLabels, roleLabels } from '@/constants/enums';
 import { saveStoredInteraction } from '@/utils/interactionStorage';
-import type { Prospect, InteractionChannel } from '@/types';
+import type { Prospect, InteractionChannel, Role } from '@/types';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -46,6 +47,13 @@ export const LogInteractionModal: React.FC<LogInteractionModalProps> = ({
   // Fetch all prospects if no single prospect was pre-selected (e.g. opened from dashboard)
   const { data: prospectsData } = useProspectsQuery({ pageSize: 1000 });
   const allProspects: Prospect[] = prospectsData?.items ?? [];
+
+  // Fetch all staff users to accurately assign and display interaction logger
+  const { data: usersData } = useUsersQuery({ pageSize: 500 });
+  const allStaffUsers = React.useMemo(() => {
+    const list = usersData?.items ?? [];
+    return list.filter((u: any) => u.isActive !== false);
+  }, [usersData]);
 
   const handleClose = () => {
     form.resetFields();
@@ -90,8 +98,14 @@ export const LogInteractionModal: React.FC<LogInteractionModalProps> = ({
         message.success(`Interaction logged successfully for ${targetProspect.firstName} ${targetProspect.lastName}!`);
       }
 
-      // 3. Save to synchronized interaction storage for instant dashboard timeline and appointment history rendering
-      const staffFullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Staff Member';
+      // 3. Resolve the actual staff member details
+      const selectedStaff = allStaffUsers.find((u) => u.id === values.loggedByUserId) || user;
+      const staffFullName = selectedStaff
+        ? `${(selectedStaff as any).firstName || ''} ${(selectedStaff as any).lastName || ''}`.trim() || (selectedStaff as any).email || 'Staff Member'
+        : 'Staff Member';
+      const staffRole = (selectedStaff as any)?.role || 'customer_service';
+      const staffEmail = (selectedStaff as any)?.email || '';
+
       saveStoredInteraction({
         id: `inter_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
         prospectId: targetProspect.id,
@@ -104,10 +118,10 @@ export const LogInteractionModal: React.FC<LogInteractionModalProps> = ({
         appointmentId: linkedApptId,
         customerId: customerId,
         interactionType: 'communication',
-        loggedByUserId: user?.id || '1',
+        loggedByUserId: selectedStaff?.id || user?.id || '1',
         loggedByUserName: staffFullName,
-        loggedByUserRole: user?.role || 'marketing_staff',
-        loggedByUserEmail: user?.email || '',
+        loggedByUserRole: staffRole,
+        loggedByUserEmail: staffEmail,
         createdAt: new Date().toISOString(),
       });
 
@@ -143,8 +157,29 @@ export const LogInteractionModal: React.FC<LogInteractionModalProps> = ({
         form={form}
         layout="vertical"
         onFinish={handleFinish}
-        initialValues={{ occurredAt: dayjs() }}
+        initialValues={{ occurredAt: dayjs(), loggedByUserId: user?.id }}
       >
+        <Form.Item
+          name="loggedByUserId"
+          label="Staff Member (Logged By)"
+          rules={[{ required: true, message: 'Please select staff member' }]}
+        >
+          <Select
+            showSearch
+            placeholder="Select staff member..."
+            optionFilterProp="children"
+            filterOption={(input, option) =>
+              (option?.children as unknown as string || '').toLowerCase().includes(input.toLowerCase())
+            }
+          >
+            {allStaffUsers.map((u) => (
+              <Option key={u.id} value={u.id}>
+                {getUserFullName(u)} — {roleLabels[u.role as Role] || u.role}
+              </Option>
+            ))}
+          </Select>
+        </Form.Item>
+
         {!prospect && (
           <Form.Item
             name="prospectId"

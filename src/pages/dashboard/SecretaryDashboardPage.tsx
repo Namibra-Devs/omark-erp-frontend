@@ -80,7 +80,9 @@ import {
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
 import type { PaymentPlan, PaymentPlanStatus } from '@/types';
-import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
+import { filterEntitiesByBranch, tagPayloadWithBranch, getUserBranchId } from '@/utils/branchIsolation';
+import { ClientCheckInsTable } from './admin/components/ClientCheckInsTable';
+import { useCheckIns } from '@/utils/visitorCheckIns';
 import {
   createDuplicatePhoneRule,
   createDuplicateNameRule,
@@ -173,6 +175,11 @@ export const SecretaryDashboardPage: React.FC = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
   const { data: branches = [] } = useBranchesQuery();
+  const userBranchId = getUserBranchId(user);
+
+  // Live visitor check-in records for secretary's branch
+  const { records: visitorRecords } = useCheckIns(userBranchId, branches);
+  const activeVisitorsCount = visitorRecords.filter((r) => r.status === 'in_premises').length;
   
   // ── API Queries ────────────────────────────────────────────────────────────
   const { 
@@ -1022,6 +1029,9 @@ export const SecretaryDashboardPage: React.FC = () => {
             onClick={() => navigate('/cs/check-ins')}
           >
             Client Check-Ins
+            {activeVisitorsCount > 0 && (
+              <Badge count={activeVisitorsCount} size="small" style={{ backgroundColor: '#52c41a', marginLeft: 6 }} />
+            )}
           </Button>
           <Button 
             icon={<ReloadOutlined />} 
@@ -1509,6 +1519,14 @@ export const SecretaryDashboardPage: React.FC = () => {
           </Col>
         ))}
       </Row>
+
+      {/* ── Client Check-Ins & Front Desk Activity ─────────────────────── */}
+      <div style={{ marginBottom: 24 }}>
+        <ClientCheckInsTable
+          title="Branch Front-Desk Client & Visitor Check-Ins"
+          branchId={userBranchId}
+        />
+      </div>
 
       {/* ── Action Tables: Full Width Defaulters followed by Due Soon ────────── */}
       <div style={{ marginBottom: 24 }}>

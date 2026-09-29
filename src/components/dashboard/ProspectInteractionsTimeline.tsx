@@ -22,6 +22,7 @@ import {
   DatePicker,
   message,
   Popconfirm,
+  Pagination,
 } from 'antd';
 import {
   PhoneOutlined,
@@ -135,6 +136,8 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
   const [selectedProspect, setSelectedProspect] = useState<string>('all');
   const [selectedChannel, setSelectedChannel] = useState<string>('all');
   const [searchText, setSearchText] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
   
   // Modals for actions
   const [logModalOpen, setLogModalOpen] = useState(false);
@@ -232,9 +235,20 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
     });
   }, [interactions, selectedStaff, selectedProspect, selectedChannel, searchText]);
 
-  const displayedInteractions = maxItems
-    ? filteredInteractions.slice(0, maxItems)
-    : filteredInteractions;
+  const displayedInteractions = useMemo(() => {
+    if (maxItems) {
+      return filteredInteractions.slice(0, maxItems);
+    }
+    const startIndex = (currentPage - 1) * pageSize;
+    return filteredInteractions.slice(startIndex, startIndex + pageSize);
+  }, [filteredInteractions, currentPage, pageSize, maxItems]);
+
+  useEffect(() => {
+    const maxPage = Math.max(1, Math.ceil(filteredInteractions.length / pageSize));
+    if (currentPage > maxPage) {
+      setCurrentPage(1);
+    }
+  }, [filteredInteractions.length, pageSize, currentPage]);
 
   // Compute summary stats
   const stats = useMemo(() => {
@@ -372,7 +386,10 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
               placeholder="Search note, prospect, or staff..."
               allowClear
               value={searchText}
-              onChange={(e) => setSearchText(e.target.value)}
+              onChange={(e) => {
+                setSearchText(e.target.value);
+                setCurrentPage(1);
+              }}
               style={{ width: '100%', borderRadius: 6 }}
             />
           </Col>
@@ -380,12 +397,15 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
             <Select
               style={{ width: '100%' }}
               value={selectedStaff}
-              onChange={setSelectedStaff}
+              onChange={(val) => {
+                setSelectedStaff(val);
+                setCurrentPage(1);
+              }}
               showSearch
               optionFilterProp="children"
               placeholder="Filter by staff member"
             >
-              <Option value="all">👥 All Staff Members ({interactions.length})</Option>
+              <Option value="all">👥 All Staff Members ({staffOptions.length})</Option>
               {staffOptions.map((s) => {
                 const count = interactions.filter(
                   (i) => i.loggedByUserId === s.id || i.loggedByUserName === s.name
@@ -402,7 +422,10 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
             <Select
               style={{ width: '100%' }}
               value={selectedProspect}
-              onChange={setSelectedProspect}
+              onChange={(val) => {
+                setSelectedProspect(val);
+                setCurrentPage(1);
+              }}
               showSearch
               optionFilterProp="children"
               placeholder="Filter by prospect"
@@ -419,7 +442,10 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
             <Select
               style={{ width: '100%' }}
               value={selectedChannel}
-              onChange={setSelectedChannel}
+              onChange={(val) => {
+                setSelectedChannel(val);
+                setCurrentPage(1);
+              }}
               placeholder="Filter by channel"
             >
               <Option value="all">⚡ All Channels</Option>
@@ -435,32 +461,53 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
 
       {/* ── Timeline Display ────────────────────────────────────────────────── */}
       {isLoading ? (
-        <div style={{ textAlign: 'center', padding: '40px 0' }}>
-          <Spin tip="Loading live interaction logs..." />
+        <div style={{ textAlign: 'center', padding: '50px 0' }}>
+          <Spin tip="Connecting to live interaction stream..." size="large" />
         </div>
-      ) : displayedInteractions.length === 0 ? (
+      ) : filteredInteractions.length === 0 ? (
         <Empty
           image={Empty.PRESENTED_IMAGE_SIMPLE}
           description={
-            <span>
-              No interaction logs found matching your filters.{' '}
-              <Button
-                type="link"
-                onClick={() => {
-                  setSelectedStaff('all');
-                  setSelectedProspect('all');
-                  setSelectedChannel('all');
-                  setSearchText('');
-                }}
-              >
-                Reset Filters
-              </Button>
-            </span>
+            <div style={{ padding: '10px 0' }}>
+              <div style={{ fontSize: 15, fontWeight: 600, color: '#434343', marginBottom: 4 }}>
+                {searchText || selectedStaff !== 'all' || selectedProspect !== 'all' || selectedChannel !== 'all'
+                  ? 'No interaction logs match your search filters'
+                  : 'No Staff Interactions Recorded Yet'}
+              </div>
+              <div style={{ color: '#8c8c8c', fontSize: 13, maxWidth: 460, margin: '0 auto 16px' }}>
+                {searchText || selectedStaff !== 'all' || selectedProspect !== 'all' || selectedChannel !== 'all'
+                  ? 'Try clearing or changing your filters to see other logged communications.'
+                  : 'Live interactions logged by staff members across calls, WhatsApp, emails, and office visits will appear here in real-time.'}
+              </div>
+              {searchText || selectedStaff !== 'all' || selectedProspect !== 'all' || selectedChannel !== 'all' ? (
+                <Button
+                  type="default"
+                  onClick={() => {
+                    setSelectedStaff('all');
+                    setSelectedProspect('all');
+                    setSelectedChannel('all');
+                    setSearchText('');
+                    setCurrentPage(1);
+                  }}
+                >
+                  Reset Filters
+                </Button>
+              ) : (
+                <Button
+                  type="primary"
+                  icon={<PlusOutlined />}
+                  onClick={() => setLogModalOpen(true)}
+                >
+                  Log First Interaction
+                </Button>
+              )}
+            </div>
           }
         />
       ) : (
-        <div style={{ maxHeight: '650px', overflowY: 'auto', paddingRight: 6 }}>
-          <Timeline mode="left">
+        <>
+          <div style={{ maxHeight: '680px', overflowY: 'auto', paddingRight: 6 }}>
+            <Timeline mode="left">
             {displayedInteractions.map((item) => {
               const cfg = CHANNEL_CONFIG[item.channel] || CHANNEL_CONFIG.other;
               const formattedDate = dayjs(item.occurredAt).format('MMM D, YYYY · h:mm A');
@@ -824,7 +871,47 @@ export const ProspectInteractionsTimeline: React.FC<ProspectInteractionsTimeline
             })}
           </Timeline>
         </div>
-      )}
+
+        {/* ── Interactive Pagination Controls ────────────────────────────── */}
+        {!maxItems && filteredInteractions.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 12,
+              marginTop: 18,
+              paddingTop: 16,
+              borderTop: '1px solid #f0f0f0',
+            }}
+          >
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              Showing{' '}
+              <strong style={{ color: '#262626' }}>
+                {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, filteredInteractions.length)}
+              </strong>{' '}
+              of <strong style={{ color: '#262626' }}>{filteredInteractions.length}</strong> live interaction logs
+            </Text>
+            <Pagination
+              current={currentPage}
+              pageSize={pageSize}
+              total={filteredInteractions.length}
+              showSizeChanger
+              pageSizeOptions={['5', '10', '20', '50', '100']}
+              onChange={(page, newPageSize) => {
+                setCurrentPage(page);
+                if (newPageSize && newPageSize !== pageSize) {
+                  setPageSize(newPageSize);
+                }
+              }}
+              showTotal={(total, range) => `${range[0]}–${range[1]} of ${total} logs`}
+              size="small"
+            />
+          </div>
+        )}
+      </>
+    )}
 
       {/* Log Interaction Modal Triggerable directly from Dashboard or Item */}
       <LogInteractionModal

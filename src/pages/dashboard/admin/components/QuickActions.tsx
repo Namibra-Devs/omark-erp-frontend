@@ -10,6 +10,7 @@ import {
   FileTextOutlined,
   PlusOutlined,
   BellOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 
 const { Text } = Typography;
@@ -21,6 +22,8 @@ interface QuickActionsProps {
   onAddProspect?: () => void;
   onAddCustomer?: () => void;
   onRoleExpenses?: () => void;
+  onClientCheckIns?: () => void;
+  activeCheckInsCount?: number;
   onRefresh?: () => void;
   onSettings?: () => void;
   onViewNotifications?: () => void;
@@ -35,6 +38,8 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
   onAddProspect,
   onAddCustomer,
   onRoleExpenses,
+  onClientCheckIns,
+  activeCheckInsCount,
   onRefresh,
   onSettings,
   onViewNotifications,
@@ -68,6 +73,15 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
       color: '#13c2c2',
       bg: '#e6fffb',
       onClick: onAddCustomer,
+    }] : []),
+    ...(onClientCheckIns ? [{
+      key: 'client-check-ins',
+      icon: <IdcardOutlined style={{ fontSize: 20 }} />,
+      label: 'Client Check-Ins',
+      description: activeCheckInsCount ? `${activeCheckInsCount} on premises` : 'Front-desk visitor logs',
+      color: '#722ed1',
+      bg: '#f9f0ff',
+      onClick: onClientCheckIns,
     }] : []),
     ...(onRoleExpenses ? [{
       key: 'role-expenses',

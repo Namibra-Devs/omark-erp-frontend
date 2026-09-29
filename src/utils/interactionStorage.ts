@@ -27,117 +27,82 @@ export interface StaffInteraction {
   createdAt: string;
 }
 
-// ── Default realistic seeds if storage is empty ──────────────────────────────
-const DEFAULT_SEED_INTERACTIONS: StaffInteraction[] = [
-  {
-    id: 'inter_seed_1',
-    prospectId: 'pr_seed_1',
-    prospectName: 'Kwame Mensah',
-    prospectPhone: '+233 24 123 4567',
-    prospectSource: 'marketing',
-    channel: 'call',
-    occurredAt: dayjs().subtract(45, 'minute').toISOString(),
-    response: 'Client confirmed interest in 2-bedroom executive detached house in East Legon Hills. Requested payment plan schedule breakdown.',
-    loggedByUserId: 'usr_mkt_1',
-    loggedByUserName: 'Kojo Mensah',
-    loggedByUserRole: 'marketing_staff',
-    loggedByUserEmail: 'kojo.mensah@omark.com',
-    createdAt: dayjs().subtract(45, 'minute').toISOString(),
-  },
-  {
-    id: 'inter_seed_2',
-    prospectId: 'pr_seed_2',
-    prospectName: 'Abena Osei',
-    prospectPhone: '+233 20 888 1234',
-    prospectSource: 'customer_service',
-    channel: 'whatsapp',
-    occurredAt: dayjs().subtract(2, 'hour').toISOString(),
-    response: 'Sent location brochure and price list for Airport Hills gated community. Client will review with spouse and schedule site viewing.',
-    loggedByUserId: 'usr_cs_1',
-    loggedByUserName: 'Grace Asante',
-    loggedByUserRole: 'customer_service',
-    loggedByUserEmail: 'grace.asante@omark.com',
-    createdAt: dayjs().subtract(2, 'hour').toISOString(),
-  },
-  {
-    id: 'inter_seed_3',
-    prospectId: 'pr_seed_3',
-    prospectName: 'Emmanuel Darko',
-    prospectPhone: '+233 27 555 9012',
-    prospectSource: 'marketing',
-    channel: 'in_person',
-    occurredAt: dayjs().subtract(5, 'hour').toISOString(),
-    response: 'Conducted in-person consultation at head office. Walked client through site map and verified land title clearance documentation.',
-    loggedByUserId: 'usr_sec_1',
-    loggedByUserName: 'Ama Serwaa',
-    loggedByUserRole: 'secretary',
-    loggedByUserEmail: 'ama.serwaa@omark.com',
-    createdAt: dayjs().subtract(5, 'hour').toISOString(),
-  },
-  {
-    id: 'inter_seed_4',
-    prospectId: 'pr_seed_4',
-    prospectName: 'Akosua Frimpong',
-    prospectPhone: '+233 55 432 1098',
-    prospectSource: 'marketing',
-    channel: 'call',
-    occurredAt: dayjs().subtract(1, 'day').add(2, 'hour').toISOString(),
-    response: 'Follow-up phone call after weekend inspection. Prospect agreed to 12-month payment installment option for Tema Comm 25 plot.',
-    loggedByUserId: 'usr_mkt_2',
-    loggedByUserName: 'Sarah Baidoo',
-    loggedByUserRole: 'marketing_staff',
-    loggedByUserEmail: 'sarah.baidoo@omark.com',
-    createdAt: dayjs().subtract(1, 'day').add(2, 'hour').toISOString(),
-  },
-  {
-    id: 'inter_seed_5',
-    prospectId: 'pr_seed_5',
-    prospectName: 'Dr. Michael Addo',
-    prospectPhone: '+233 24 999 8877',
-    prospectSource: 'customer_service',
-    channel: 'email',
-    occurredAt: dayjs().subtract(1, 'day').subtract(4, 'hour').toISOString(),
-    response: 'Emailed draft Land Purchase Agreement and biometric KYC verification checklist following initial office inquiry.',
-    loggedByUserId: 'usr_dir_1',
-    loggedByUserName: 'David Osei',
-    loggedByUserRole: 'marketing_director',
-    loggedByUserEmail: 'david.osei@omark.com',
-    createdAt: dayjs().subtract(1, 'day').subtract(4, 'hour').toISOString(),
-  },
-  {
-    id: 'inter_seed_6',
-    prospectId: 'pr_seed_6',
-    prospectName: 'Nana Yaa Boateng',
-    prospectPhone: '+233 26 333 4455',
-    prospectSource: 'marketing',
-    channel: 'sms',
-    occurredAt: dayjs().subtract(2, 'day').toISOString(),
-    response: 'Sent SMS reminder for site visit scheduled for Saturday 10:00 AM at Oyarifa smart homes enclave.',
-    loggedByUserId: 'usr_cs_2',
-    loggedByUserName: 'Prince Boateng',
-    loggedByUserRole: 'customer_service',
-    loggedByUserEmail: 'prince.boateng@omark.com',
-    createdAt: dayjs().subtract(2, 'day').toISOString(),
-  },
-];
+// ── Purge detector for legacy fake/seed interaction records ──────────────────
+export function isFakeOrSeedInteraction(item: any): boolean {
+  if (!item) return true;
+  const id = String(item.id || '');
+  const prospectId = String(item.prospectId || '');
+  const staffName = String(item.loggedByUserName || '').toLowerCase();
+  const staffEmail = String(item.loggedByUserEmail || '').toLowerCase();
+  const response = String(item.response || '').toLowerCase();
+
+  // 1. Synthetic ID patterns
+  if (id.startsWith('inter_seed_') || id.includes('_seed_')) return true;
+  if (prospectId.startsWith('pr_seed_') || prospectId.includes('_seed_')) return true;
+
+  // 2. Synthetic dummy staff member names
+  const fakeNames = [
+    'kojo mensah',
+    'grace asante',
+    'ama serwaa',
+    'sarah baidoo',
+    'david osei',
+    'prince boateng',
+  ];
+  if (fakeNames.some((name) => staffName.includes(name))) return true;
+
+  // 3. Synthetic staff emails
+  const fakeEmails = [
+    'kojo.mensah@omark.com',
+    'grace.asante@omark.com',
+    'ama.serwaa@omark.com',
+    'sarah.baidoo@omark.com',
+    'david.osei@omark.com',
+    'prince.boateng@omark.com',
+  ];
+  if (fakeEmails.some((email) => staffEmail.includes(email))) return true;
+
+  // 4. Synthetic response contents from the legacy mock seed generator
+  const fakePhrases = [
+    '2-bedroom executive detached house in east legon hills',
+    'airport hills gated community',
+    'walked client through site map and verified land title clearance',
+    '12-month payment installment option for tema comm 25 plot',
+    'draft land purchase agreement and biometric kyc',
+    'oyarifa smart homes enclave',
+  ];
+  if (fakePhrases.some((phrase) => response.includes(phrase))) return true;
+
+  return false;
+}
+
+// ── Stored interactions (real user-logged notes only; no synthetic mock seeds) ─
+const DEFAULT_SEED_INTERACTIONS: StaffInteraction[] = [];
 
 // ── Storage getters and setters ──────────────────────────────────────────────
 export function getStoredInteractions(): StaffInteraction[] {
   try {
     const raw = localStorage.getItem(INTERACTIONS_STORAGE_KEY);
     if (!raw) {
-      localStorage.setItem(INTERACTIONS_STORAGE_KEY, JSON.stringify(DEFAULT_SEED_INTERACTIONS));
-      return DEFAULT_SEED_INTERACTIONS;
+      return [];
     }
     const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+    if (Array.isArray(parsed)) {
+      const deletedIds = getDeletedInteractionIds();
+      // Purge all legacy synthetic seeds and deleted items from user's storage
+      const clean = parsed.filter(
+        (item: StaffInteraction) =>
+          item && !isFakeOrSeedInteraction(item) && !deletedIds.has(item.id)
+      );
+      if (clean.length !== parsed.length) {
+        localStorage.setItem(INTERACTIONS_STORAGE_KEY, JSON.stringify(clean));
+      }
+      return clean;
     }
-    localStorage.setItem(INTERACTIONS_STORAGE_KEY, JSON.stringify(DEFAULT_SEED_INTERACTIONS));
-    return DEFAULT_SEED_INTERACTIONS;
+    return [];
   } catch (err) {
     console.error('Failed to read stored staff interactions:', err);
-    return DEFAULT_SEED_INTERACTIONS;
+    return [];
   }
 }
 
@@ -168,8 +133,32 @@ export function saveStoredInteractions(interactions: StaffInteraction[]): void {
   }
 }
 
+export const DELETED_INTERACTIONS_KEY = 'omark_deleted_interaction_ids';
+
+export function getDeletedInteractionIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(DELETED_INTERACTIONS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export function markInteractionDeleted(id: string): void {
+  try {
+    const set = getDeletedInteractionIds();
+    set.add(id);
+    localStorage.setItem(DELETED_INTERACTIONS_KEY, JSON.stringify(Array.from(set)));
+  } catch (err) {
+    console.error('Failed to mark interaction as deleted:', err);
+  }
+}
+
 export function deleteStoredInteraction(id: string): void {
   try {
+    markInteractionDeleted(id);
     const current = getStoredInteractions();
     const next = current.filter((item) => item.id !== id);
     localStorage.setItem(INTERACTIONS_STORAGE_KEY, JSON.stringify(next));

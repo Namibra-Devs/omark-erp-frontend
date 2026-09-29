@@ -224,9 +224,31 @@ export function useUsersQuery(params?: UsersListParams) {
     queryKey: usersKeys.list(params),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<import('@/types').ApiResponse<UserEntity[]>>('/users', { params });
-        const { items, total, page, pageSize } = unwrapList(res);
-        const enrichedItems = items.map((u) => {
+        const requestedLimit = params?.pageSize || 100;
+        const safePageSize = Math.min(requestedLimit, 100);
+        const queryParams = { page: 1, ...params, pageSize: safePageSize };
+        const res = await apiClient.get<import('@/types').ApiResponse<UserEntity[]>>('/users', { params: queryParams });
+        const { items, total, page, pageSize, totalPages } = unwrapList(res);
+
+        let allItems = [...(items || [])];
+        if (requestedLimit > 100 && total > 100 && totalPages && totalPages > 1) {
+          const maxPages = Math.min(totalPages, Math.ceil(requestedLimit / 100));
+          const promises = [];
+          for (let p = 2; p <= maxPages; p++) {
+            promises.push(
+              apiClient
+                .get<import('@/types').ApiResponse<UserEntity[]>>('/users', {
+                  params: { ...queryParams, page: p },
+                })
+                .then((r) => unwrapList(r).items || [])
+                .catch(() => [])
+            );
+          }
+          const otherPages = await Promise.all(promises);
+          otherPages.forEach((pItems) => allItems.push(...pItems));
+        }
+
+        const enrichedItems = allItems.map((u) => {
           const stored = getStoredUserAssignment(u.id);
           if (!stored) return u;
           return {
@@ -238,15 +260,15 @@ export function useUsersQuery(params?: UsersListParams) {
             role: (stored.role as any) || u.role,
           };
         });
-        return { items: enrichedItems, total, page, pageSize } as UsersListResponse;
+        return { items: enrichedItems, total: total || enrichedItems.length, page, pageSize: requestedLimit } as UsersListResponse;
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error('Error fetching users:', {
+          console.warn('Error fetching users, providing safe fallback:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
         }
-        throw error;
+        return { items: [], total: 0, page: 1, pageSize: 100 } as UsersListResponse;
       }
     },
   });

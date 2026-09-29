@@ -63,10 +63,11 @@ import {
 import { useProspectsQuery, useLogInteractionMutation } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import { useAllStaffInteractionsQuery } from '@/api/interactions';
-import { saveStoredInteraction } from '@/utils/interactionStorage';
+import { useUsersQuery, getUserFullName } from '@/api/users';
+import { saveStoredInteraction, isFakeOrSeedInteraction } from '@/utils/interactionStorage';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
-import { interactionChannelLabels } from '@/constants/enums';
-import type { InteractionChannel, Prospect } from '@/types';
+import { interactionChannelLabels, roleLabels } from '@/constants/enums';
+import type { InteractionChannel, Prospect, Role } from '@/types';
 
 type Appointment = ApiAppointment & {
   date: string;
@@ -161,6 +162,28 @@ export const AppointmentsPage: React.FC = () => {
 
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 10000 });
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 10000 });
+  const { data: usersData } = useUsersQuery({ pageSize: 1000 });
+  const allUsers = React.useMemo(() => usersData?.items ?? [], [usersData]);
+
+  // Helper to resolve staff user information with formatted role label
+  const getStaffInfo = (userId?: string, fallbackName = 'Staff Member', fallbackRole = 'Staff') => {
+    if (!userId) return { name: fallbackName, role: fallbackRole };
+    const found = allUsers.find((u) => u.id === userId);
+    if (found) {
+      return {
+        name: getUserFullName(found) || fallbackName,
+        role: roleLabels[found.role as Role] || found.role || fallbackRole,
+      };
+    }
+    if (user && user.id === userId) {
+      const curName = `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || fallbackName;
+      return {
+        name: curName,
+        role: roleLabels[user.role as Role] || user.role || fallbackRole,
+      };
+    }
+    return { name: fallbackName, role: fallbackRole };
+  };
 
   // Opening this page clears the "new appointments" nav badge (see NavMenu.tsx).
   useEffect(() => {
@@ -575,12 +598,32 @@ export const AppointmentsPage: React.FC = () => {
 
   // Helper to compile appointment history and chronological audit trail
   const getAppointmentHistory = (appointment: Appointment) => {
-    const linked = allInteractions.filter(
-      (i) =>
+    const linked = allInteractions.filter((i) => {
+      // Exclude synthetic seed items that have dummy placeholder data
+      if (isFakeOrSeedInteraction(i)) {
+        return false;
+      }
+      return (
         (appointment.id && i.appointmentId === appointment.id) ||
         (appointment.prospectId && i.prospectId === appointment.prospectId) ||
         (appointment.customerId && i.customerId === appointment.customerId)
-    );
+      );
+    });
+
+    const matchedProspect = prospectsData?.items?.find((p) => p.id === appointment.prospectId);
+    const creatorUserId =
+      appointment.createdByUserId ||
+      (appointment as any).userId ||
+      (appointment as any).assignedUserId ||
+      (appointment as any).assignedStaffId ||
+      matchedProspect?.assignedUserId ||
+      (matchedProspect as any)?.createdByUserId;
+
+    const defaultStaffName = user
+      ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Customer Service Officer'
+      : 'Customer Service Officer';
+    const defaultStaffRole = user?.role ? (roleLabels[user.role as Role] || 'Customer Service') : 'Customer Service';
+    const bookingStaff = getStaffInfo(creatorUserId, defaultStaffName, defaultStaffRole);
 
     const events: Array<{
       id: string;
@@ -594,6 +637,22 @@ export const AppointmentsPage: React.FC = () => {
     }> = [];
 
     linked.forEach((item) => {
+      let staffName = item.loggedByUserName;
+      let staffRole = item.loggedByUserRole
+        ? (roleLabels[item.loggedByUserRole as Role] || String(item.loggedByUserRole).replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()))
+        : undefined;
+
+      if (!staffName || staffName === 'Staff Member') {
+        const resolved = getStaffInfo(item.loggedByUserId);
+        staffName = resolved.name;
+        if (!staffRole) staffRole = resolved.role;
+      } else if (item.loggedByUserId) {
+        const found = allUsers.find((u) => u.id === item.loggedByUserId);
+        if (found) {
+          staffRole = roleLabels[found.role as Role] || found.role;
+        }
+      }
+
       events.push({
         id: item.id,
         channel: item.channel,
@@ -605,8 +664,8 @@ export const AppointmentsPage: React.FC = () => {
             : `${interactionChannelLabels[item.channel as InteractionChannel] || item.channel} Log`,
         note: item.response,
         timestamp: item.occurredAt || item.createdAt,
-        user: item.loggedByUserName || 'Staff Member',
-        role: item.loggedByUserRole ? String(item.loggedByUserRole) : undefined,
+        user: staffName || 'Staff Member',
+        role: staffRole,
         type: (item.interactionType as any) || 'interaction',
       });
     });
@@ -619,8 +678,8 @@ export const AppointmentsPage: React.FC = () => {
         title: appointment.source === 'website' ? 'Website Online Booking' : 'Staff Booking Scheduled',
         note: appointment.reason || 'Appointment scheduled by client/staff',
         timestamp: appointment.createdAt,
-        user: appointment.source === 'website' ? 'Website Client' : 'Staff Member',
-        role: appointment.source === 'website' ? 'Client' : 'Staff',
+        user: appointment.source === 'website' ? 'Website Client' : bookingStaff.name,
+        role: appointment.source === 'website' ? 'Client' : bookingStaff.role,
         type: 'booking',
       });
     }
@@ -632,7 +691,8 @@ export const AppointmentsPage: React.FC = () => {
         title: `Appointment Feedback (${appointment.status.toUpperCase()})`,
         note: appointment.feedback,
         timestamp: appointment.updatedAt || appointment.createdAt,
-        user: 'Staff Member',
+        user: bookingStaff.name,
+        role: bookingStaff.role,
         type: 'status_update',
       });
     }
@@ -662,6 +722,20 @@ export const AppointmentsPage: React.FC = () => {
     const statusConfig = getStatusConfig(selectedAppointment.status);
     const sourceConfig = getSourceConfig(selectedAppointment.source);
     const appointmentHistory = getAppointmentHistory(selectedAppointment);
+
+    const matchedProspect = prospectsData?.items?.find((p) => p.id === selectedAppointment.prospectId);
+    const creatorUserId =
+      selectedAppointment.createdByUserId ||
+      (selectedAppointment as any).userId ||
+      (selectedAppointment as any).assignedUserId ||
+      (selectedAppointment as any).assignedStaffId ||
+      matchedProspect?.assignedUserId ||
+      (matchedProspect as any)?.createdByUserId;
+    const defaultStaffName = user
+      ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Customer Service Officer'
+      : 'Customer Service Officer';
+    const defaultStaffRole = user?.role ? (roleLabels[user.role as Role] || 'Customer Service') : 'Customer Service';
+    const bookingStaff = getStaffInfo(creatorUserId, defaultStaffName, defaultStaffRole);
 
     return (
       <div style={{ height: '100%' }}>
@@ -792,6 +866,14 @@ export const AppointmentsPage: React.FC = () => {
                     {sourceConfig.label}
                   </Tag>
                 </Descriptions.Item>
+                {selectedAppointment.source !== 'website' && (
+                  <Descriptions.Item label={<Space><IdcardOutlined /> Booked By</Space>}>
+                    <Space size={6}>
+                      <Text strong>{bookingStaff.name}</Text>
+                      <Tag color="blue">{bookingStaff.role}</Tag>
+                    </Space>
+                  </Descriptions.Item>
+                )}
                 {selectedAppointment.reason && (
                   <Descriptions.Item label="Purpose / Agenda">
                     <Text strong style={{ color: '#1e293b' }}>{selectedAppointment.reason}</Text>
@@ -921,8 +1003,8 @@ export const AppointmentsPage: React.FC = () => {
                                   {item.user}
                                 </Text>
                                 {item.role && (
-                                  <Tag style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>
-                                    {item.role}
+                                  <Tag color="cyan" style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>
+                                    {roleLabels[item.role as Role] || item.role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
                                   </Tag>
                                 )}
                               </Space>
@@ -1533,6 +1615,11 @@ export const AppointmentsPage: React.FC = () => {
                             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                               <Tag color={cfg.color} style={{ margin: 0, fontSize: 11 }}>{item.title}</Tag>
                               <Text strong style={{ fontSize: 12 }}>{item.user}</Text>
+                              {item.role && (
+                                <Tag color="cyan" style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>
+                                  {roleLabels[item.role as Role] || item.role.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
+                                </Tag>
+                              )}
                               <Text type="secondary" style={{ fontSize: 11 }}>
                                 {dayjs(item.timestamp).format('MMM D, h:mm A')} ({dayjs(item.timestamp).fromNow()})
                               </Text>

@@ -20,6 +20,7 @@ export interface AppointmentsListResult {
   total: number;
   page: number;
   pageSize: number;
+  totalPages?: number;
 }
 
 export interface CreateAppointmentPayload {
@@ -62,10 +63,42 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
     queryKey: appointmentsKeys.list(params),
     queryFn: async () => {
       try {
-        const safePageSize = params?.pageSize ? Math.min(params.pageSize, 100) : 100;
-        const requestParams = { page: 1, pageSize: safePageSize, ...params };
+        const requestedLimit = params?.pageSize || 100;
+        const safePageSize = Math.min(requestedLimit, 100);
+        const requestParams = { page: 1, ...params, pageSize: safePageSize };
         const response = await apiClient.get<ApiResponse<Appointment[]>>('/appointments', { params: requestParams });
-        return unwrapList(response) as AppointmentsListResult;
+        const result = unwrapList(response) as AppointmentsListResult;
+
+        let allItems = result.items || [];
+        const totalPages = result.totalPages || (result.total ? Math.ceil(result.total / safePageSize) : 1);
+
+        // If caller requested more than 100 items and total exceeds 100, fetch next pages up to requested limit
+        if (requestedLimit > 100 && result.total > 100 && totalPages > 1) {
+          const maxPagesToFetch = Math.min(totalPages, Math.ceil(requestedLimit / 100));
+          const pagePromises = [];
+          for (let p = 2; p <= maxPagesToFetch; p++) {
+            pagePromises.push(
+              apiClient.get<ApiResponse<Appointment[]>>('/appointments', {
+                params: { ...requestParams, page: p },
+              }).catch(() => null)
+            );
+          }
+          const pageResponses = await Promise.all(pagePromises);
+          pageResponses.forEach((res) => {
+            if (res) {
+              const extra = unwrapList(res).items || [];
+              allItems.push(...extra);
+            }
+          });
+        }
+
+        return {
+          items: allItems,
+          total: result.total,
+          page: result.page,
+          pageSize: requestedLimit,
+          totalPages,
+        } as AppointmentsListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.warn('Error fetching appointments, providing safe fallback:', {

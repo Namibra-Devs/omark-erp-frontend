@@ -36,6 +36,7 @@ import {
 import { getStoredEntityBranch, recordEntityBranch, getBranchCanonicalKey } from '@/utils/branchIsolation';
 
 import { getStoredActivities } from '@/utils/activityNotificationEngine';
+import { getCheckIns, visitorCategoryLabels } from '@/utils/visitorCheckIns';
 
 // There is no activity-log endpoint anywhere in this API — "recent
 // activity" spanning attendance/payroll/prospects/appointments/properties/customers/deeds is
@@ -132,6 +133,15 @@ const buildLiveActivityLog = (params: {
       timestamp: formatTs(d.generatedAt || d.createdAt || ''),
       type: 'success',
       _sortKey: d.generatedAt || d.createdAt || '',
+    })),
+    ...getCheckIns().map((c): LiveActivityEntry => ({
+      id: `checkin-${c.id}`,
+      user: c.handledByName || 'Front Desk',
+      action: c.status === 'completed' ? 'Visitor Checked Out' : c.status === 'in_premises' ? 'Visitor On Premises' : 'Visitor Checked In',
+      details: `${c.visitorName} (${visitorCategoryLabels[c.category]?.label || c.category}) — ${c.purpose}${c.hostStaffName ? ` (Host: ${c.hostStaffName})` : ''}`,
+      timestamp: formatTs(c.checkOutTime || c.checkInTime || c.createdAt),
+      type: c.status === 'completed' ? 'success' : c.status === 'in_premises' ? 'info' : 'warning',
+      _sortKey: c.checkOutTime || c.checkInTime || c.createdAt,
     })),
   ];
 

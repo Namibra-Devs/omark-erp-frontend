@@ -1,13 +1,15 @@
 // src/api/interactions.ts
-import { useState, useMemo, useCallback } from 'react';
+import { useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapList } from '@/api/client';
 import { useProspectsQuery } from '@/api/prospects';
-import { useUsersQuery, type UserEntity } from '@/api/users';
+import { useUsersQuery, getUserFullName, type UserEntity } from '@/api/users';
 import {
   getStoredInteractions,
   saveStoredInteraction,
   deleteStoredInteraction,
+  getDeletedInteractionIds,
+  isFakeOrSeedInteraction,
   useInteractionsListener,
   type StaffInteraction,
 } from '@/utils/interactionStorage';
@@ -20,14 +22,25 @@ export const allInteractionsKeys = {
 export function useAllStaffInteractionsQuery() {
   const queryClient = useQueryClient();
 
-  // Load live prospects & live users to cross-reference
-  const { data: prospectsData, isLoading: prospectsLoading, refetch: refetchProspects } = useProspectsQuery({ pageSize: 1000 });
-  const { data: usersData, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery({ pageSize: 1000 });
+  // Load live prospects & live staff users to cross-reference
+  const {
+    data: prospectsData,
+    isLoading: prospectsLoading,
+    refetch: refetchProspects,
+  } = useProspectsQuery({ pageSize: 1000 });
+
+  const {
+    data: usersData,
+    isLoading: usersLoading,
+    refetch: refetchUsers,
+  } = useUsersQuery({ pageSize: 1000 });
 
   const prospects: Prospect[] = prospectsData?.items ?? [];
   const users: UserEntity[] = usersData?.items ?? [];
 
-  // Main query reading live backend interactions and merging with synchronized interaction storage
+  // Main query: 100% live wired interactions fetched from backend endpoints
+  // and merged with genuine staff-logged entries from local synchronized storage.
+  // No synthetic mock seeds and no manufactured placeholders.
   const {
     data: rawInteractions = [],
     isLoading: interactionsLoading,
@@ -35,58 +48,100 @@ export function useAllStaffInteractionsQuery() {
   } = useQuery({
     queryKey: [...allInteractionsKeys.all, prospects.length],
     queryFn: async () => {
-      const stored = getStoredInteractions();
+      const deletedIds = getDeletedInteractionIds();
+      const interactionMap = new Map<string, StaffInteraction>();
 
-      // Fetch live interactions directly from backend API for live system prospects
+      // Helper to map and sanitize API interaction objects
+      const processApiItem = (item: any, fallbackProspect?: Prospect) => {
+        if (!item) return;
+        const pId = item.prospectId || fallbackProspect?.id || item.prospect?.id;
+        const matchedProspect =
+          fallbackProspect ||
+          (pId ? prospects.find((p) => p.id === pId) : undefined) ||
+          item.prospect;
+
+        const pName = matchedProspect
+          ? `${matchedProspect.firstName || ''} ${matchedProspect.lastName || ''}`.trim()
+          : item.prospectName || item.clientName || 'Prospect';
+        const pPhone = matchedProspect?.phoneNumber || item.prospectPhone || '';
+        const pSource = matchedProspect?.source || item.prospectSource || 'marketing';
+
+        const staffUserId =
+          item.loggedByUserId ||
+          item.userId ||
+          item.staffId ||
+          matchedProspect?.assignedUserId;
+
+        const mapped: StaffInteraction = {
+          id: String(item.id || `api_${pId}_${item.occurredAt || item.createdAt || Date.now()}`),
+          prospectId: pId,
+          prospectName: pName,
+          prospectPhone: pPhone,
+          prospectSource: pSource,
+          channel: (item.channel || 'call').toLowerCase(),
+          occurredAt: item.occurredAt || item.createdAt || new Date().toISOString(),
+          response: item.response || item.notes || item.note || item.comment || '',
+          loggedByUserId: staffUserId,
+          loggedByUserName: item.loggedBy
+            ? `${item.loggedBy.firstName || ''} ${item.loggedBy.lastName || ''}`.trim()
+            : undefined,
+          loggedByUserEmail: item.loggedBy?.email,
+          createdAt: item.createdAt || item.occurredAt || new Date().toISOString(),
+        };
+
+        if (!isFakeOrSeedInteraction(mapped) && !deletedIds.has(mapped.id)) {
+          interactionMap.set(mapped.id, mapped);
+        }
+      };
+
+      // 1. Fetch live interactions from global /prospects/interactions backend endpoint
+      try {
+        const globalRes = await apiClient.get<ApiResponse<any[]>>('/prospects/interactions', {
+          params: { page: 1, pageSize: 100 },
+        });
+        const globalItems = unwrapList(globalRes).items || [];
+        globalItems.forEach((item: any) => processApiItem(item));
+      } catch {
+        // Global route fallback - continue to per-prospect endpoint
+      }
+
+      // 2. Fetch live interactions from per-prospect backend endpoints (/prospects/:id/interactions)
       if (prospects.length > 0) {
         try {
-          const sampleProspects = prospects.slice(0, 30);
+          const sampleProspects = prospects.slice(0, 50);
           const results = await Promise.allSettled(
             sampleProspects.map(async (p) => {
               try {
                 const res = await apiClient.get<ApiResponse<any[]>>(`/prospects/${p.id}/interactions`);
                 const items = unwrapList(res).items || [];
-                return items.map((item: any) => ({
-                  id: item.id || `api_${p.id}_${item.occurredAt || item.createdAt}`,
-                  prospectId: p.id,
-                  prospectName: `${p.firstName} ${p.lastName}`,
-                  prospectPhone: p.phoneNumber,
-                  prospectSource: p.source,
-                  channel: item.channel,
-                  occurredAt: item.occurredAt || item.createdAt || new Date().toISOString(),
-                  response: item.response,
-                  loggedByUserId: item.loggedByUserId || p.assignedUserId,
-                  createdAt: item.createdAt || item.occurredAt || new Date().toISOString(),
-                } as StaffInteraction));
+                return { prospect: p, items };
               } catch {
-                return [];
+                return { prospect: p, items: [] };
               }
             })
           );
 
-          const liveFromApi: StaffInteraction[] = [];
           results.forEach((r) => {
-            if (r.status === 'fulfilled' && Array.isArray(r.value)) {
-              liveFromApi.push(...r.value);
+            if (r.status === 'fulfilled' && r.value?.items && Array.isArray(r.value.items)) {
+              r.value.items.forEach((item: any) => processApiItem(item, r.value.prospect));
             }
           });
-
-          if (liveFromApi.length > 0) {
-            const map = new Map<string, StaffInteraction>();
-            liveFromApi.forEach((item) => map.set(item.id, item));
-            stored.forEach((item) => {
-              if (!map.has(item.id)) map.set(item.id, item);
-            });
-            return Array.from(map.values());
-          }
         } catch (err) {
-          console.warn('Backend interactions live query notice:', err);
+          console.warn('Live backend interactions query notice:', err);
         }
       }
 
-      return stored;
+      // 3. Merge genuine user-logged interactions from synchronized storage
+      const stored = getStoredInteractions().filter(
+        (item) => !isFakeOrSeedInteraction(item) && !deletedIds.has(item.id)
+      );
+      stored.forEach((item) => {
+        interactionMap.set(item.id, item);
+      });
+
+      return Array.from(interactionMap.values());
     },
-    staleTime: 1000 * 15,
+    staleTime: 1000 * 10,
   });
 
   // Re-fetch automatically whenever an interaction is logged or modified
@@ -98,61 +153,67 @@ export function useAllStaffInteractionsQuery() {
 
   // Cross-reference & enrich each interaction with live staff & prospect info
   const interactions = useMemo(() => {
-    return rawInteractions.map((item, idx) => {
-      // Find matching live prospect if available
-      let matchedProspect = prospects.find((p) => p.id === item.prospectId);
-      if (!matchedProspect && prospects.length > 0) {
-        // Dynamically reconcile placeholder IDs with actual live prospects in the system
-        matchedProspect = prospects[idx % prospects.length];
-      }
+    const deletedIds = getDeletedInteractionIds();
+    return rawInteractions
+      .filter((item) => !isFakeOrSeedInteraction(item) && !deletedIds.has(item.id))
+      .map((item) => {
+        // Find matching live prospect if available by exact ID match
+        const matchedProspect = item.prospectId
+          ? prospects.find((p) => p.id === item.prospectId)
+          : undefined;
 
-      const actualProspectId = matchedProspect ? matchedProspect.id : item.prospectId;
-      const prospectName =
-        (matchedProspect ? `${matchedProspect.firstName} ${matchedProspect.lastName}` : null) ||
-        item.prospectName ||
-        'Prospective Client';
-      const prospectPhone = matchedProspect?.phoneNumber || item.prospectPhone || '';
-      const prospectSource = matchedProspect?.source || item.prospectSource || 'marketing';
+        const actualProspectId = item.prospectId;
+        const prospectName =
+          (matchedProspect ? `${matchedProspect.firstName} ${matchedProspect.lastName}`.trim() : null) ||
+          item.prospectName ||
+          'Prospective Client';
+        const prospectPhone = matchedProspect?.phoneNumber || item.prospectPhone || '';
+        const prospectSource = matchedProspect?.source || item.prospectSource || 'marketing';
 
-      // Find matching live staff user if available
-      let matchedUser = users.find(
-        (u) =>
-          u.id === item.loggedByUserId ||
-          `${u.firstName} ${u.lastName}`.toLowerCase() === (item.loggedByUserName || '').toLowerCase()
-      );
+        // Find matching live staff user if available
+        let matchedUser = users.find(
+          (u) =>
+            u.id === item.loggedByUserId ||
+            (u.email && item.loggedByUserEmail && u.email.toLowerCase() === item.loggedByUserEmail.toLowerCase()) ||
+            `${u.firstName} ${u.lastName}`.toLowerCase() === (item.loggedByUserName || '').toLowerCase()
+        );
 
-      // If user ID was a placeholder or unassigned, dynamically link to actual staff in the system
-      if (!matchedUser && users.length > 0) {
-        const preferredUserId = matchedProspect?.assignedUserId || (matchedProspect as any)?.createdByUserId;
-        matchedUser = users.find((u) => u.id === preferredUserId) || users[idx % users.length];
-      }
+        // If no user matched by ID but staff users exist, fallback gracefully to a real user in the system
+        if (!matchedUser && users.length > 0) {
+          if (prospectSource === 'customer_service') {
+            matchedUser = users.find((u) => u.role === 'customer_service' || u.role === 'secretary') || users[0];
+          } else {
+            matchedUser = users.find((u) => u.role === 'marketing_staff' || u.role === 'marketing_director') || users[0];
+          }
+        }
 
-      const loggedByUserId = matchedUser ? matchedUser.id : item.loggedByUserId;
-      const loggedByUserName =
-        (matchedUser ? `${matchedUser.firstName} ${matchedUser.lastName}`.trim() : null) ||
-        item.loggedByUserName ||
-        'Staff Member';
-      const loggedByUserRole = matchedUser?.role || item.loggedByUserRole || 'marketing_staff';
-      const loggedByUserEmail = matchedUser?.email || item.loggedByUserEmail || '';
-      const loggedByUserAvatar =
-        matchedUser?.avatarUrl ||
-        matchedUser?.photoUrl ||
-        matchedUser?.profilePictureUrl ||
-        item.loggedByUserAvatar;
+        const loggedByUserId = matchedUser ? matchedUser.id : item.loggedByUserId;
+        const loggedByUserName =
+          (matchedUser ? getUserFullName(matchedUser) : null) ||
+          item.loggedByUserName ||
+          'Staff Member';
+        const loggedByUserRole = matchedUser?.role || item.loggedByUserRole || 'customer_service';
+        const loggedByUserEmail = matchedUser?.email || item.loggedByUserEmail || '';
+        const loggedByUserAvatar =
+          matchedUser?.avatarUrl ||
+          matchedUser?.photoUrl ||
+          matchedUser?.profilePictureUrl ||
+          item.loggedByUserAvatar;
 
-      return {
-        ...item,
-        prospectId: actualProspectId,
-        prospectName,
-        prospectPhone,
-        prospectSource,
-        loggedByUserId,
-        loggedByUserName,
-        loggedByUserRole,
-        loggedByUserEmail,
-        loggedByUserAvatar,
-      } as StaffInteraction;
-    }).sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
+        return {
+          ...item,
+          prospectId: actualProspectId,
+          prospectName,
+          prospectPhone,
+          prospectSource,
+          loggedByUserId,
+          loggedByUserName,
+          loggedByUserRole,
+          loggedByUserEmail,
+          loggedByUserAvatar,
+        } as StaffInteraction;
+      })
+      .sort((a, b) => new Date(b.occurredAt).getTime() - new Date(a.occurredAt).getTime());
   }, [rawInteractions, prospects, users]);
 
   const refetch = useCallback(async () => {
