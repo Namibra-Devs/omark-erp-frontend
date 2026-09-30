@@ -1157,13 +1157,19 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
             <Select
               style={{ width: '100%' }}
               value={dateFilter}
-              onChange={(val) => setDateFilter(val as any)}
+              onChange={(val) => {
+                setDateFilter(val as any);
+                if (val === 'all') setCustomDateRange(null);
+                else if (val === 'today') setCustomDateRange([dayjs().startOf('day'), dayjs().endOf('day')]);
+                else if (val === 'weekly') setCustomDateRange([dayjs().startOf('week'), dayjs().endOf('week')]);
+                else if (val === 'monthly') setCustomDateRange([dayjs().startOf('month'), dayjs().endOf('month')]);
+              }}
             >
-              <Option value="all">All Time</Option>
-              <Option value="today">Today</Option>
-              <Option value="weekly">This Week</Option>
-              <Option value="monthly">This Month</Option>
-              <Option value="custom">Custom Date Range</Option>
+              <Option value="all">📅 All Time</Option>
+              <Option value="today">☀️ Today</Option>
+              <Option value="weekly">📆 This Week</Option>
+              <Option value="monthly">🗓️ This Month</Option>
+              <Option value="custom">🎯 Custom Date Range</Option>
             </Select>
           </Col>
 
@@ -1171,7 +1177,26 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
             <Col xs={24} md={8}>
               <DatePicker.RangePicker
                 style={{ width: '100%' }}
-                onChange={(dates) => setCustomDateRange(dates as any)}
+                value={customDateRange}
+                onChange={(dates) => {
+                  if (dates && dates[0] && dates[1]) {
+                    setCustomDateRange(dates as any);
+                  } else {
+                    setCustomDateRange(null);
+                    setDateFilter('all');
+                  }
+                }}
+                format="YYYY-MM-DD"
+                allowClear
+                presets={[
+                  { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] },
+                  { label: 'Yesterday', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] },
+                  { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('week')] },
+                  { label: 'Last 7 Days', value: [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')] },
+                  { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('month')] },
+                  { label: 'Last Month', value: [dayjs().subtract(1, 'month').startOf('month'), dayjs().subtract(1, 'month').endOf('month')] },
+                  { label: 'This Year', value: [dayjs().startOf('year'), dayjs().endOf('year')] },
+                ]}
               />
             </Col>
           )}

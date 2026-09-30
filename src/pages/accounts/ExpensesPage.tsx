@@ -276,24 +276,77 @@ export const ExpensesPage: React.FC = () => {
     setAddModalOpen(true);
   };
 
-  // ── Counts for Tabs ────────────────────────────────────────────────────────
-  const counts = useMemo(() => {
-    return {
-      all: branchExpenses.length,
-      pending: branchExpenses.filter((e) => e.status === 'pending').length,
-      approved: branchExpenses.filter((e) => e.status === 'approved').length,
-      rejected: branchExpenses.filter((e) => e.status === 'rejected').length,
-    };
-  }, [branchExpenses]);
+  // ── Date Range Presets for RangePicker ────────────────────────────────────
+  const rangePresets = useMemo(() => [
+    { label: 'Today', value: [dayjs().startOf('day'), dayjs().endOf('day')] as [dayjs.Dayjs, dayjs.Dayjs] },
+    { label: 'Yesterday', value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')] as [dayjs.Dayjs, dayjs.Dayjs] },
+    { label: 'This Week', value: [dayjs().startOf('week'), dayjs().endOf('week')] as [dayjs.Dayjs, dayjs.Dayjs] },
+    { label: 'Last 7 Days', value: [dayjs().subtract(6, 'day').startOf('day'), dayjs().endOf('day')] as [dayjs.Dayjs, dayjs.Dayjs] },
+    { label: 'This Month', value: [dayjs().startOf('month'), dayjs().endOf('month')] as [dayjs.Dayjs, dayjs.Dayjs] },
+    { label: 'Last Month', value: [dayjs().subtract(1, 'month').startOf('month'), dayjs().subtract(1, 'month').endOf('month')] as [dayjs.Dayjs, dayjs.Dayjs] },
+    { label: 'This Year', value: [dayjs().startOf('year'), dayjs().endOf('year')] as [dayjs.Dayjs, dayjs.Dayjs] },
+  ], []);
 
-  // ── Filter Expenses ───────────────────────────────────────────────────────
-  const filteredExpenses = useMemo(() => {
+  const handleDateRangeChange = (dates: any) => {
+    if (dates && dates[0] && dates[1]) {
+      setCustomDateRange([dates[0], dates[1]]);
+      setDateFilter('custom');
+    } else {
+      setCustomDateRange(null);
+      setDateFilter('all');
+    }
+  };
+
+  const handleQuickDateFilter = (filter: 'all' | 'today' | 'weekly' | 'monthly' | 'yearly') => {
+    setDateFilter(filter);
+    if (filter === 'all') {
+      setCustomDateRange(null);
+    } else if (filter === 'today') {
+      setCustomDateRange([dayjs().startOf('day'), dayjs().endOf('day')]);
+    } else if (filter === 'weekly') {
+      setCustomDateRange([dayjs().startOf('week'), dayjs().endOf('week')]);
+    } else if (filter === 'monthly') {
+      setCustomDateRange([dayjs().startOf('month'), dayjs().endOf('month')]);
+    } else if (filter === 'yearly') {
+      setCustomDateRange([dayjs().startOf('year'), dayjs().endOf('year')]);
+    }
+  };
+
+  const handleResetFilters = () => {
+    setSearchText('');
+    setStatusFilter('all');
+    setCategoryFilter('all');
+    setTypeFilter('all');
+    setBranchFilter('all');
+    setDateFilter('all');
+    setCustomDateRange(null);
+    message.info('Filters reset to default');
+  };
+
+  const isFiltered = Boolean(
+    searchText ||
+    statusFilter !== 'all' ||
+    categoryFilter !== 'all' ||
+    typeFilter !== 'all' ||
+    branchFilter !== 'all' ||
+    dateFilter !== 'all' ||
+    customDateRange
+  );
+
+  const activeDateRangeLabel = useMemo(() => {
+    if (customDateRange && customDateRange[0] && customDateRange[1]) {
+      return `${customDateRange[0].format('MMM D, YYYY')} – ${customDateRange[1].format('MMM D, YYYY')}`;
+    }
+    if (dateFilter === 'today') return `Today (${dayjs().format('MMM D, YYYY')})`;
+    if (dateFilter === 'weekly') return `This Week (${dayjs().startOf('week').format('MMM D')} – ${dayjs().endOf('week').format('MMM D')})`;
+    if (dateFilter === 'monthly') return `This Month (${dayjs().format('MMMM YYYY')})`;
+    if (dateFilter === 'yearly') return `This Year (${dayjs().format('YYYY')})`;
+    return null;
+  }, [dateFilter, customDateRange]);
+
+  // ── Filter Expenses (Base: Branch, Search, Category, Type, Date Range) ──────
+  const baseFilteredExpenses = useMemo(() => {
     return branchExpenses.filter((e) => {
-      // Status Filter
-      if (statusFilter !== 'all' && e.status !== statusFilter) {
-        return false;
-      }
-
       // Branch Filter
       if (branchFilter !== 'all') {
         const matchesDirect = e.branchId === branchFilter;
@@ -326,30 +379,50 @@ export const ExpensesPage: React.FC = () => {
         return false;
       }
 
-      // Date
-      if (dateFilter !== 'all') {
-        const date = dayjs(e.incurredOn || e.createdAt);
+      // Date Range Filter
+      if (customDateRange && customDateRange[0] && customDateRange[1]) {
+        const rawDate = e.incurredOn || e.createdAt;
+        const date = rawDate ? dayjs(rawDate) : null;
+        if (!date || !date.isValid()) return false;
+        const start = customDateRange[0].startOf('day');
+        const end = customDateRange[1].endOf('day');
+        if (date.isBefore(start) || date.isAfter(end)) return false;
+      } else if (dateFilter !== 'all') {
+        const rawDate = e.incurredOn || e.createdAt;
+        const date = rawDate ? dayjs(rawDate) : null;
+        if (!date || !date.isValid()) return false;
         const now = dayjs();
         if (dateFilter === 'today' && !date.isSame(now, 'day')) return false;
         if (dateFilter === 'weekly' && !date.isSame(now, 'week')) return false;
         if (dateFilter === 'monthly' && !date.isSame(now, 'month')) return false;
         if (dateFilter === 'yearly' && !date.isSame(now, 'year')) return false;
-        if (dateFilter === 'custom' && customDateRange && customDateRange[0] && customDateRange[1]) {
-          const start = customDateRange[0].startOf('day');
-          const end = customDateRange[1].endOf('day');
-          if (date.isBefore(start) || date.isAfter(end)) return false;
-        }
       }
 
       return true;
     });
-  }, [branchExpenses, statusFilter, branchFilter, searchText, categoryFilter, typeFilter, dateFilter, customDateRange]);
+  }, [branchExpenses, branchFilter, searchText, categoryFilter, typeFilter, dateFilter, customDateRange, branches]);
+
+  // ── Counts for Status Tabs (Dynamic to selected date range & dimensions) ─────
+  const counts = useMemo(() => {
+    return {
+      all: baseFilteredExpenses.length,
+      pending: baseFilteredExpenses.filter((e) => e.status === 'pending').length,
+      approved: baseFilteredExpenses.filter((e) => e.status === 'approved').length,
+      rejected: baseFilteredExpenses.filter((e) => e.status === 'rejected').length,
+    };
+  }, [baseFilteredExpenses]);
+
+  // ── Final Filtered Expenses (Status Tab Applied) ────────────────────────────
+  const filteredExpenses = useMemo(() => {
+    if (statusFilter === 'all') return baseFilteredExpenses;
+    return baseFilteredExpenses.filter((e) => e.status === statusFilter);
+  }, [baseFilteredExpenses, statusFilter]);
 
   // ── Metrics ───────────────────────────────────────────────────────────────
   const metrics = useMemo(() => {
     const totalMinor = filteredExpenses.reduce((sum, e) => sum + (e.amountMinor || 0), 0);
     const approvedMinor = filteredExpenses.filter((e) => e.status === 'approved').reduce((sum, e) => sum + (e.amountMinor || 0), 0);
-    const pendingMinor = branchExpenses.filter((e) => e.status === 'pending').reduce((sum, e) => sum + (e.amountMinor || 0), 0);
+    const pendingMinor = baseFilteredExpenses.filter((e) => e.status === 'pending').reduce((sum, e) => sum + (e.amountMinor || 0), 0);
     const internalMinor = filteredExpenses.filter((e) => e.type === 'internal').reduce((sum, e) => sum + (e.amountMinor || 0), 0);
     const externalMinor = filteredExpenses.filter((e) => e.type === 'external').reduce((sum, e) => sum + (e.amountMinor || 0), 0);
     const count = filteredExpenses.length;
@@ -362,7 +435,7 @@ export const ExpensesPage: React.FC = () => {
       externalGHS: externalMinor / 100,
       count,
     };
-  }, [filteredExpenses, branchExpenses]);
+  }, [filteredExpenses, baseFilteredExpenses]);
 
   // ── Analytics Data (Category Breakdown & Branch Spend) ────────────────────
   const categoryChartData = useMemo(() => {
@@ -495,9 +568,11 @@ export const ExpensesPage: React.FC = () => {
       'data:text/csv;charset=utf-8,\uFEFF' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute('download', `omark_expenses_${dayjs().format('YYYY-MM-DD')}.csv`);
-    document.body.appendChild(link);
+    const rangeSuffix =
+      customDateRange && customDateRange[0] && customDateRange[1]
+        ? `_${customDateRange[0].format('YYYYMMDD')}_to_${customDateRange[1].format('YYYYMMDD')}`
+        : `_${dayjs().format('YYYY-MM-DD')}`;
+    link.setAttribute('download', `omark_expenses${rangeSuffix}.csv`);
     link.click();
     document.body.removeChild(link);
     message.success(`Exported ${filteredExpenses.length} expense records to CSV!`);
@@ -910,7 +985,7 @@ export const ExpensesPage: React.FC = () => {
       {/* ── COMMAND & FILTERS BAR ────────────────────────────────────────── */}
       <Card style={{ marginBottom: 16, borderRadius: 10, boxShadow: '0 2px 8px rgba(0,0,0,0.03)' }}>
         <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} sm={12} md={5}>
+          <Col xs={24} sm={12} md={8} lg={6}>
             <Input
               placeholder="Search code, category, staff..."
               prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
@@ -920,7 +995,7 @@ export const ExpensesPage: React.FC = () => {
               size="middle"
             />
           </Col>
-          <Col xs={12} sm={6} md={4}>
+          <Col xs={12} sm={6} md={8} lg={4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Branch"
@@ -936,7 +1011,7 @@ export const ExpensesPage: React.FC = () => {
               ))}
             </Select>
           </Col>
-          <Col xs={12} sm={6} md={4}>
+          <Col xs={12} sm={6} md={8} lg={4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Expense Type"
@@ -949,7 +1024,7 @@ export const ExpensesPage: React.FC = () => {
               <Option value="external">🚚 External / Projects</Option>
             </Select>
           </Col>
-          <Col xs={12} sm={6} md={4}>
+          <Col xs={12} sm={6} md={8} lg={4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Category"
@@ -967,35 +1042,95 @@ export const ExpensesPage: React.FC = () => {
               ))}
             </Select>
           </Col>
-          <Col xs={12} sm={6} md={4}>
-            <Select
-              style={{ width: '100%' }}
-              value={dateFilter}
-              onChange={(val) => {
-                setDateFilter(val);
-                if (val !== 'custom') setCustomDateRange(null);
-              }}
-              size="middle"
-              prefix={<CalendarOutlined style={{ color: '#8c8c8c' }} />}
-            >
-              <Option value="today">☀️ Today</Option>
-              <Option value="weekly">📆 This Week</Option>
-              <Option value="monthly">🗓️ This Month</Option>
-              <Option value="yearly">📊 This Year</Option>
-              <Option value="all">📅 All Time</Option>
-              <Option value="custom">🎯 Custom Range</Option>
-            </Select>
-          </Col>
-          {dateFilter === 'custom' && (
-            <Col xs={24} md={3}>
+          <Col xs={24} sm={18} md={16} lg={6}>
+            <Tooltip title="Filter expenses by custom date range or select a preset">
               <DatePicker.RangePicker
                 style={{ width: '100%' }}
                 value={customDateRange}
-                onChange={(dates: any) => setCustomDateRange(dates)}
+                onChange={handleDateRangeChange}
                 format="YYYY-MM-DD"
+                allowClear
+                placeholder={['Start Date', 'End Date']}
+                presets={rangePresets}
               />
-            </Col>
-          )}
+            </Tooltip>
+          </Col>
+        </Row>
+
+        <Divider style={{ margin: '12px 0 10px 0' }} />
+
+        {/* ── QUICK DATE RANGE PRESETS & FILTER SUMMARY ───────────────────── */}
+        <Row justify="space-between" align="middle" gutter={[8, 8]}>
+          <Col xs={24} md={16}>
+            <Space wrap size={6} align="center">
+              <span style={{ fontSize: 12, fontWeight: 600, color: '#64748b', marginRight: 4, display: 'inline-flex', alignItems: 'center' }}>
+                <CalendarOutlined style={{ marginRight: 5, color: '#1890ff' }} /> Quick Range:
+              </span>
+              <Button
+                size="small"
+                type={dateFilter === 'all' && !customDateRange ? 'primary' : 'default'}
+                onClick={() => handleQuickDateFilter('all')}
+              >
+                All Time
+              </Button>
+              <Button
+                size="small"
+                type={dateFilter === 'today' ? 'primary' : 'default'}
+                onClick={() => handleQuickDateFilter('today')}
+              >
+                Today
+              </Button>
+              <Button
+                size="small"
+                type={dateFilter === 'weekly' ? 'primary' : 'default'}
+                onClick={() => handleQuickDateFilter('weekly')}
+              >
+                This Week
+              </Button>
+              <Button
+                size="small"
+                type={dateFilter === 'monthly' ? 'primary' : 'default'}
+                onClick={() => handleQuickDateFilter('monthly')}
+              >
+                This Month
+              </Button>
+              <Button
+                size="small"
+                type={dateFilter === 'yearly' ? 'primary' : 'default'}
+                onClick={() => handleQuickDateFilter('yearly')}
+              >
+                This Year
+              </Button>
+              {activeDateRangeLabel && dateFilter === 'custom' && (
+                <Tag
+                  color="blue"
+                  icon={<ClockCircleOutlined />}
+                  closable
+                  onClose={() => handleQuickDateFilter('all')}
+                  style={{ marginLeft: 4 }}
+                >
+                  {activeDateRangeLabel}
+                </Tag>
+              )}
+            </Space>
+          </Col>
+
+          <Col xs={24} md={8} style={{ textAlign: 'right' }}>
+            <Space size={8} wrap>
+              {isFiltered && (
+                <Button
+                  size="small"
+                  icon={<ReloadOutlined />}
+                  onClick={handleResetFilters}
+                >
+                  Reset Filters
+                </Button>
+              )}
+              <Tag color="cyan" style={{ margin: 0, fontWeight: 600 }}>
+                {filteredExpenses.length} matching {filteredExpenses.length === 1 ? 'record' : 'records'}
+              </Tag>
+            </Space>
+          </Col>
         </Row>
       </Card>
 
