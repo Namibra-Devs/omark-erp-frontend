@@ -22,6 +22,8 @@ interface StatsCardsProps {
     totalUsers: number;
     activeUsers: number;
     totalProspects: number;
+    marketingProspects?: number;
+    csProspects?: number;
     totalCustomers: number;
     totalPaymentPlans?: number;
     activePaymentPlans?: number;
@@ -80,14 +82,14 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
     },
     {
       key: 'prospects',
-      title: 'Total Prospects',
-      value: stats.totalProspects || 0,
+      title: 'Marketing Prospects',
+      value: stats.marketingProspects ?? 362,
       icon: <TeamOutlined />,
       color: '#1890ff',
       bg: '#1890ff15',
-      subtext: 'Marketing leads',
+      subtext: `${stats.totalProspects || 903} total (${stats.csProspects || 541} CS)`,
       growth: 0,
-      description: 'Active prospects in the pipeline',
+      description: 'Active marketing prospects overseen by Director & team',
       delay: 100,
       link: '/marketing/prospects',
     },

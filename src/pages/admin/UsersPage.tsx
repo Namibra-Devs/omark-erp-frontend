@@ -91,6 +91,7 @@ import { tokens } from '@/constants/tokens';
 import type { User, Role } from '@/types';
 import apiClient, { unwrapData } from '@/api/client';
 import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, toBackendRole, toE164Phone } from '@/api/users';
+import { useProspectsQuery } from '@/api/prospects';
 import { useBranchesQuery, useDepartmentsQuery, DEFAULT_SYSTEM_BRANCHES, STANDARD_DEPARTMENTS } from '@/api/branches';
 import { useBranchContext } from '@/contexts/BranchContext';
 import {
@@ -149,6 +150,8 @@ export const UsersPage: React.FC = () => {
 
   // ── API hooks ────────────────────────────────────────────────────────────
   const { data: usersResponse, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
+  const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
+  const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { branches: contextBranches = [] } = useBranchContext();
   const { data: apiBranches = [] } = useBranchesQuery();
   const { data: apiDepartments = [] } = useDepartmentsQuery();
@@ -156,6 +159,20 @@ export const UsersPage: React.FC = () => {
   const updateUser = useUpdateUserMutation();
   const updateUserAssignment = useUpdateUserAssignmentMutation();
   const deleteUser = useDeleteUserMutation();
+
+  const getStaffProspectCount = (userItem: User) => {
+    const allList = allProspectsData?.items ?? [];
+    const mktList = mktProspectsData?.items ?? [];
+    if (userItem.role === 'marketing_director') {
+      return mktList.length > 0 ? mktList.length : allList.filter((p) => p.source === 'marketing' || !p.source).length;
+    }
+    return allList.filter(
+      (p) =>
+        p.assignedUserId === userItem.id ||
+        (p as any).assignedStaffId === userItem.id ||
+        p.createdByUserId === userItem.id
+    ).length;
+  };
 
   const allBranches = useMemo(() => {
     if (contextBranches && contextBranches.length > 0) return contextBranches;
@@ -631,6 +648,46 @@ export const UsersPage: React.FC = () => {
       },
     },
     {
+      title: 'Assigned Prospects',
+      key: 'prospects',
+      width: 170,
+      align: 'center' as const,
+      render: (_: any, record: User) => {
+        const count = getStaffProspectCount(record);
+        if (record.role === 'marketing_director') {
+          return (
+            <Tooltip title="Manages departmental marketing prospects pipeline (362 prospects)">
+              <Tag
+                color="purple"
+                style={{ borderRadius: 12, padding: '2px 10px', fontWeight: 600, cursor: 'pointer' }}
+                onClick={() => navigate(`/admin/users/${record.id}`)}
+              >
+                📊 {count} Mkt Prospects
+              </Tag>
+            </Tooltip>
+          );
+        }
+        if (record.role === 'marketing_staff' || record.role === 'customer_service') {
+          return (
+            <Tag
+              color={count > 0 ? 'blue' : 'default'}
+              style={{ borderRadius: 12, padding: '2px 10px', fontWeight: 600, cursor: 'pointer' }}
+              onClick={() => navigate(`/admin/users/${record.id}`)}
+            >
+              👥 {count} Prospects
+            </Tag>
+          );
+        }
+        return count > 0 ? (
+          <Tag color="cyan" style={{ borderRadius: 12, padding: '2px 8px' }}>
+            {count} Prospects
+          </Tag>
+        ) : (
+          <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+        );
+      },
+    },
+    {
       title: 'Status',
       dataIndex: 'isActive',
       key: 'isActive',
@@ -815,6 +872,17 @@ export const UsersPage: React.FC = () => {
         {/* Quick Actions */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
+            <Button
+              type="primary"
+              ghost
+              icon={<IdcardOutlined />}
+              onClick={() => {
+                setViewDrawerOpen(false);
+                navigate(`/admin/users/${selectedUser.id}`);
+              }}
+            >
+              View Full Profile
+            </Button>
             <Button 
               type="primary" 
               icon={<EditOutlined />}
@@ -862,6 +930,46 @@ export const UsersPage: React.FC = () => {
             </Button>
           </Space>
         </div>
+
+        {/* Quick Operational Stats Row */}
+        <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
+          <Col span={12}>
+            <Card size="small" style={{ borderRadius: 8, border: '1px solid #bfdbfe', background: '#eff6ff' }}>
+              <Statistic
+                title={<Text strong style={{ color: '#1e40af' }}>{selectedUser.role === 'marketing_director' ? 'Marketing Pipeline' : 'Assigned Prospects'}</Text>}
+                value={getStaffProspectCount(selectedUser)}
+                prefix={<TeamOutlined style={{ color: '#2563eb' }} />}
+                valueStyle={{ color: '#1d4ed8', fontWeight: 700 }}
+              />
+              <div style={{ marginTop: 4 }}>
+                <Button
+                  type="link"
+                  size="small"
+                  style={{ padding: 0, fontSize: 11, fontWeight: 600 }}
+                  onClick={() => {
+                    setViewDrawerOpen(false);
+                    navigate(`/admin/users/${selectedUser.id}`);
+                  }}
+                >
+                  View Performance &rarr;
+                </Button>
+              </div>
+            </Card>
+          </Col>
+          <Col span={12}>
+            <Card size="small" style={{ borderRadius: 8, border: '1px solid #e2e8f0', background: '#ffffff' }}>
+              <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>Department / Branch</Text>
+              <div style={{ marginTop: 6 }}>
+                <Tag color={getRoleColor(selectedUser.role)} icon={getRoleIcon(selectedUser.role)}>
+                  {getRoleDisplay(selectedUser.role)}
+                </Tag>
+              </div>
+              <div style={{ marginTop: 6, fontSize: 12, color: '#475569' }}>
+                <IdcardOutlined /> ID: {selectedUser.id}
+              </div>
+            </Card>
+          </Col>
+        </Row>
 
         {/* User Details */}
         <Row gutter={[16, 16]}>

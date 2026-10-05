@@ -45,7 +45,7 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
-import { useUpdateUserMutation, useUserActivityQuery, toE164Phone, type UpdateUserPayload } from '@/api/users';
+import { useUsersQuery, useUpdateUserMutation, useUserActivityQuery, toE164Phone, type UpdateUserPayload } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
@@ -91,9 +91,17 @@ export const MyProfilePage: React.FC = () => {
   // Queries enabled for all staff
   const canSeeDeeds = hasRole(['admin', 'secretary', 'customer_service']);
 
+  const isMarketingDirector = user?.role === 'marketing_director';
+  const { data: usersData } = useUsersQuery();
+  const allUsers = usersData?.items ?? [];
+
   const { data: allProspectsData, isLoading: prospectsLoading } = useProspectsQuery(
-    { pageSize: 500 },
+    { pageSize: 10000 },
     Boolean(user?.id)
+  );
+  const { data: mktProspectsData } = useProspectsQuery(
+    { source: 'marketing', pageSize: 10000 },
+    Boolean(user?.id && isMarketingDirector)
   );
   const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery(
     {},
@@ -123,10 +131,31 @@ export const MyProfilePage: React.FC = () => {
   const allProspects = allProspectsData?.items ?? [];
   const myProspects = useMemo(() => {
     if (!user?.id) return [];
-    return allProspects.filter(
+    const direct = allProspects.filter(
       (p) => p.assignedUserId === user.id || (p as any).assignedStaffId === user.id || (p as any).createdByUserId === user.id
     );
-  }, [allProspects, user?.id]);
+    if (isMarketingDirector) {
+      const mktList = mktProspectsData?.items ?? [];
+      const combined = [...mktList, ...allProspects];
+      const seen = new Set<string>();
+      const res: typeof allProspects = [];
+      combined.forEach((p) => {
+        if (!p || !p.id || seen.has(p.id)) return;
+        if (
+          p.source === 'marketing' ||
+          !p.source ||
+          p.assignedUserId === user.id ||
+          (p as any).assignedStaffId === user.id ||
+          (p as any).createdByUserId === user.id
+        ) {
+          seen.add(p.id);
+          res.push(p);
+        }
+      });
+      return res;
+    }
+    return direct;
+  }, [allProspects, mktProspectsData, user?.id, isMarketingDirector]);
   const myAppointments = (appointmentsData?.items ?? []).filter(
     (a) => a.createdByUserId === user?.id || (a as any).assignedStaffId === user?.id || isAdmin
   );
@@ -488,7 +517,7 @@ export const MyProfilePage: React.FC = () => {
                 {myProspects.length}
               </div>
               <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                Assigned Prospects
+                {isMarketingDirector ? 'Marketing Pipeline' : 'Assigned Prospects'}
               </Text>
               <Tag color="green" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
                 View List &rarr;
@@ -956,7 +985,7 @@ export const MyProfilePage: React.FC = () => {
             {summaryModalType === 'bonuses' && <TrophyOutlined style={{ color: '#16a34a' }} />}
             {summaryModalType === 'payroll' && <DollarOutlined style={{ color: '#2563eb' }} />}
             <span style={{ textTransform: 'capitalize' }}>
-              {summaryModalType === 'prospects' && 'Assigned Prospects & Leads'}
+              {summaryModalType === 'prospects' && (isMarketingDirector ? 'Marketing Pipeline Prospects' : 'Assigned Prospects & Leads')}
               {summaryModalType === 'appointments' && 'Scheduled Appointments & Meetings'}
               {summaryModalType === 'attendance' && 'Verified Shifts & Attendance Punches'}
               {summaryModalType === 'leaves' && 'Staff Leave Applications'}
@@ -1029,6 +1058,23 @@ export const MyProfilePage: React.FC = () => {
                 dataIndex: 'source',
                 key: 'source',
                 render: (v: string) => <Tag>{v || 'Direct'}</Tag>,
+              },
+              {
+                title: 'Assigned Staff',
+                key: 'assignedStaff',
+                render: (_: any, r: any) => {
+                  const staffAssigned = allUsers.find(
+                    (u) => u.id === r.assignedUserId || u.id === (r as any).assignedStaffId
+                  );
+                  if (staffAssigned) {
+                    return (
+                      <Tag color="blue">
+                        {staffAssigned.firstName} {staffAssigned.lastName}
+                      </Tag>
+                    );
+                  }
+                  return <Tag color="warning">⚠️ Unassigned</Tag>;
+                },
               },
               {
                 title: 'Assigned / Created',

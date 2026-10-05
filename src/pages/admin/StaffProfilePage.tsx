@@ -61,7 +61,7 @@ import { usePayrollQuery, useCreatePayrollMutation, useUpdatePayrollMutation, ty
 import { useAttendanceQuery, useStaffAttendanceStatsQuery, type AttendanceRecord, type AttendanceStatus } from '@/api/attendance';
 import { ATTENDANCE_STATUS_META } from '@/constants/attendance';
 import { useStaffLeaveRequestsQuery } from '@/api/leaves';
-import { useProspectsQuery } from '@/api/prospects';
+import { useProspectsQuery, useUpdateProspectMutation } from '@/api/prospects';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
 import { useBranchesQuery, DEFAULT_SYSTEM_BRANCHES } from '@/api/branches';
@@ -131,32 +131,39 @@ export const StaffProfilePage: React.FC = () => {
   const updatePayrollMutation = useUpdatePayrollMutation();
 
   // Related Activity & Records
-  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ assignedUserId: id, pageSize: 500 });
-  const { data: allProspectsData } = useProspectsQuery({ pageSize: 500 });
+  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ assignedUserId: id, pageSize: 10000 });
+  const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
+  const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 500 });
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 500 });
+
+  const isMarketingDirector = staffMember?.role === 'marketing_director';
 
   // Merge and deduplicate prospects assigned to or added by this staff member (strictly verified)
   const staffProspects = useMemo(() => {
     const direct = prospectsData?.items ?? [];
     const list = allProspectsData?.items ?? [];
-    const combined = [...direct, ...list];
+    const mktList = mktProspectsData?.items ?? [];
+    const combined = isMarketingDirector ? [...mktList, ...list] : [...direct, ...list];
     const seen = new Set<string>();
     const result: typeof direct = [];
     combined.forEach((p) => {
       if (!p || !p.id || seen.has(p.id)) return;
-      const isStaffProspect =
+      const isDirectlyAssignedOrCreated =
         p.assignedUserId === id ||
         (p as any).assignedStaffId === id ||
         p.createdByUserId === id ||
         (p as any).creatorId === id;
-      if (isStaffProspect) {
+      
+      const isMarketingDeptProspect = isMarketingDirector && (p.source === 'marketing' || !p.source);
+
+      if (isDirectlyAssignedOrCreated || isMarketingDeptProspect) {
         seen.add(p.id);
         result.push(p);
       }
     });
     return result;
-  }, [allProspectsData, prospectsData, id]);
+  }, [allProspectsData, prospectsData, mktProspectsData, id, isMarketingDirector]);
 
   const staffAppointments = useMemo(() => {
     return (appointmentsData?.items ?? []).filter(
@@ -792,7 +799,9 @@ export const StaffProfilePage: React.FC = () => {
                     <Statistic
                       title={
                         <Space>
-                          <Text strong style={{ color: '#1d39c4' }}>Total Prospects</Text>
+                          <Text strong style={{ color: '#1d39c4' }}>
+                            {isMarketingDirector ? 'Marketing Pipeline' : 'Total Prospects'}
+                          </Text>
                           <EyeOutlined style={{ color: '#2f54eb' }} />
                         </Space>
                       }
@@ -921,7 +930,7 @@ export const StaffProfilePage: React.FC = () => {
                             {staffProspects.length}
                           </div>
                           <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                            Assigned Prospects
+                            {isMarketingDirector ? 'Marketing Pipeline' : 'Assigned Prospects'}
                           </Text>
                           <Tag color="green" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
                             View List &rarr;
@@ -1331,10 +1340,24 @@ export const StaffProfilePage: React.FC = () => {
                           ),
                         },
                         {
-                          title: 'Role / Relation',
+                          title: isMarketingDirector ? 'Assigned Staff / Marketer' : 'Role / Relation',
                           key: 'relation',
                           render: (_: any, p: any) => {
+                            const assignedUser = allUsers.find(
+                              (u) => u.id === p.assignedUserId || u.id === (p as any).assignedStaffId
+                            );
                             const isCreator = p.createdByUserId === id || (p as any).creatorId === id;
+                            if (isMarketingDirector) {
+                              if (assignedUser) {
+                                return (
+                                  <Space size={4}>
+                                    <Tag color="blue">{assignedUser.firstName} {assignedUser.lastName}</Tag>
+                                    {isCreator && <Tag color="cyan" style={{ fontSize: 10 }}>Creator</Tag>}
+                                  </Space>
+                                );
+                              }
+                              return <Tag color="warning">⚠️ Unassigned</Tag>;
+                            }
                             return (
                               <Tag color={isCreator ? 'cyan' : 'geekblue'}>
                                 {isCreator ? 'Added by Staff' : 'Assigned to Staff'}
@@ -1781,7 +1804,7 @@ export const StaffProfilePage: React.FC = () => {
             {summaryModalType === 'bonuses' && <TrophyOutlined style={{ color: '#16a34a' }} />}
             {summaryModalType === 'payroll' && <DollarOutlined style={{ color: '#2563eb' }} />}
             <span style={{ textTransform: 'capitalize' }}>
-              {summaryModalType === 'prospects' && 'Assigned Prospects & Leads'}
+              {summaryModalType === 'prospects' && (isMarketingDirector ? 'Marketing Pipeline Prospects' : 'Assigned Prospects & Leads')}
               {summaryModalType === 'appointments' && 'Scheduled Appointments & Meetings'}
               {summaryModalType === 'attendance' && 'Verified Shifts & Attendance Punches'}
               {summaryModalType === 'leaves' && 'Staff Leave Applications'}
@@ -1902,6 +1925,23 @@ export const StaffProfilePage: React.FC = () => {
                 dataIndex: 'reasonForContact',
                 key: 'reasonForContact',
                 render: (v: string) => v || '—',
+              },
+              {
+                title: 'Assigned Staff',
+                key: 'assignedStaff',
+                render: (_: any, r: any) => {
+                  const staffAssigned = allUsers.find(
+                    (u) => u.id === r.assignedUserId || u.id === (r as any).assignedStaffId
+                  );
+                  if (staffAssigned) {
+                    return (
+                      <Tag color="blue">
+                        {staffAssigned.firstName} {staffAssigned.lastName}
+                      </Tag>
+                    );
+                  }
+                  return <Tag color="warning">⚠️ Unassigned</Tag>;
+                },
               },
               {
                 title: 'Assigned / Created',
@@ -2244,11 +2284,28 @@ export const StaffProfilePage: React.FC = () => {
                         ),
                       },
                       {
-                        title: 'Added / Assigned',
+                        title: isMarketingDirector ? 'Assigned Staff / Marketer' : 'Added / Assigned',
                         key: 'relation',
-                        width: 150,
+                        width: 170,
                         render: (_: any, r: any) => {
+                          const assignedUser = allUsers.find(
+                            (u) => u.id === r.assignedUserId || u.id === (r as any).assignedStaffId
+                          );
                           const isCreator = r.createdByUserId === id || (r as any).creatorId === id;
+                          if (isMarketingDirector) {
+                            return (
+                              <div>
+                                {assignedUser ? (
+                                  <Tag color="blue">{assignedUser.firstName} {assignedUser.lastName}</Tag>
+                                ) : (
+                                  <Tag color="warning">⚠️ Unassigned</Tag>
+                                )}
+                                <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                                  {dayjs(r.createdAt).format('MMM D, YYYY')}
+                                </div>
+                              </div>
+                            );
+                          }
                           return (
                             <div>
                               <Tag color={isCreator ? 'cyan' : 'geekblue'} style={{ fontSize: 11 }}>

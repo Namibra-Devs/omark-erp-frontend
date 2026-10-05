@@ -25,6 +25,8 @@ export interface SystemStats {
   totalUsers: number;
   activeUsers: number;
   totalProspects: number;
+  marketingProspects?: number;
+  csProspects?: number;
   totalCustomers: number;
   totalPaymentPlans: number;
   activePaymentPlans: number;

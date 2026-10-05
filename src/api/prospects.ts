@@ -217,6 +217,8 @@ export interface UpdateProspectPayload {
   status?: ProspectStatus;
   reasonForContact?: string;
   notes?: string;
+  assignedUserId?: string;
+  source?: ProspectSource;
 }
 
 export interface LogInteractionPayload {

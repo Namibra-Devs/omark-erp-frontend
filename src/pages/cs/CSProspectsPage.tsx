@@ -74,6 +74,7 @@ import {
 import {
   useAppointmentsQuery,
   useCreateAppointmentMutation,
+  useUpdateAppointmentMutation,
   appointmentsKeys,
   type Appointment
 } from '@/api/appointments';
@@ -191,6 +192,7 @@ export const CSProspectsPage: React.FC = () => {
   const deleteProspect = useDeleteProspectMutation();
   const awardBonusMutation = useAwardBonusMutation();
   const createAppointment = useCreateAppointmentMutation();
+  const updateAppointment = useUpdateAppointmentMutation();
 
   // Only admins can set assignedUserId at creation (per the API), and only
   // admins need to pick — customer_service reps creating their own
@@ -209,14 +211,16 @@ export const CSProspectsPage: React.FC = () => {
   const prospects: Prospect[] = filterEntitiesByBranch(rawProspects, user, branches);
 
   // ── Calculate Due Appointments by Prospect ID ──────────────────────────────────
-  // An appointment is due if status is scheduled and date is today or in the past (overdue)
+  // Completed, canceled, or no_show appointments must NEVER create due/overdue flags
   const dueProspectMap = React.useMemo(() => {
     const map: Record<string, Appointment> = {};
     const endOfToday = dayjs().endOf('day');
 
     appointments.forEach((apt) => {
       if (!apt.prospectId) return;
-      const isScheduled = String(apt.status || '').toLowerCase() === 'scheduled';
+      const statusLower = String(apt.status || '').toLowerCase();
+      if (statusLower === 'completed' || statusLower === 'canceled' || statusLower === 'no_show') return;
+      const isScheduled = statusLower === 'scheduled' || statusLower === 'postponed';
       if (!isScheduled) return;
 
       const aptTime = dayjs(apt.scheduledFor);
@@ -248,10 +252,21 @@ export const CSProspectsPage: React.FC = () => {
     });
 
     return [...list].sort((a, b) => {
-      const aDue = dueProspectMap[a.id];
-      const bDue = dueProspectMap[b.id];
+      const aIsDone =
+        a.status === 'meeting_completed' ||
+        a.status === 'purchased' ||
+        a.status === 'canceled' ||
+        (a.status as string) === 'cancelled';
+      const bIsDone =
+        b.status === 'meeting_completed' ||
+        b.status === 'purchased' ||
+        b.status === 'canceled' ||
+        (b.status as string) === 'cancelled';
 
-      // Priority 1: Prospects with DUE appointments climb automatically to the top of the list!
+      const aDue = aIsDone ? null : dueProspectMap[a.id];
+      const bDue = bIsDone ? null : dueProspectMap[b.id];
+
+      // Priority 1: Prospects with active DUE appointments climb automatically to the top of the list!
       if (aDue && !bDue) return -1;
       if (!aDue && bDue) return 1;
       if (aDue && bDue) {
@@ -386,6 +401,29 @@ export const CSProspectsPage: React.FC = () => {
         id,
         data: { status: newStatus },
       });
+
+      // If prospect marked completed or purchased, mark any linked active appointments completed so flags disappear
+      if (newStatus === 'meeting_completed' || newStatus === 'purchased') {
+        const linkedApts = appointments.filter(
+          (a) => a.prospectId === id && (a.status === 'scheduled' || a.status === 'postponed')
+        );
+        for (const apt of linkedApts) {
+          try {
+            await updateAppointment.mutateAsync({
+              id: apt.id,
+              payload: {
+                status: 'completed',
+                feedback: `Marked attended/completed when prospect status was set to ${prospectStatusLabels[newStatus] || newStatus}`,
+              },
+            });
+          } catch (e) {
+            console.warn('Could not auto-complete appointment:', e);
+          }
+        }
+        window.dispatchEvent(new Event('omark-appointments-changed'));
+      }
+
+      window.dispatchEvent(new Event('omark-prospects-changed'));
       message.success(`Status updated to ${prospectStatusLabels[newStatus]}`);
       
       setTimeout(() => {
@@ -500,37 +538,80 @@ export const CSProspectsPage: React.FC = () => {
       key: 'customer',
       width: 250,
       render: (_: any, record: Prospect) => {
-        const dueApt = dueProspectMap[record.id];
+        // Due flag disappears when prospect is attended to / completed
+        const isAttendedOrCompleted =
+          record.status === 'meeting_completed' ||
+          record.status === 'purchased' ||
+          record.status === 'canceled' ||
+          (record.status as string) === 'cancelled';
+        const dueApt = isAttendedOrCompleted ? null : dueProspectMap[record.id];
+
+        let dueTag = null;
+        if (dueApt) {
+          const aptTime = dayjs(dueApt.scheduledFor);
+          const isOverdue = aptTime.isBefore(dayjs().startOf('day')) || aptTime.isBefore(dayjs());
+          if (isOverdue) {
+            const daysAgo = dayjs().startOf('day').diff(aptTime.startOf('day'), 'day');
+            const overdueLabel = daysAgo > 0 ? `OVERDUE (${daysAgo}d ago)` : 'OVERDUE (Time Passed)';
+            dueTag = (
+              <Tooltip
+                title={`⚠️ APPOINTMENT OVERDUE: Scheduled for ${aptTime.format('MMM D, YYYY h:mm A')} (${aptTime.fromNow()}). Reason: ${dueApt.reason || 'Client follow-up'}`}
+              >
+                <Tag
+                  color="error"
+                  icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
+                  style={{
+                    margin: 0,
+                    fontWeight: 700,
+                    fontSize: 10,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    border: '1px solid #ffa39e',
+                    background: '#fff1f0',
+                    color: '#cf1322',
+                    boxShadow: '0 0 5px rgba(255, 77, 79, 0.3)',
+                  }}
+                >
+                  {overdueLabel}
+                </Tag>
+              </Tooltip>
+            );
+          } else {
+            dueTag = (
+              <Tooltip
+                title={`⏰ APPOINTMENT DUE TODAY: Scheduled for ${aptTime.format('h:mm A')}. Reason: ${dueApt.reason || 'Client follow-up'}`}
+              >
+                <Tag
+                  color="warning"
+                  icon={<ClockCircleOutlined style={{ color: '#fa8c16' }} />}
+                  style={{
+                    margin: 0,
+                    fontWeight: 700,
+                    fontSize: 10,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    border: '1px solid #ffe58f',
+                    background: '#fffbe6',
+                    color: '#d46b08',
+                    boxShadow: '0 0 5px rgba(250, 140, 22, 0.25)',
+                  }}
+                >
+                  DUE TODAY ({aptTime.format('h:mm A')})
+                </Tag>
+              </Tooltip>
+            );
+          }
+        }
+
         return (
           <Space align="start">
             <PhotoUpload entityType="prospect" entityId={record.id} size={32} editable={false} />
             <div>
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                 <Text strong>{record.firstName} {record.lastName}</Text>
-                {dueApt && (
-                  <Tooltip
-                    title={`🚩 APPOINTMENT DUE: ${dayjs(dueApt.scheduledFor).format('MMM D, YYYY h:mm A')} (${dayjs(dueApt.scheduledFor).fromNow()}). Reason: ${dueApt.reason || 'General Follow-up'}`}
-                  >
-                    <Tag
-                      color="red"
-                      icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
-                      style={{
-                        margin: 0,
-                        fontWeight: 700,
-                        fontSize: 11,
-                        padding: '1px 7px',
-                        borderRadius: 4,
-                        cursor: 'pointer',
-                        border: '1px solid #ffa39e',
-                        background: '#fff1f0',
-                        color: '#cf1322',
-                        boxShadow: '0 0 6px rgba(255, 77, 79, 0.35)',
-                      }}
-                    >
-                      DUE {dayjs(dueApt.scheduledFor).isBefore(dayjs().startOf('day')) ? 'OVERDUE' : dayjs(dueApt.scheduledFor).format('h:mm A')}
-                    </Tag>
-                  </Tooltip>
-                )}
+                {dueTag}
               </div>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 <PhoneOutlined /> {record.phoneNumber}

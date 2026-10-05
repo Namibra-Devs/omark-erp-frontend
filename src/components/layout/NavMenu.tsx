@@ -367,12 +367,14 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    // Customers section (available to all staff)
-    items.push({
-      key: '/customers',
-      icon: <TeamOutlined />,
-      label: 'Customers',
-    });
+    // Customers section (available to staff except marketing director)
+    if (!hasRole(['marketing_director']) || hasRole(['admin'])) {
+      items.push({
+        key: '/customers',
+        icon: <TeamOutlined />,
+        label: 'Customers',
+      });
+    }
 
     // Payment Plans
     if (hasRole(['secretary', 'accounts', 'admin', 'branch_manager'])) {

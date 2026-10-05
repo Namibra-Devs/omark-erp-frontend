@@ -44,6 +44,7 @@ import {
   WhatsAppOutlined,
   MailOutlined,
   HistoryOutlined,
+  FlagFilled,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBranchesQuery } from '@/api/branches';
@@ -60,7 +61,7 @@ import {
   type AppointmentSource,
   type CreateAppointmentPayload
 } from '@/api/appointments';
-import { useProspectsQuery, useLogInteractionMutation } from '@/api/prospects';
+import { useProspectsQuery, useUpdateProspectMutation, useLogInteractionMutation } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import { useAllStaffInteractionsQuery } from '@/api/interactions';
 import { useUsersQuery, getUserFullName } from '@/api/users';
@@ -109,6 +110,51 @@ const getSourceConfig = (source: string) => {
   return configs[source] || configs.staff;
 };
 
+// Helper to determine due / overdue status of an appointment
+// IMPORTANT: Due and overdue flags MUST disappear when the appointment is completed, attended to, or canceled
+export type AppointmentDueStatus = 'overdue' | 'due_today' | 'upcoming' | 'none';
+
+export const getAppointmentDueStatus = (appointment: {
+  status?: string;
+  scheduledFor?: string;
+  date?: string;
+  time?: string;
+}): AppointmentDueStatus => {
+  const status = String(appointment.status || '').toLowerCase();
+  // Completed, attended, canceled or no_show appointments must NEVER show due/overdue flags
+  if (status === 'completed' || status === 'canceled' || status === 'no_show') {
+    return 'none';
+  }
+
+  const schedTime = appointment.scheduledFor
+    ? dayjs(appointment.scheduledFor)
+    : (appointment.date && appointment.time ? dayjs(`${appointment.date}T${appointment.time}`) : null);
+
+  if (!schedTime || !schedTime.isValid()) {
+    return 'none';
+  }
+
+  const now = dayjs();
+  const startOfToday = now.startOf('day');
+
+  // If scheduled before today: OVERDUE
+  if (schedTime.isBefore(startOfToday)) {
+    return 'overdue';
+  }
+
+  // If scheduled for today:
+  if (schedTime.isSame(now, 'day')) {
+    // If appointment time has already passed today:
+    if (schedTime.isBefore(now)) {
+      return 'overdue';
+    }
+    // Upcoming today:
+    return 'due_today';
+  }
+
+  return 'upcoming';
+};
+
 export const AppointmentsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
@@ -143,6 +189,7 @@ export const AppointmentsPage: React.FC = () => {
   const [targetInteractionProspect, setTargetInteractionProspect] = useState<Prospect | null>(null);
   const { interactions: allInteractions, refetch: refetchInteractions } = useAllStaffInteractionsQuery();
   const logInteractionMutation = useLogInteractionMutation();
+  const updateProspectMutation = useUpdateProspectMutation();
 
   // API Queries
   const { 
@@ -151,7 +198,7 @@ export const AppointmentsPage: React.FC = () => {
     refetch: refetchAppointments,
     error: appointmentsError
   } = useAppointmentsQuery({
-    status: statusFilter !== 'all' ? statusFilter as AppointmentStatus : undefined,
+    status: (statusFilter !== 'all' && statusFilter !== 'overdue' && statusFilter !== 'due_today') ? statusFilter as AppointmentStatus : undefined,
   });
 
   const { data: branches = [] } = useBranchesQuery();
@@ -352,6 +399,19 @@ export const AppointmentsPage: React.FC = () => {
               : undefined,
           },
         });
+
+        // When appointment is completed, advance any linked prospect to meeting_completed so flags disappear everywhere
+        if (values.status === 'completed' && selectedAppointment.prospectId) {
+          try {
+            await updateProspectMutation.mutateAsync({
+              id: selectedAppointment.prospectId,
+              data: { status: 'meeting_completed' },
+            });
+          } catch (pErr) {
+            console.warn('Could not auto-advance prospect to meeting_completed:', pErr);
+          }
+        }
+
         message.success(`Appointment status updated to ${values.status}!`);
       }
 
@@ -381,6 +441,7 @@ export const AppointmentsPage: React.FC = () => {
       }
 
       window.dispatchEvent(new Event('omark-appointments-changed'));
+      window.dispatchEvent(new Event('omark-prospects-changed'));
       setUpdateStatusModal(false);
       setSelectedAppointment(null);
       statusForm.resetFields();
@@ -388,6 +449,65 @@ export const AppointmentsPage: React.FC = () => {
       refetchInteractions();
     } catch (error: any) {
       message.error(error?.message || 'Failed to update appointment status');
+    }
+  };
+
+  // Quick Mark Completed / Attended handler (clears due / overdue flags immediately)
+  const handleQuickCompleteAppointment = async (appointment: Appointment) => {
+    try {
+      await updateAppointment.mutateAsync({
+        id: appointment.id,
+        payload: {
+          status: 'completed',
+          feedback: `Attended and completed by ${user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Staff'} on ${dayjs().format('MMM D, YYYY h:mm A')}`,
+        },
+      });
+
+      // If linked to a prospect, mark that prospect as meeting_completed so flags clear on both pages
+      if (appointment.prospectId) {
+        try {
+          await updateProspectMutation.mutateAsync({
+            id: appointment.prospectId,
+            data: { status: 'meeting_completed' },
+          });
+        } catch (pErr) {
+          console.warn('Could not auto-advance prospect to meeting_completed:', pErr);
+        }
+      }
+
+      const staffFullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Staff Member';
+      const entity = getEntityDetails(appointment);
+      saveStoredInteraction({
+        id: `inter_completed_${appointment.id}_${Date.now()}`,
+        appointmentId: appointment.id,
+        prospectId: appointment.prospectId,
+        customerId: appointment.customerId,
+        prospectName: entity.name,
+        prospectPhone: entity.phone,
+        prospectSource: appointment.prospectId ? 'marketing' : 'customer_service',
+        channel: 'in_person',
+        occurredAt: new Date().toISOString(),
+        response: `[APPOINTMENT COMPLETED / ATTENDED] Appointment on ${dayjs(appointment.date).format('MMM D, YYYY')} at ${appointment.time} marked as attended & completed.`,
+        loggedByUserId: user?.id || '1',
+        loggedByUserName: staffFullName,
+        loggedByUserRole: user?.role || 'customer_service',
+        loggedByUserEmail: user?.email || '',
+        createdAt: new Date().toISOString(),
+        interactionType: 'status_update',
+      });
+
+      window.dispatchEvent(new Event('omark-interactions-changed'));
+      window.dispatchEvent(new Event('omark-appointments-changed'));
+      window.dispatchEvent(new Event('omark-prospects-changed'));
+
+      message.success('Appointment marked as attended & completed! Flags cleared.');
+      if (viewDrawerOpen && selectedAppointment?.id === appointment.id) {
+        setViewDrawerOpen(false);
+      }
+      refetchAppointments();
+      refetchInteractions();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to complete appointment');
     }
   };
 
@@ -511,7 +631,7 @@ export const AppointmentsPage: React.FC = () => {
 
   // Filter appointments
   const filteredAppointments = React.useMemo(() => {
-    return mappedAppointments.filter((app: Appointment) => {
+    const list = mappedAppointments.filter((app: Appointment) => {
       const entity = getEntityDetails(app);
       const name = entity.name.toLowerCase();
       const matchesSearch = name.includes(searchText.toLowerCase()) ||
@@ -522,14 +642,39 @@ export const AppointmentsPage: React.FC = () => {
         const appDate = dayjs(`${app.date}T${app.time}`);
         matchesDate = appDate.isAfter(dateRange[0]) && appDate.isBefore(dateRange[1]);
       }
-      return matchesSearch && matchesSource && matchesDate;
+      let matchesStatus = true;
+      if (statusFilter === 'overdue') {
+        matchesStatus = getAppointmentDueStatus(app) === 'overdue';
+      } else if (statusFilter === 'due_today') {
+        matchesStatus = getAppointmentDueStatus(app) === 'due_today';
+      } else if (statusFilter !== 'all') {
+        matchesStatus = app.status === statusFilter;
+      }
+      return matchesSearch && matchesSource && matchesDate && matchesStatus;
     });
-  }, [mappedAppointments, searchText, sourceFilter, dateRange, allEntities]);
+
+    // Priority sort: Overdue (1), Due Today (2), Upcoming (3), Completed/Canceled (4)
+    return [...list].sort((a, b) => {
+      const aDue = getAppointmentDueStatus(a);
+      const bDue = getAppointmentDueStatus(b);
+      const priorityMap: Record<AppointmentDueStatus, number> = {
+        overdue: 1,
+        due_today: 2,
+        upcoming: 3,
+        none: 4,
+      };
+      const diff = priorityMap[aDue] - priorityMap[bDue];
+      if (diff !== 0) return diff;
+      return dayjs(`${b.date}T${b.time}`).unix() - dayjs(`${a.date}T${a.time}`).unix();
+    });
+  }, [mappedAppointments, searchText, statusFilter, sourceFilter, dateRange, allEntities]);
 
   // Status breakdown
   const statusBreakdown = React.useMemo(() => {
     return {
       total: mappedAppointments.length,
+      overdue: mappedAppointments.filter((a: Appointment) => getAppointmentDueStatus(a) === 'overdue').length,
+      dueToday: mappedAppointments.filter((a: Appointment) => getAppointmentDueStatus(a) === 'due_today').length,
       scheduled: mappedAppointments.filter((a: Appointment) => a.status === 'scheduled').length,
       postponed: mappedAppointments.filter((a: Appointment) => a.status === 'postponed').length,
       completed: mappedAppointments.filter((a: Appointment) => a.status === 'completed').length,
@@ -771,6 +916,41 @@ export const AppointmentsPage: React.FC = () => {
           />
         </div>
 
+        {/* Overdue / Due Today Alert Banner (Disappears when completed/attended) */}
+        {(() => {
+          const dueStatus = getAppointmentDueStatus(selectedAppointment);
+          const schedTime = selectedAppointment.scheduledFor
+            ? dayjs(selectedAppointment.scheduledFor)
+            : (selectedAppointment.date && selectedAppointment.time ? dayjs(`${selectedAppointment.date}T${selectedAppointment.time}`) : null);
+
+          if (dueStatus === 'overdue' && schedTime) {
+            const daysAgo = dayjs().startOf('day').diff(schedTime.startOf('day'), 'day');
+            return (
+              <Alert
+                type="error"
+                showIcon
+                icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
+                message={`APPOINTMENT OVERDUE ${daysAgo > 0 ? `(${daysAgo} days ago)` : '(Time Passed)'}`}
+                description={`This appointment was scheduled for ${schedTime.format('MMM D, YYYY h:mm A')} (${schedTime.fromNow()}) and requires immediate attention.`}
+                style={{ marginBottom: 16 }}
+              />
+            );
+          }
+          if (dueStatus === 'due_today' && schedTime) {
+            return (
+              <Alert
+                type="warning"
+                showIcon
+                icon={<ClockCircleOutlined style={{ color: '#fa8c16' }} />}
+                message="APPOINTMENT DUE TODAY"
+                description={`Client appointment is scheduled for today at ${schedTime.format('h:mm A')}.`}
+                style={{ marginBottom: 16 }}
+              />
+            );
+          }
+          return null;
+        })()}
+
         {/* Status Banner */}
         <div style={{
           background: `${statusConfig.color}15`,
@@ -792,6 +972,16 @@ export const AppointmentsPage: React.FC = () => {
         {/* Action Buttons */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
+            {selectedAppointment.status !== 'completed' && selectedAppointment.status !== 'canceled' && (
+              <Button
+                type="primary"
+                icon={<CheckCircleOutlined />}
+                style={{ backgroundColor: '#52c41a', borderColor: '#52c41a', fontWeight: 600 }}
+                onClick={() => handleQuickCompleteAppointment(selectedAppointment)}
+              >
+                Mark Attended / Completed
+              </Button>
+            )}
             {selectedAppointment.status === 'postponed' && (
               <Button
                 type="primary"
@@ -1076,15 +1266,74 @@ export const AppointmentsPage: React.FC = () => {
     {
       title: 'Scheduled For',
       key: 'date',
-      width: 180,
-      render: (_: any, record: Appointment) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{dayjs(record.date).format('MMM DD, YYYY')}</Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            <ClockCircleOutlined /> {record.time}
-          </Text>
-        </Space>
-      ),
+      width: 230,
+      render: (_: any, record: Appointment) => {
+        const dueStatus = getAppointmentDueStatus(record);
+        const schedTime = record.scheduledFor
+          ? dayjs(record.scheduledFor)
+          : (record.date && record.time ? dayjs(`${record.date}T${record.time}`) : null);
+
+        let dueTag = null;
+        if (dueStatus === 'overdue' && schedTime) {
+          const daysAgo = dayjs().startOf('day').diff(schedTime.startOf('day'), 'day');
+          const text = daysAgo > 0 ? `OVERDUE (${daysAgo}d ago)` : 'OVERDUE (Time Passed)';
+          dueTag = (
+            <Tooltip title={`⚠️ Overdue Appointment! Scheduled for ${schedTime.format('MMM D, YYYY h:mm A')}. Needs urgent follow-up or completion.`}>
+              <Tag
+                color="error"
+                icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
+                style={{
+                  margin: 0,
+                  fontWeight: 700,
+                  fontSize: 10,
+                  padding: '1px 6px',
+                  borderRadius: 4,
+                  border: '1px solid #ffa39e',
+                  background: '#fff1f0',
+                  color: '#cf1322',
+                  boxShadow: '0 0 5px rgba(255, 77, 79, 0.35)',
+                }}
+              >
+                {text}
+              </Tag>
+            </Tooltip>
+          );
+        } else if (dueStatus === 'due_today' && schedTime) {
+          dueTag = (
+            <Tooltip title={`⏰ Due Today at ${schedTime.format('h:mm A')}! Client appointment scheduled for today.`}>
+              <Tag
+                color="warning"
+                icon={<ClockCircleOutlined style={{ color: '#fa8c16' }} />}
+                style={{
+                  margin: 0,
+                  fontWeight: 700,
+                  fontSize: 10,
+                  padding: '1px 6px',
+                  borderRadius: 4,
+                  border: '1px solid #ffe58f',
+                  background: '#fffbe6',
+                  color: '#d46b08',
+                  boxShadow: '0 0 5px rgba(250, 140, 22, 0.25)',
+                }}
+              >
+                DUE TODAY ({schedTime.format('h:mm A')})
+              </Tag>
+            </Tooltip>
+          );
+        }
+
+        return (
+          <Space direction="vertical" size={2}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <Text strong>{dayjs(record.date).format('MMM DD, YYYY')}</Text>
+              {dueTag}
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <ClockCircleOutlined /> {record.time}
+            </Text>
+          </Space>
+        );
+      },
       sorter: (a: Appointment, b: Appointment) => 
         dayjs(`${a.date}T${a.time}`).unix() - dayjs(`${b.date}T${b.time}`).unix(),
     },
@@ -1196,10 +1445,29 @@ export const AppointmentsPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 230,
+      width: 250,
       fixed: 'right' as const,
       render: (_: any, record: Appointment) => (
         <Space>
+          {record.status !== 'completed' && record.status !== 'canceled' && (
+            <Tooltip title="Mark as Attended / Completed (clears due & overdue flags)">
+              <Button
+                type="primary"
+                size="small"
+                icon={<CheckCircleOutlined />}
+                style={{
+                  backgroundColor: '#52c41a',
+                  borderColor: '#52c41a',
+                  fontWeight: 600,
+                  fontSize: 12,
+                  padding: '0 8px',
+                }}
+                onClick={() => handleQuickCompleteAppointment(record)}
+              >
+                Attend
+              </Button>
+            </Tooltip>
+          )}
           {record.status === 'postponed' && (
             <Tooltip title="Rebook Postponed Appointment">
               <Button
@@ -1386,7 +1654,16 @@ export const AppointmentsPage: React.FC = () => {
       {/* Status Cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
-          <Card size="small">
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter('all')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'all' ? tokens.primary : undefined,
+              boxShadow: statusFilter === 'all' ? `0 0 0 2px ${tokens.primary}25` : undefined,
+            }}
+          >
             <Statistic
               title="Total"
               value={statusBreakdown.total}
@@ -1396,7 +1673,56 @@ export const AppointmentsPage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
-          <Card size="small">
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'overdue' ? 'all' : 'overdue')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'overdue' ? '#ff4d4f' : undefined,
+              boxShadow: statusFilter === 'overdue' ? '0 0 0 2px rgba(255,77,79,0.25)' : undefined,
+              background: statusBreakdown.overdue > 0 ? '#fff1f0' : undefined,
+            }}
+          >
+            <Statistic
+              title="Overdue"
+              value={statusBreakdown.overdue}
+              prefix={<FlagFilled style={{ color: '#ff4d4f' }} />}
+              valueStyle={{ color: '#ff4d4f', fontWeight: 700 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'due_today' ? 'all' : 'due_today')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'due_today' ? '#fa8c16' : undefined,
+              boxShadow: statusFilter === 'due_today' ? '0 0 0 2px rgba(250,140,22,0.25)' : undefined,
+              background: statusBreakdown.dueToday > 0 ? '#fffbe6' : undefined,
+            }}
+          >
+            <Statistic
+              title="Due Today"
+              value={statusBreakdown.dueToday}
+              prefix={<ClockCircleOutlined style={{ color: '#fa8c16' }} />}
+              valueStyle={{ color: '#fa8c16', fontWeight: 700 }}
+            />
+          </Card>
+        </Col>
+        <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'scheduled' ? 'all' : 'scheduled')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'scheduled' ? '#1890ff' : undefined,
+              boxShadow: statusFilter === 'scheduled' ? '0 0 0 2px rgba(24,144,255,0.2)' : undefined,
+            }}
+          >
             <Statistic
               title="Scheduled"
               value={statusBreakdown.scheduled}
@@ -1406,7 +1732,16 @@ export const AppointmentsPage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
-          <Card size="small">
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'postponed' ? 'all' : 'postponed')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'postponed' ? '#fa8c16' : undefined,
+              boxShadow: statusFilter === 'postponed' ? '0 0 0 2px rgba(250,140,22,0.2)' : undefined,
+            }}
+          >
             <Statistic
               title="Postponed"
               value={statusBreakdown.postponed}
@@ -1416,17 +1751,35 @@ export const AppointmentsPage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
-          <Card size="small">
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'completed' ? 'all' : 'completed')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'completed' ? '#52c41a' : undefined,
+              boxShadow: statusFilter === 'completed' ? '0 0 0 2px rgba(82,196,26,0.2)' : undefined,
+            }}
+          >
             <Statistic
               title="Completed"
               value={statusBreakdown.completed}
               prefix={<CheckCircleOutlined />}
-              valueStyle={{ color: '#722ed1' }}
+              valueStyle={{ color: '#52c41a' }}
             />
           </Card>
         </Col>
         <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
-          <Card size="small">
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'canceled' ? 'all' : 'canceled')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'canceled' ? '#ff4d4f' : undefined,
+              boxShadow: statusFilter === 'canceled' ? '0 0 0 2px rgba(255,77,79,0.2)' : undefined,
+            }}
+          >
             <Statistic
               title="Canceled"
               value={statusBreakdown.canceled}
@@ -1436,7 +1789,16 @@ export const AppointmentsPage: React.FC = () => {
           </Card>
         </Col>
         <Col xs={12} sm={8} md={6} lg={3} style={{ flex: '1 1 140px' }}>
-          <Card size="small">
+          <Card
+            size="small"
+            hoverable
+            onClick={() => setStatusFilter(statusFilter === 'no_show' ? 'all' : 'no_show')}
+            style={{
+              cursor: 'pointer',
+              borderColor: statusFilter === 'no_show' ? '#faad14' : undefined,
+              boxShadow: statusFilter === 'no_show' ? '0 0 0 2px rgba(250,173,20,0.2)' : undefined,
+            }}
+          >
             <Statistic
               title="No Show"
               value={statusBreakdown.noShow}
@@ -1480,11 +1842,13 @@ export const AppointmentsPage: React.FC = () => {
               size="middle"
             >
               <Option value="all">All Statuses</Option>
-              <Option value="scheduled">Scheduled</Option>
-              <Option value="postponed">Postponed</Option>
-              <Option value="completed">Completed</Option>
-              <Option value="canceled">Canceled</Option>
-              <Option value="no_show">No Show</Option>
+              <Option value="overdue">⚠️ Overdue ({statusBreakdown.overdue})</Option>
+              <Option value="due_today">⏰ Due Today ({statusBreakdown.dueToday})</Option>
+              <Option value="scheduled">Scheduled ({statusBreakdown.scheduled})</Option>
+              <Option value="postponed">Postponed ({statusBreakdown.postponed})</Option>
+              <Option value="completed">Completed ({statusBreakdown.completed})</Option>
+              <Option value="canceled">Canceled ({statusBreakdown.canceled})</Option>
+              <Option value="no_show">No Show ({statusBreakdown.noShow})</Option>
             </Select>
           </Col>
           <Col xs={12} md={4}>

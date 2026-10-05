@@ -118,6 +118,7 @@ export const CustomersPage: React.FC = () => {
   const urlTab = searchParams.get('tab') || searchParams.get('filter');
   const initialFilter = urlTab || (urlStatus === 'defaulted' ? 'defaulters' : 'all');
   const [searchText, setSearchText] = useState('');
+  const deferredSearchText = React.useDeferredValue(searchText);
   const [typeFilter, setTypeFilter] = useState<string>(initialFilter);
   const [activeTab, setActiveTab] = useState<string>(initialFilter);
   const [page, setPage] = useState(1);
@@ -130,8 +131,6 @@ export const CustomersPage: React.FC = () => {
     refetch: refetchCustomers,
     error: customersError
   } = useCustomersQuery({
-    q: searchText || undefined,
-    page: 1,
     pageSize: PAGE_SIZE,
   });
 
@@ -261,7 +260,10 @@ export const CustomersPage: React.FC = () => {
   // already-authenticated fetch to keep that cache warm.
   useEffect(() => {
     if (customers.length > 0) {
-      cacheCustomerSummaries(customers, paymentPlanMap, propertyMap);
+      const timer = setTimeout(() => {
+        cacheCustomerSummaries(customers, paymentPlanMap, propertyMap);
+      }, 500);
+      return () => clearTimeout(timer);
     }
   }, [customers, paymentPlanMap, propertyMap]);
 
@@ -900,44 +902,59 @@ const handleAddCustomer = async (values: any) => {
     }, 1000);
   };
 
-  // Client-side tab & search filter
-  const filteredCustomers = customers.filter(customer => {
-    let matchesTab = false;
-    if (activeTab === 'all') {
-      matchesTab = true;
-    } else if (activeTab === 'defaulters') {
-      matchesTab = isCustomerDefaulter(customer);
-    } else {
-      matchesTab = customer.type === activeTab;
-    }
-    if (!matchesTab) return false;
+  // Client-side tab & search filter (memoized with deferred search for zero-lag instant typing)
+  const filteredCustomers = React.useMemo(() => {
+    if (!customers || customers.length === 0) return [];
+    const q = deferredSearchText.trim().toLowerCase();
 
-    if (!searchText) return true;
-    const q = searchText.toLowerCase().trim();
-    const fullName = `${customer.firstName} ${customer.lastName}`.toLowerCase();
-    const phone = (customer.phoneNumber || '').toLowerCase();
-    const addr = (customer.address || '').toLowerCase();
-    const code = (customer.code || '').toLowerCase();
-    return fullName.includes(q) || phone.includes(q) || addr.includes(q) || code.includes(q);
-  });
+    return customers.filter(customer => {
+      let matchesTab = false;
+      if (activeTab === 'all') {
+        matchesTab = true;
+      } else if (activeTab === 'defaulters') {
+        matchesTab = isCustomerDefaulter(customer);
+      } else {
+        matchesTab = customer.type === activeTab;
+      }
+      if (!matchesTab) return false;
 
-  // Stats
-  const defaulterCount = customers.filter(c => isCustomerDefaulter(c)).length;
-  const paymentPlanCustomers = customers.filter(c => c.type === 'payment_plan');
-  const stats = {
-    total: customers.length,
-    paymentPlan: paymentPlanCustomers.length,
-    fullyPaid: customers.filter(c => c.type === 'fully_paid').length,
-    activePlans: paymentPlanCustomers.filter(c => {
-      const plan = paymentPlanMap[c.id];
-      return plan?.status === 'active' || (!isCustomerDefaulter(c) && (plan?.balanceMinor ?? 1) > 0);
-    }).length,
-    defaultedPlans: Math.max(paymentPlans.filter(p => p.status === 'defaulted').length, defaulterCount),
-    completedPlans: paymentPlanCustomers.filter(c => {
-      const plan = paymentPlanMap[c.id];
-      return plan?.status === 'completed' || plan?.balanceMinor === 0;
-    }).length,
-  };
+      if (!q) return true;
+      const fullName = `${customer.firstName || ''} ${customer.lastName || ''}`.toLowerCase();
+      const phone = (customer.phoneNumber || '').toLowerCase();
+      const addr = (customer.address || '').toLowerCase();
+      const code = (customer.code || '').toLowerCase();
+      const prop = propertyMap[customer.propertyId];
+      const propHouse = (prop?.houseNumber || '').toLowerCase();
+      const propOffer = (prop?.offerNumber || '').toLowerCase();
+
+      return fullName.includes(q) ||
+        phone.includes(q) ||
+        addr.includes(q) ||
+        code.includes(q) ||
+        propHouse.includes(q) ||
+        propOffer.includes(q);
+    });
+  }, [customers, activeTab, deferredSearchText, isCustomerDefaulter, propertyMap]);
+
+  // Stats (memoized so typing in search never re-runs expensive loops)
+  const stats = React.useMemo(() => {
+    const defaulterCount = customers.filter(c => isCustomerDefaulter(c)).length;
+    const paymentPlanCustomers = customers.filter(c => c.type === 'payment_plan');
+    return {
+      total: customers.length,
+      paymentPlan: paymentPlanCustomers.length,
+      fullyPaid: customers.filter(c => c.type === 'fully_paid').length,
+      activePlans: paymentPlanCustomers.filter(c => {
+        const plan = paymentPlanMap[c.id];
+        return plan?.status === 'active' || (!isCustomerDefaulter(c) && (plan?.balanceMinor ?? 1) > 0);
+      }).length,
+      defaultedPlans: Math.max(paymentPlans.filter(p => p.status === 'defaulted').length, defaulterCount),
+      completedPlans: paymentPlanCustomers.filter(c => {
+        const plan = paymentPlanMap[c.id];
+        return plan?.status === 'completed' || plan?.balanceMinor === 0;
+      }).length,
+    };
+  }, [customers, paymentPlans, paymentPlanMap, isCustomerDefaulter]);
 
   // Table Columns
   const columns = [

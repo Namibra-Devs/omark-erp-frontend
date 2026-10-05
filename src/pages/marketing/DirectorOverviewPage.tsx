@@ -42,7 +42,7 @@ import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPerformance } from '@/api/dashboard';
 import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
-import { useProspectsQuery } from '@/api/prospects';
+import { useProspectsQuery, useUpdateProspectMutation } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
 import { useAppointmentsQuery, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
 import { useCreateExpenseMutation } from '@/api/expenses';
@@ -118,6 +118,24 @@ export const DirectorOverviewPage: React.FC = () => {
   const properties = propertiesData?.items ?? [];
 
   const createAppointmentMutation = useCreateAppointmentMutation();
+  const updateProspectMutation = useUpdateProspectMutation();
+
+  const handleAssignStaffToProspect = async (prospectId: string, staffId: string) => {
+    try {
+      const assignedStaff = allMarketingStaffUsers.find((u) => u.id === staffId);
+      const staffName = assignedStaff ? getUserFullName(assignedStaff) : 'Staff Member';
+      await updateProspectMutation.mutateAsync({
+        id: prospectId,
+        data: {
+          assignedUserId: staffId,
+        },
+      });
+      message.success(`Prospect successfully assigned to ${staffName}!`);
+      refetchProspects();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to assign prospect to staff');
+    }
+  };
 
   const handleInitiateExpense = async (values: any) => {
     try {
@@ -153,6 +171,7 @@ export const DirectorOverviewPage: React.FC = () => {
   // Search states for dedicated dashboard tabs
   const [prospectsSearch, setProspectsSearch] = useState('');
   const [prospectsStatusFilter, setProspectsStatusFilter] = useState<string>('all');
+  const [prospectsStaffFilter, setProspectsStaffFilter] = useState<string>('all');
   const [customersSearch, setCustomersSearch] = useState('');
 
   // Drill-down Modal State for Marketer's Added Records
@@ -195,7 +214,9 @@ export const DirectorOverviewPage: React.FC = () => {
       const fullName = getUserFullName(u);
 
       const staffProspects = allProspects.filter(
-        (p) => p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id
+        (p) =>
+          (p.source === 'marketing' || !p.source) &&
+          (p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id)
       );
 
       const staffCustomers = allCustomers.filter(
@@ -261,7 +282,9 @@ export const DirectorOverviewPage: React.FC = () => {
       if (!id) return;
       if (!staffMap.has(id)) {
         const staffProspects = allProspects.filter(
-          (p) => p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id
+          (p) =>
+            (p.source === 'marketing' || !p.source) &&
+            (p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id)
         );
         const staffCustomers = allCustomers.filter(
           (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || staffProspects.some((p) => p.id === c.prospectId)
@@ -527,6 +550,18 @@ export const DirectorOverviewPage: React.FC = () => {
         return s === prospectsStatusFilter.toLowerCase();
       });
     }
+    if (prospectsStaffFilter && prospectsStaffFilter !== 'all') {
+      if (prospectsStaffFilter === 'unassigned') {
+        list = list.filter((p) => !p.assignedUserId && !(p as any).assignedStaffId);
+      } else {
+        list = list.filter(
+          (p) =>
+            p.assignedUserId === prospectsStaffFilter ||
+            (p as any).assignedStaffId === prospectsStaffFilter ||
+            (p as any).createdByUserId === prospectsStaffFilter
+        );
+      }
+    }
     if (prospectsSearch.trim()) {
       const q = prospectsSearch.trim().toLowerCase();
       list = list.filter(
@@ -539,7 +574,7 @@ export const DirectorOverviewPage: React.FC = () => {
       );
     }
     return list;
-  }, [allProspects, prospectsSearch, prospectsStatusFilter]);
+  }, [allProspects, prospectsSearch, prospectsStatusFilter, prospectsStaffFilter]);
 
   const filteredDashboardCustomers = useMemo(() => {
     let list = allCustomers;
@@ -796,9 +831,9 @@ export const DirectorOverviewPage: React.FC = () => {
       render: (text: string) => text || '—',
     },
     {
-      title: 'Added By / Marketer',
+      title: 'Added By',
       key: 'addedBy',
-      width: 190,
+      width: 170,
       render: (_: any, record: any) => {
         const creatorId = record.createdByUserId || record.assignedUserId;
         const staff = getStaffUser(creatorId);
@@ -836,6 +871,55 @@ export const DirectorOverviewPage: React.FC = () => {
               </div>
             </Space>
           </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Assigned Staff / Marketer',
+      key: 'assignedStaff',
+      width: 220,
+      render: (_: any, record: any) => {
+        const assignedId = record.assignedUserId || (record as any).assignedStaffId;
+        const staff = getStaffUser(assignedId);
+        return (
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            {staff ? (
+              <Space size={6}>
+                <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
+                <div>
+                  <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                    {getUserFullName(staff)}
+                  </Text>
+                  <Tag
+                    color={staff.role === 'marketing_director' ? 'gold' : 'blue'}
+                    style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+                  >
+                    {staff.role === 'marketing_director' ? 'Director' : 'Marketer'}
+                  </Tag>
+                </div>
+              </Space>
+            ) : (
+              <Tag color="orange" icon={<UserSwitchOutlined />} style={{ fontSize: 10, borderRadius: 4 }}>
+                Unassigned (Needs Staff)
+              </Tag>
+            )}
+            <Select
+              size="small"
+              placeholder="Assign to marketer..."
+              value={assignedId || undefined}
+              style={{ width: '100%', maxWidth: 180, marginTop: 2 }}
+              onChange={(newStaffId) => handleAssignStaffToProspect(record.id, newStaffId)}
+              onClick={(e) => e.stopPropagation()}
+              showSearch
+              optionFilterProp="children"
+            >
+              {allMarketingStaffUsers.map((s) => (
+                <Select.Option key={s.id} value={s.id}>
+                  {getUserFullName(s)} ({s.role === 'marketing_director' ? 'Director' : 'Marketer'})
+                </Select.Option>
+              ))}
+            </Select>
+          </Space>
         );
       },
     },
@@ -1241,6 +1325,19 @@ export const DirectorOverviewPage: React.FC = () => {
                         { value: 'postponed', label: 'Postponed' },
                         { value: 'canceled', label: 'Canceled' },
                         { value: 'purchased', label: 'Purchased' },
+                      ]}
+                    />
+                    <Select
+                      value={prospectsStaffFilter}
+                      onChange={setProspectsStaffFilter}
+                      style={{ width: 210 }}
+                      options={[
+                        { value: 'all', label: '👥 All Staff Assignments' },
+                        { value: 'unassigned', label: '⚠️ Unassigned (Needs Staff)' },
+                        ...allMarketingStaffUsers.map((s) => ({
+                          value: s.id,
+                          label: `👤 ${getUserFullName(s)} (${s.role === 'marketing_director' ? 'Director' : 'Marketer'})`,
+                        })),
                       ]}
                     />
                     <Button

@@ -18,6 +18,8 @@ import {
   SettingOutlined,
   TrophyOutlined,
   CalendarOutlined,
+  ClockCircleOutlined,
+  UserSwitchOutlined,
 } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
 import dayjs from 'dayjs';
@@ -31,7 +33,7 @@ import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
 import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
-import { useAppointmentsQuery, useCreateAppointmentMutation } from '@/api/appointments';
+import { useAppointmentsQuery, useCreateAppointmentMutation, useUpdateAppointmentMutation } from '@/api/appointments';
 import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
@@ -60,6 +62,7 @@ export const ProspectsPage: React.FC = () => {
   const [editForm] = Form.useForm();
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
+  const [sourceFilter, setSourceFilter] = useState<'marketing' | 'all' | 'customer_service'>('marketing');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'weekly' | 'monthly' | 'yearly' | 'custom'>('all');
   const [customDateRange, setCustomDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [page, setPage] = useState(1);
@@ -72,6 +75,7 @@ export const ProspectsPage: React.FC = () => {
   const [appointmentTargetProspect, setAppointmentTargetProspect] = useState<Prospect | null>(null);
   const [appointmentForm] = Form.useForm();
   const createAppointment = useCreateAppointmentMutation();
+  const updateAppointmentMutation = useUpdateAppointmentMutation();
   const { data: userBonuses = [] } = useStaffBonusesQuery(user?.id);
   const userBonusTotal = (userBonuses as any[]).reduce((sum: number, b: any) => sum + (b.amountGHS || 0), 0);
 
@@ -94,11 +98,22 @@ export const ProspectsPage: React.FC = () => {
   const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
   const allExistingCustomers = customersData?.items ?? [];
 
+  // Source breakdown counts
+  const marketingProspectCount = useMemo(() => {
+    return allExistingProspects.filter((p) => p.source === 'marketing' || !p.source).length;
+  }, [allExistingProspects]);
+
+  const csProspectCount = useMemo(() => {
+    return allExistingProspects.filter((p) => p.source === 'customer_service').length;
+  }, [allExistingProspects]);
+
+  const totalProspectCount = allExistingProspects.length;
+
   // Reset to page 1 whenever a filter changes, so a new, smaller result set
   // doesn't strand the user on a page that no longer exists.
   useEffect(() => {
     setPage(1);
-  }, [searchText, statusFilter, assignedUserIdFilter, dateFilter, customDateRange]);
+  }, [searchText, statusFilter, sourceFilter, assignedUserIdFilter, dateFilter, customDateRange]);
 
   // Opening this page clears the "new prospects" nav badge (see NavMenu.tsx).
   useEffect(() => {
@@ -137,14 +152,16 @@ export const ProspectsPage: React.FC = () => {
     return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
   }, [refetch]);
 
-  // Due appointments map
+  // Due appointments map - completed, canceled or no_show appointments NEVER create due flags
   const dueProspectMap = useMemo(() => {
     const map: Record<string, any> = {};
     const endOfToday = dayjs().endOf('day');
 
     appointments.forEach((apt) => {
       if (!apt.prospectId) return;
-      const isScheduled = String(apt.status || '').toLowerCase() === 'scheduled';
+      const statusLower = String(apt.status || '').toLowerCase();
+      if (statusLower === 'completed' || statusLower === 'canceled' || statusLower === 'no_show') return;
+      const isScheduled = statusLower === 'scheduled' || statusLower === 'postponed';
       if (!isScheduled) return;
 
       const aptTime = dayjs(apt.scheduledFor);
@@ -159,8 +176,16 @@ export const ProspectsPage: React.FC = () => {
   }, [appointments]);
 
   // Full marketing prospects list across all pages for status breakdown calculation
+  // Defaults to 'marketing' (yielding 362), tallying identically with the dashboard
   const allMarketingProspects = useMemo(() => {
     let list = allExistingProspects;
+    if (sourceFilter === 'marketing') {
+      list = list.filter((p) => p.source === 'marketing' || !p.source);
+    } else if (sourceFilter === 'customer_service') {
+      list = list.filter((p) => p.source === 'customer_service');
+    }
+    // If 'all', keep full combined dataset
+
     if (assignedUserIdFilter) {
       list = list.filter(
         (p) =>
@@ -171,7 +196,7 @@ export const ProspectsPage: React.FC = () => {
       );
     }
     return filterEntitiesByBranch(list, user, branches);
-  }, [allExistingProspects, assignedUserIdFilter, user, branches]);
+  }, [allExistingProspects, sourceFilter, assignedUserIdFilter, user, branches]);
 
   const statusBreakdown = useMemo(() => {
     return {
@@ -243,10 +268,21 @@ export const ProspectsPage: React.FC = () => {
       });
     }
 
-    // Sort: Due appointments climb to the top!
+    // Sort: Due appointments climb to the top! Completed/attended prospects do not climb
     return [...list].sort((a, b) => {
-      const aDue = dueProspectMap[a.id];
-      const bDue = dueProspectMap[b.id];
+      const aIsDone =
+        a.status === 'meeting_completed' ||
+        a.status === 'purchased' ||
+        a.status === 'canceled' ||
+        (a.status as string) === 'cancelled';
+      const bIsDone =
+        b.status === 'meeting_completed' ||
+        b.status === 'purchased' ||
+        b.status === 'canceled' ||
+        (b.status as string) === 'cancelled';
+
+      const aDue = aIsDone ? null : dueProspectMap[a.id];
+      const bDue = bIsDone ? null : dueProspectMap[b.id];
 
       if (aDue && !bDue) return -1;
       if (!aDue && bDue) return 1;
@@ -255,7 +291,7 @@ export const ProspectsPage: React.FC = () => {
       }
       return dayjs(b.createdAt || 0).valueOf() - dayjs(a.createdAt || 0).valueOf();
     });
-  }, [allMarketingProspects, statusFilter, searchText, dateFilter, customDateRange, dueProspectMap]);
+  }, [allMarketingProspects, statusFilter, sourceFilter, searchText, dateFilter, customDateRange, dueProspectMap]);
 
   const handleAddProspect = async (values: any) => {
     try {
@@ -303,8 +339,26 @@ export const ProspectsPage: React.FC = () => {
       status: (record.status as string) === 'cancelled' ? 'canceled' : record.status,
       reasonForContact: record.reasonForContact,
       notes: record.notes,
+      assignedUserId: record.assignedUserId || (record as any).assignedStaffId,
     });
     setEditModal(true);
+  };
+
+  const handleAssignStaffToProspect = async (prospectId: string, staffId: string) => {
+    try {
+      const assignedStaff = allStaff.find((u) => u.id === staffId);
+      const staffName = assignedStaff ? getUserFullName(assignedStaff) : 'Staff Member';
+      await updateProspectMutation.mutateAsync({
+        id: prospectId,
+        data: {
+          assignedUserId: staffId,
+        },
+      });
+      message.success(`Prospect successfully assigned to ${staffName}!`);
+      refetch();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to assign prospect to staff');
+    }
   };
 
   const handleEditProspect = async (values: any) => {
@@ -331,6 +385,7 @@ export const ProspectsPage: React.FC = () => {
           status: values.status,
           reasonForContact: values.reasonForContact,
           notes: values.notes,
+          assignedUserId: values.assignedUserId,
         },
       });
       message.success('Prospect updated successfully!');
@@ -356,6 +411,29 @@ export const ProspectsPage: React.FC = () => {
   const handleStatusChange = async (id: string, newStatus: ProspectStatus) => {
     try {
       await updateProspectMutation.mutateAsync({ id, data: { status: newStatus } });
+
+      // If prospect marked completed or purchased, mark any linked active appointments completed so flags disappear
+      if (newStatus === 'meeting_completed' || newStatus === 'purchased') {
+        const linkedApts = appointments.filter(
+          (a) => a.prospectId === id && (a.status === 'scheduled' || a.status === 'postponed')
+        );
+        for (const apt of linkedApts) {
+          try {
+            await updateAppointmentMutation.mutateAsync({
+              id: apt.id,
+              payload: {
+                status: 'completed',
+                feedback: `Marked attended/completed when prospect status was set to ${prospectStatusLabels[newStatus] || newStatus}`,
+              },
+            });
+          } catch (e) {
+            console.warn('Could not auto-complete appointment:', e);
+          }
+        }
+        window.dispatchEvent(new Event('omark-appointments-changed'));
+      }
+
+      window.dispatchEvent(new Event('omark-prospects-changed'));
       message.success(`Status updated to ${prospectStatusLabels[newStatus] || newStatus}`);
       refetch();
     } catch (err: any) {
@@ -369,36 +447,80 @@ export const ProspectsPage: React.FC = () => {
       key: 'customer',
       width: 250,
       render: (_: any, record: Prospect) => {
-        const dueApt = dueProspectMap[record.id];
+        // Due flag disappears when prospect is attended to / completed
+        const isAttendedOrCompleted =
+          record.status === 'meeting_completed' ||
+          record.status === 'purchased' ||
+          record.status === 'canceled' ||
+          (record.status as string) === 'cancelled';
+        const dueApt = isAttendedOrCompleted ? null : dueProspectMap[record.id];
+
+        let dueTag = null;
+        if (dueApt) {
+          const aptTime = dayjs(dueApt.scheduledFor);
+          const isOverdue = aptTime.isBefore(dayjs().startOf('day')) || aptTime.isBefore(dayjs());
+          if (isOverdue) {
+            const daysAgo = dayjs().startOf('day').diff(aptTime.startOf('day'), 'day');
+            const overdueLabel = daysAgo > 0 ? `OVERDUE (${daysAgo}d ago)` : 'OVERDUE (Time Passed)';
+            dueTag = (
+              <Tooltip
+                title={`⚠️ APPOINTMENT OVERDUE: Scheduled for ${aptTime.format('MMM D, YYYY h:mm A')} (${aptTime.fromNow()}). Reason: ${dueApt.reason || 'Client follow-up'}`}
+              >
+                <Tag
+                  color="error"
+                  icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
+                  style={{
+                    margin: 0,
+                    fontWeight: 700,
+                    fontSize: 10,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    border: '1px solid #ffa39e',
+                    background: '#fff1f0',
+                    color: '#cf1322',
+                    boxShadow: '0 0 5px rgba(255, 77, 79, 0.3)',
+                  }}
+                >
+                  {overdueLabel}
+                </Tag>
+              </Tooltip>
+            );
+          } else {
+            dueTag = (
+              <Tooltip
+                title={`⏰ APPOINTMENT DUE TODAY: Scheduled for ${aptTime.format('h:mm A')}. Reason: ${dueApt.reason || 'Client follow-up'}`}
+              >
+                <Tag
+                  color="warning"
+                  icon={<ClockCircleOutlined style={{ color: '#fa8c16' }} />}
+                  style={{
+                    margin: 0,
+                    fontWeight: 700,
+                    fontSize: 10,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    border: '1px solid #ffe58f',
+                    background: '#fffbe6',
+                    color: '#d46b08',
+                    boxShadow: '0 0 5px rgba(250, 140, 22, 0.25)',
+                  }}
+                >
+                  DUE TODAY ({aptTime.format('h:mm A')})
+                </Tag>
+              </Tooltip>
+            );
+          }
+        }
+
         return (
           <Space align="start">
             <PhotoUpload entityType="prospect" entityId={record.id} size={32} editable={false} />
             <div>
               <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
                 <Text strong>{record.firstName} {record.lastName}</Text>
-                {dueApt && (
-                  <Tooltip
-                    title={`🚩 APPOINTMENT DUE: ${dayjs(dueApt.scheduledFor).format('MMM D, YYYY h:mm A')} (${dayjs(dueApt.scheduledFor).fromNow()}). Reason: ${dueApt.reason || 'Client follow-up'}`}
-                  >
-                    <Tag
-                      color="red"
-                      icon={<FlagFilled style={{ color: '#ff4d4f' }} />}
-                      style={{
-                        margin: 0,
-                        fontWeight: 700,
-                        fontSize: 10,
-                        padding: '0 5px',
-                        borderRadius: 4,
-                        cursor: 'pointer',
-                        border: '1px solid #ffa39e',
-                        background: '#fff1f0',
-                        color: '#cf1322',
-                      }}
-                    >
-                      DUE {dayjs(dueApt.scheduledFor).isBefore(dayjs().startOf('day')) ? 'OVERDUE' : dayjs(dueApt.scheduledFor).format('h:mm A')}
-                    </Tag>
-                  </Tooltip>
-                )}
+                {dueTag}
               </div>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 <PhoneOutlined /> {record.phoneNumber}
@@ -483,6 +605,57 @@ export const ProspectsPage: React.FC = () => {
               </div>
             </Space>
           </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Assigned Staff',
+      key: 'assignedStaff',
+      width: 210,
+      render: (_: any, record: Prospect) => {
+        const assignedId = record.assignedUserId || (record as any).assignedStaffId;
+        const staff = allStaff.find((u) => u.id === assignedId);
+        return (
+          <Space direction="vertical" size={2} style={{ width: '100%' }}>
+            {staff ? (
+              <Space size={6}>
+                <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
+                <div>
+                  <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+                    {getUserFullName(staff)}
+                  </Text>
+                  <Tag
+                    color={staff.role === 'marketing_director' ? 'gold' : 'blue'}
+                    style={{ fontSize: 9, margin: 0, padding: '0 4px', borderRadius: 3 }}
+                  >
+                    {staff.role === 'marketing_director' ? 'Director' : 'Marketer'}
+                  </Tag>
+                </div>
+              </Space>
+            ) : (
+              <Tag color="orange" icon={<UserSwitchOutlined />} style={{ fontSize: 10, borderRadius: 4 }}>
+                Unassigned (Needs Staff)
+              </Tag>
+            )}
+            {isAdmin && (
+              <Select
+                size="small"
+                placeholder="Assign staff..."
+                value={assignedId || undefined}
+                style={{ width: '100%', maxWidth: 175, marginTop: 2 }}
+                onChange={(newStaffId) => handleAssignStaffToProspect(record.id, newStaffId)}
+                onClick={(e) => e.stopPropagation()}
+                showSearch
+                optionFilterProp="children"
+              >
+                {marketingStaff.map((s) => (
+                  <Select.Option key={s.id} value={s.id}>
+                    {getUserFullName(s)} ({s.role === 'marketing_director' ? 'Director' : 'Marketer'})
+                  </Select.Option>
+                ))}
+              </Select>
+            )}
+          </Space>
         );
       },
     },
@@ -748,10 +921,10 @@ export const ProspectsPage: React.FC = () => {
         </Col>
       </Row>
 
-      {/* Filters (Search, Status, and Date-wise: Daily, Weekly, Monthly, Yearly, Custom) */}
+      {/* Filters (Search, Source, Status, and Date-wise: Daily, Weekly, Monthly, Yearly, Custom) */}
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} sm={12} md={6}>
+          <Col xs={24} sm={12} md={5}>
             <Input
               placeholder="Search prospects..."
               prefix={<SearchOutlined />}
@@ -762,6 +935,20 @@ export const ProspectsPage: React.FC = () => {
             />
           </Col>
           <Col xs={24} sm={12} md={5}>
+            <Select
+              style={{ width: '100%' }}
+              placeholder="Source"
+              value={sourceFilter}
+              onChange={setSourceFilter}
+              size="middle"
+              options={[
+                { value: 'marketing', label: `🎯 Marketing (${marketingProspectCount})` },
+                { value: 'all', label: `🌐 All Prospects (${totalProspectCount})` },
+                { value: 'customer_service', label: `🎧 Customer Service (${csProspectCount})` },
+              ]}
+            />
+          </Col>
+          <Col xs={24} sm={12} md={4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Filter by status"
@@ -780,7 +967,7 @@ export const ProspectsPage: React.FC = () => {
               <Option value="purchased">Purchased</Option>
             </Select>
           </Col>
-          <Col xs={24} sm={12} md={5}>
+          <Col xs={24} sm={12} md={4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Date Filter"
@@ -801,7 +988,7 @@ export const ProspectsPage: React.FC = () => {
             </Select>
           </Col>
           {dateFilter === 'custom' && (
-            <Col xs={24} sm={12} md={5}>
+            <Col xs={24} sm={12} md={4}>
               <DatePicker.RangePicker
                 style={{ width: '100%' }}
                 value={customDateRange}
@@ -810,7 +997,7 @@ export const ProspectsPage: React.FC = () => {
               />
             </Col>
           )}
-          <Col xs={24} sm={24} md={dateFilter === 'custom' ? 3 : 8}>
+          <Col xs={24} sm={24} md={dateFilter === 'custom' ? 2 : 6}>
             <Text type="secondary" style={{ display: 'block', textAlign: 'right', fontWeight: 500 }}>
               Showing {filteredMarketingProspects.length} of {allMarketingProspects.length} prospects
             </Text>
@@ -1085,6 +1272,22 @@ export const ProspectsPage: React.FC = () => {
               <Option value="purchased">Purchased</Option>
             </Select>
           </Form.Item>
+
+          {isAdmin && (
+            <Form.Item
+              name="assignedUserId"
+              label="Assigned Marketer / Staff"
+              extra="Assign or reassign this prospect to a marketing staff member"
+            >
+              <Select placeholder="Select assigned marketer..." allowClear showSearch optionFilterProp="children">
+                {marketingStaff.map((staff) => (
+                  <Option key={staff.id} value={staff.id}>
+                    {getUserFullName(staff)} ({staff.role === 'marketing_director' ? 'Director' : 'Marketer'})
+                  </Option>
+                ))}
+              </Select>
+            </Form.Item>
+          )}
 
           <Form.Item
             name="reasonForContact"

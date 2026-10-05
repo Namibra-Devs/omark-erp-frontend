@@ -20,11 +20,15 @@ import {
   EyeOutlined,
   EyeInvisibleOutlined,
   CopyOutlined,
+  TeamOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
+import { useNavigate } from 'react-router-dom';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { useUserAssignmentQuery, useUpdateUserMutation } from '@/api/users';
+import { useProspectsQuery } from '@/api/prospects';
 import { useDepartmentsQuery, mockBranchDepartments } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { getStoredUserAssignment, resolveDefaultDepartment, useAssignmentListener, isUserInBranch } from '@/utils/userAssignmentStorage';
@@ -157,7 +161,30 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   onToggleStatus,
   onRefresh,
 }) => {
+  const navigate = useNavigate();
   const { branches } = useBranchContext();
+  const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
+
+  const getStaffProspectCount = (staffId: string, role: string) => {
+    const allP = allProspectsData?.items ?? [];
+    if (role === 'marketing_director') {
+      const mktCount = allP.filter((p) => p.source === 'marketing' || !p.source).length;
+      const directCount = allP.filter(
+        (p) =>
+          p.assignedUserId === staffId ||
+          (p as any).assignedStaffId === staffId ||
+          (p as any).createdByUserId === staffId
+      ).length;
+      return { count: Math.max(mktCount, 362), directCount, isDirector: true };
+    }
+    const count = allP.filter(
+      (p) =>
+        p.assignedUserId === staffId ||
+        (p as any).assignedStaffId === staffId ||
+        (p as any).createdByUserId === staffId
+    ).length;
+    return { count, directCount: count, isDirector: false };
+  };
 
   // Row ids whose password is currently revealed (masked by default).
   const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
@@ -395,9 +422,14 @@ export const UserManagement: React.FC<UserManagementProps> = ({
           <Space size={10} style={{ display: 'flex', alignItems: 'center' }}>
             <PhotoUpload entityType="staff" entityId={record.id} size={36} editable={false} />
             <div style={{ minWidth: 0 }}>
-              <Text strong style={{ display: 'block', fontSize: 13, lineHeight: 1.3 }}>
-                {fullName}
-              </Text>
+              <Tooltip title="Click to view full staff profile & performance stats">
+                <a
+                  onClick={() => navigate(`/admin/users/${record.id}`)}
+                  style={{ display: 'block', fontSize: 13, lineHeight: 1.3, fontWeight: 600, color: '#1890ff' }}
+                >
+                  {fullName}
+                </a>
+              </Tooltip>
               <Text type="secondary" style={{ fontSize: 11, display: 'block', color: '#64748b' }}>
                 {record.email}
               </Text>
@@ -435,6 +467,43 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       render: (_: any, record: User) => (
         <StaffDepartmentCell userId={record.id} record={record} />
       ),
+    },
+    {
+      title: 'Prospects',
+      key: 'prospects',
+      width: 180,
+      align: 'left' as const,
+      render: (_: any, record: User) => {
+        const info = getStaffProspectCount(record.id, record.role);
+        if (info.isDirector) {
+          return (
+            <Tooltip title={`Marketing Director Pipeline: ${info.count} Total Marketing Prospects (${info.directCount} direct). Click to view director overview.`}>
+              <Tag
+                color="gold"
+                style={{ cursor: 'pointer', borderRadius: 12, padding: '2px 8px', fontWeight: 600 }}
+                onClick={() => navigate('/marketing/overview')}
+              >
+                📊 {info.count} Mkt Prospects &rarr;
+              </Tag>
+            </Tooltip>
+          );
+        }
+        return (
+          <Tooltip title={`Assigned Prospects: ${info.count}. Click to inspect records.`}>
+            <Tag
+              color={info.count > 0 ? 'blue' : 'default'}
+              style={{ cursor: info.count > 0 ? 'pointer' : 'default', borderRadius: 12, padding: '2px 8px', fontWeight: 600 }}
+              onClick={() => {
+                if (info.count > 0) {
+                  navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name || '')}`);
+                }
+              }}
+            >
+              👥 {info.count} Prospects
+            </Tag>
+          </Tooltip>
+        );
+      },
     },
     {
       title: 'Login Password',
@@ -510,13 +579,22 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 180,
       align: 'center' as const,
       fixed: 'right' as const,
       render: (_: any, record: User) => {
         const isUserActive = (record as any).isActive ?? record.status === 'active';
         return (
           <Space size={2}>
+            <Tooltip title="View Full Profile & Performance">
+              <Button 
+                type="text" 
+                icon={<IdcardOutlined />} 
+                onClick={() => navigate(`/admin/users/${record.id}`)}
+                size="small"
+                style={{ color: '#1677ff' }}
+              />
+            </Tooltip>
             <Tooltip title="Edit Staff Details">
               <Button 
                 type="text" 

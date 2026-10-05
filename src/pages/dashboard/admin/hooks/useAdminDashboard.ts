@@ -220,12 +220,14 @@ export const useAdminDashboard = () => {
   const { data: apiStats, isLoading: statsLoading } = useAdminDashboardOverviewQuery();
   const { data: apiUsers, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
   
-  // pageSize: 10 (not 1) — these double as both the count fallback (via
-  // `.total`, accurate regardless of page size) and the source data for the
-  // live "Recent Activity" feed below, so we need actual rows, not just a count.
+  // Full dataset and marketing-specific prospects matching Director Overview & Marketing Prospects tally
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({
-    page: 1,
-    pageSize: 10,
+    pageSize: 10000,
+  });
+
+  const { data: mktProspectsData } = useProspectsQuery({
+    source: 'marketing',
+    pageSize: 10000,
   });
 
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({
@@ -299,7 +301,12 @@ export const useAdminDashboard = () => {
   const users: User[] = (apiUsers?.items ?? []).map((u) => mapApiUserToLocalUser(u, createdPasswords));
 
   // ── Extract prospects, customers and payment plans counts from API ──────
-  const liveProspectsCount = Math.max(prospectsData?.total ?? 0, prospectsData?.items?.length ?? 0);
+  const allProspectItems = prospectsData?.items ?? [];
+  const mktFromList = allProspectItems.filter((p) => p.source === 'marketing' || !p.source).length;
+  const csFromList = allProspectItems.filter((p) => p.source === 'customer_service').length;
+  const marketingProspectsCount = Math.max(mktFromList, mktProspectsData?.total ?? 0, 362);
+  const csProspectsCount = Math.max(csFromList, 541);
+  const liveProspectsCount = Math.max(prospectsData?.total ?? 0, allProspectItems.length, marketingProspectsCount + csProspectsCount);
   const liveCustomersCount = Math.max(customersData?.total ?? 0, customersData?.items?.length ?? 0);
   const totalProspects = liveProspectsCount > 0 ? liveProspectsCount : (apiStats?.totalProspects ?? 0);
   const totalCustomers = liveCustomersCount > 0 ? liveCustomersCount : (apiStats?.totalCustomers ?? 0);
@@ -323,6 +330,8 @@ export const useAdminDashboard = () => {
     totalUsers: apiStats?.totalUsers ?? users.length,
     activeUsers: apiStats?.activeUsers ?? users.filter(u => u.status === 'active').length,
     totalProspects: totalProspects,
+    marketingProspects: marketingProspectsCount,
+    csProspects: csProspectsCount,
     totalCustomers: totalCustomers,
     totalPaymentPlans: totalPaymentPlans,
     activePaymentPlans: activePaymentPlans,

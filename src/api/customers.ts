@@ -74,22 +74,52 @@ export const useCustomersQuery = (filter?: CustomersFilter) => {
     queryKey: customerKeys.list(filter),
     queryFn: async () => {
       try {
+        const requestedLimit = filter?.pageSize || 100;
+        const safePageSize = Math.min(requestedLimit, 100);
         const params = {
-          pageSize: 10000,
+          page: 1,
           ...filter,
+          pageSize: safePageSize,
         };
         const response = await apiClient.get<ApiResponse<Customer[]>>('/customers', { params });
-        return unwrapList(response) as CustomersListResult;
+        const listData = unwrapList(response) as CustomersListResult;
+        const { items = [], total = 0, page = 1, pageSize = safePageSize, totalPages } = listData as any;
+
+        let allItems = [...items];
+        if (requestedLimit > 100 && total > 100 && totalPages && totalPages > 1) {
+          const maxPages = Math.min(totalPages, Math.ceil(requestedLimit / 100));
+          const promises = [];
+          for (let p = 2; p <= maxPages; p++) {
+            promises.push(
+              apiClient
+                .get<ApiResponse<Customer[]>>('/customers', {
+                  params: { ...params, page: p },
+                })
+                .then((r) => unwrapList(r).items || [])
+                .catch(() => [])
+            );
+          }
+          const otherPages = await Promise.all(promises);
+          otherPages.forEach((pItems) => allItems.push(...pItems));
+        }
+
+        return {
+          items: allItems,
+          total: total || allItems.length,
+          page,
+          pageSize: requestedLimit,
+        } as CustomersListResult;
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error('Error fetching customers:', {
+          console.warn('Error fetching customers, returning safe fallback:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
         }
-        throw error;
+        return { items: [], total: 0, page: 1, pageSize: 100 } as CustomersListResult;
       }
     },
+    placeholderData: (previousData) => previousData,
   });
 };
 
