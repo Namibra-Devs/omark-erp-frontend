@@ -275,9 +275,10 @@ export const payrollKeys = {
 
 // --- Hooks ---
 
-export function usePayrollQuery(params?: PayrollListParams) {
+export function usePayrollQuery(params?: PayrollListParams, enabled = true) {
   return useQuery({
     queryKey: payrollKeys.list(params),
+    enabled,
     queryFn: async () => {
       let serverRecords: PayrollRecord[] = [];
       try {

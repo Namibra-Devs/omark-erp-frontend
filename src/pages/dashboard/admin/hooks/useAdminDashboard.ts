@@ -222,12 +222,12 @@ export const useAdminDashboard = () => {
   
   // Full dataset and marketing-specific prospects matching Director Overview & Marketing Prospects tally
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({
-    pageSize: 10000,
+    pageSize: 100,
   });
 
   const { data: mktProspectsData } = useProspectsQuery({
     source: 'marketing',
-    pageSize: 10000,
+    pageSize: 100,
   });
 
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({

@@ -24,6 +24,7 @@ export const LoginPage: React.FC = () => {
   const [forgotLoading, setForgotLoading] = useState(false);
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [generatedCode, setGeneratedCode] = useState('');
+  const isSubmittingRef = React.useRef(false);
   
   // Redirect if already logged in
   useEffect(() => {
@@ -41,6 +42,8 @@ export const LoginPage: React.FC = () => {
   }, [user, navigate]);
   
   const onFinish = async (values: { email: string; password: string }) => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setLoading(true);
     setError(undefined);
     try {
@@ -51,6 +54,7 @@ export const LoginPage: React.FC = () => {
       setError(errorMessage);
     } finally {
       setLoading(false);
+      isSubmittingRef.current = false;
     }
   };
 

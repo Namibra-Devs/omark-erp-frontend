@@ -30,6 +30,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const navigate = useNavigate();
+  const loginInProgressRef = React.useRef(false);
   
   // Use Ant Design's context-safe messaging API
   const { message } = App.useApp();
@@ -72,6 +73,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ── Login ──────────────────────────────────────────────────────────────────
   const login = useCallback(async (email: string, password: string) => {
+    if (loginInProgressRef.current) {
+      console.warn('[AuthContext] Login is already in progress. Ignoring duplicate call.');
+      return;
+    }
+    loginInProgressRef.current = true;
     try {
       setIsLoading(true);
       const response = await apiClient.post('/auth/login', { email, password });
@@ -121,19 +127,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setUser(userObj);
 
-      // Async fetch server assignment in background if available
-      apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
-        const assign = res.data?.data || res.data;
-        if (assign?.branchId || assign?.departmentId) {
-          setUser((prev) => prev ? {
-            ...prev,
-            branchId: assign.branchId || prev.branchId,
-            branch: assign.branchName || prev.branch,
-            departmentId: assign.departmentId || prev.departmentId,
-            department: assign.departmentName || prev.department,
-          } : null);
-        }
-      }).catch(() => {});
+      // Async fetch server assignment only if not already known from storage or userData
+      if (!storedAssignment?.branchId && !userData.branchId && !userData.branch) {
+        apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
+          const assign = res.data?.data || res.data;
+          if (assign?.branchId || assign?.departmentId) {
+            setUser((prev) => prev ? {
+              ...prev,
+              branchId: assign.branchId || prev.branchId,
+              branch: assign.branchName || prev.branch,
+              departmentId: assign.departmentId || prev.departmentId,
+              department: assign.departmentName || prev.department,
+            } : null);
+          }
+        }).catch(() => {});
+      }
       
       // Navigate based on role
       const role = userObj.role;
@@ -158,6 +166,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       throw error;
     } finally {
       setIsLoading(false);
+      loginInProgressRef.current = false;
     }
   }, [navigate, message]);
 
@@ -219,19 +228,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         };
         setUser(userObj);
 
-        // Background server assignment query
-        apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
-          const assign = res.data?.data || res.data;
-          if (assign?.branchId || assign?.departmentId) {
-            setUser((prev) => prev ? {
-              ...prev,
-              branchId: assign.branchId || prev.branchId,
-              branch: assign.branchName || prev.branch,
-              departmentId: assign.departmentId || prev.departmentId,
-              department: assign.departmentName || prev.department,
-            } : null);
-          }
-        }).catch(() => {});
+        // Background server assignment query only if not already known
+        if (!storedAssignment?.branchId && !userData.branchId && !userData.branch) {
+          apiClient.get(`/users/${userData.id}/assignment`).then((res) => {
+            const assign = res.data?.data || res.data;
+            if (assign?.branchId || assign?.departmentId) {
+              setUser((prev) => prev ? {
+                ...prev,
+                branchId: assign.branchId || prev.branchId,
+                branch: assign.branchName || prev.branch,
+                departmentId: assign.departmentId || prev.departmentId,
+                department: assign.departmentName || prev.department,
+              } : null);
+            }
+          }).catch(() => {});
+        }
       }
     } catch (error) {
       console.error('Failed to refresh user:', error);

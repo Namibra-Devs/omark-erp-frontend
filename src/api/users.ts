@@ -232,7 +232,7 @@ export function useUsersQuery(params?: UsersListParams) {
 
         let allItems = [...(items || [])];
         if (requestedLimit > 100 && total > 100 && totalPages && totalPages > 1) {
-          const maxPages = Math.min(totalPages, Math.ceil(requestedLimit / 100));
+          const maxPages = Math.min(totalPages, Math.min(Math.ceil(requestedLimit / 100), 2));
           const promises = [];
           for (let p = 2; p <= maxPages; p++) {
             promises.push(

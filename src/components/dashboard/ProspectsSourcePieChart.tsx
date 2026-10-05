@@ -48,27 +48,30 @@ export const ProspectsSourcePieChart: React.FC<ProspectsSourcePieChartProps> = (
 }) => {
   const navigate = useNavigate();
 
-  // 1. Query full prospects dataset with large pageSize (fetches all pages if > 100)
+  // If propProspects is provided by parent (e.g. AdminDashboard), avoid redundant network queries
+  const shouldFetchProspects = !propProspects || propProspects.length === 0;
+
+  // 1. Query full prospects dataset with safe pageSize (backend provides exact total on page 1)
   const {
     data: allProspectsData,
     isLoading: allLoading,
     refetch: refetchAll,
-  } = useProspectsQuery({ pageSize: 10000 });
+  } = useProspectsQuery({ pageSize: 100 }, shouldFetchProspects);
 
-  // 2. Query Marketing-specific and CS-specific prospects to guarantee server-side exact counts
+  // 2. Query Marketing-specific and CS-specific prospects for server-side exact counts
   const {
     data: mktProspectsData,
     isLoading: mktLoading,
     refetch: refetchMkt,
-  } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  } = useProspectsQuery({ source: 'marketing', pageSize: 100 }, shouldFetchProspects);
 
   const {
     data: csProspectsData,
     isLoading: csLoading,
     refetch: refetchCs,
-  } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  } = useProspectsQuery({ source: 'customer_service', pageSize: 100 }, shouldFetchProspects);
 
-  const isLoading = allLoading || mktLoading || csLoading;
+  const isLoading = shouldFetchProspects && (allLoading || mktLoading || csLoading);
 
   // 3. Exact Figure Breakdown Calculation (Marketing vs CS)
   const { marketingCount, csCount, overallTotal, marketingPercent, csPercent } = useMemo(() => {

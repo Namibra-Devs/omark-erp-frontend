@@ -127,9 +127,10 @@ export const complaintsKeys = {
   detail: (id: string) => [...complaintsKeys.details(), id] as const,
 };
 
-export function useComplaintsQuery(params?: ComplaintsListParams) {
+export function useComplaintsQuery(params?: ComplaintsListParams, enabled = true) {
   return useQuery({
     queryKey: complaintsKeys.list(params),
+    enabled,
     queryFn: async (): Promise<ListResult<ComplaintEntity>> => {
       let serverComplaints: ComplaintEntity[] = [];
       try {

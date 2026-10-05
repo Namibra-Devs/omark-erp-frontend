@@ -263,9 +263,9 @@ export const useProspectsQuery = (filter?: ProspectsFilter, enabled = true) => {
             : 1;
 
         // If caller requested a large page size (e.g. pageSize > 100) and multiple pages exist,
-        // retrieve all pages so the caller gets the complete set of prospects.
+        // retrieve up to 2 pages so caller gets a representative sample without flooding the rate limiter.
         if (filter?.pageSize && filter.pageSize > 100 && (totalPages > 1 || total > pageItemsCount)) {
-          const maxPagesToFetch = Math.min(totalPages, Math.ceil(filter.pageSize / 100));
+          const maxPagesToFetch = Math.min(totalPages, Math.min(Math.ceil(filter.pageSize / 100), 2));
           const promises = [];
           for (let p = 2; p <= maxPagesToFetch; p++) {
             promises.push(

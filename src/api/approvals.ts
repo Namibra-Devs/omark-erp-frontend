@@ -140,9 +140,10 @@ export const approvalsKeys = {
   list: (params?: ApprovalsListParams) => [...approvalsKeys.lists(), params ?? {}] as const,
 };
 
-export function useApprovalsQuery(params?: ApprovalsListParams) {
+export function useApprovalsQuery(params?: ApprovalsListParams, enabled = true) {
   return useQuery({
     queryKey: approvalsKeys.list(params),
+    enabled,
     queryFn: async (): Promise<ApprovalItem[]> => {
       const stored = getStoredApprovals();
       try {

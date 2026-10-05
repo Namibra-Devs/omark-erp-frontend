@@ -70,7 +70,7 @@ export const NavMenu: React.FC = () => {
 
   // ── Cross-nav badge counters ──────────────────────────────────────────────
   const canSeeComplaints = hasRole(['secretary', 'customer_service', 'admin']);
-  const { data: complaintsData } = useComplaintsQuery(canSeeComplaints ? { status: 'open' } : undefined);
+  const { data: complaintsData } = useComplaintsQuery(canSeeComplaints ? { status: 'open' } : undefined, canSeeComplaints);
   const complaintsList = complaintsData?.items ?? [];
   const { count: fallbackComplaintsCount } = useUnseenCount(
     'complaints-staff',
@@ -81,14 +81,14 @@ export const NavMenu: React.FC = () => {
   const canSeeHeadOffice = hasRole(['admin', 'branch_manager']);
   const canSeePayroll = hasRole(['accounts', 'admin', 'branch_manager']);
 
-  // Live real-time approvals query
-  const { data: approvalsData = [] } = useApprovalsQuery();
+  // Live real-time approvals query (only requested for staff with approvals access)
+  const { data: approvalsData = [] } = useApprovalsQuery(undefined, canSeeHeadOffice);
   const pendingApprovalsFromApi = (Array.isArray(approvalsData) ? approvalsData : []).filter(
     (a) => String(a?.status || '').trim().toLowerCase() === 'pending'
   ).length;
 
-  // Live real-time payroll query
-  const { data: payrollData } = usePayrollQuery(canSeePayroll ? { status: 'pending' } : undefined);
+  // Live real-time payroll query (only requested for staff with payroll access)
+  const { data: payrollData } = usePayrollQuery(canSeePayroll ? { status: 'pending' } : undefined, canSeePayroll);
   const payrollList = Array.isArray(payrollData?.items) ? payrollData.items : [];
   const pendingPayrollFromApi = payrollList.filter(
     (p: any) => String(p?.status || '').trim().toLowerCase() === 'pending'

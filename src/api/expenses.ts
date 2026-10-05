@@ -504,8 +504,9 @@ export function useExpensesQuery(params?: ExpensesListParams) {
         totalPages: 1,
       };
     },
-    refetchInterval: 30000,
-    staleTime: 5000,
+    refetchInterval: 120000,
+    staleTime: 60000,
+    refetchIntervalInBackground: false,
   });
 }
 

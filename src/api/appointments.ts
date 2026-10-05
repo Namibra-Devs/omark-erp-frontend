@@ -72,9 +72,9 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
         let allItems = result.items || [];
         const totalPages = result.totalPages || (result.total ? Math.ceil(result.total / safePageSize) : 1);
 
-        // If caller requested more than 100 items and total exceeds 100, fetch next pages up to requested limit
+        // If caller requested more than 100 items and total exceeds 100, fetch at most 2 pages
         if (requestedLimit > 100 && result.total > 100 && totalPages > 1) {
-          const maxPagesToFetch = Math.min(totalPages, Math.ceil(requestedLimit / 100));
+          const maxPagesToFetch = Math.min(totalPages, Math.min(Math.ceil(requestedLimit / 100), 2));
           const pagePromises = [];
           for (let p = 2; p <= maxPagesToFetch; p++) {
             pagePromises.push(

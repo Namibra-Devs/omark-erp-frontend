@@ -56,23 +56,6 @@ function onTokenRefreshFailed(error: any) {
   refreshSubscribers = [];
 }
 
-const addAuthInterceptor = (instance: AxiosInstance) => {
-  instance.interceptors.request.use(
-    (config: InternalAxiosRequestConfig) => {
-      const isPortalRoute = window.location.pathname.startsWith('/portal') || config.url?.includes('/portal/');
-      const token = isPortalRoute ? localStorage.getItem('portal_token') : getAccessToken();
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
-      }
-      return config;
-    },
-    (error) => Promise.reject(error)
-  );
-};
-
-addAuthInterceptor(apiClient);
-addAuthInterceptor(erpClient);
-
 interface CacheEntry {
   data: any;
   status: number;
@@ -82,6 +65,14 @@ interface CacheEntry {
 }
 
 const memoryGetCache = new Map<string, CacheEntry>();
+const inFlightRequests = new Map<string, Promise<AxiosResponse>>();
+const SESSION_CACHE_PREFIX = 'omark_cache_res:';
+
+let globalRateLimitResetUntil = 0;
+
+export const isGloballyRateLimited = () => Date.now() < globalRateLimitResetUntil;
+export const getRateLimitSecondsRemaining = () =>
+  Math.max(0, Math.ceil((globalRateLimitResetUntil - Date.now()) / 1000));
 
 const getCacheKey = (config: InternalAxiosRequestConfig): string => {
   const url = config.url || '';
@@ -89,17 +80,118 @@ const getCacheKey = (config: InternalAxiosRequestConfig): string => {
   return `${config.baseURL || ''}:${url}:${params}`;
 };
 
+function saveToCache(key: string, entry: CacheEntry) {
+  memoryGetCache.set(key, entry);
+  try {
+    const serialized = JSON.stringify(entry);
+    // Keep individual entries under 500KB to stay safely within sessionStorage quota
+    if (serialized.length < 500000) {
+      sessionStorage.setItem(`${SESSION_CACHE_PREFIX}${key}`, serialized);
+    }
+  } catch {
+    // sessionStorage quota exceeded or unavailable - in-memory cache still works
+  }
+}
+
+function getFromCache(key: string): CacheEntry | null {
+  const mem = memoryGetCache.get(key);
+  if (mem) return mem;
+  try {
+    const raw = sessionStorage.getItem(`${SESSION_CACHE_PREFIX}${key}`);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      memoryGetCache.set(key, parsed);
+      return parsed;
+    }
+  } catch {}
+  return null;
+}
+
 export const clearClientCache = () => {
   memoryGetCache.clear();
+  try {
+    const keysToRemove: string[] = [];
+    for (let i = 0; i < sessionStorage.length; i++) {
+      const k = sessionStorage.key(i);
+      if (k?.startsWith(SESSION_CACHE_PREFIX)) {
+        keysToRemove.push(k);
+      }
+    }
+    keysToRemove.forEach((k) => sessionStorage.removeItem(k));
+  } catch {}
 };
+
+const addAuthAndRateGuardInterceptor = (instance: AxiosInstance) => {
+  instance.interceptors.request.use(
+    (config: InternalAxiosRequestConfig) => {
+      const isPortalRoute = window.location.pathname.startsWith('/portal') || config.url?.includes('/portal/');
+      const token = isPortalRoute ? localStorage.getItem('portal_token') : getAccessToken();
+      if (token) {
+        config.headers.Authorization = `Bearer ${token}`;
+      }
+
+      // Only apply deduplication and rate-guard cache fallback to GET requests
+      if (config.method?.toLowerCase() === 'get') {
+        const cacheKey = getCacheKey(config);
+
+        // 1. If currently under an active global rate limit lockout, serve cached data if available!
+        if (isGloballyRateLimited()) {
+          const cached = getFromCache(cacheKey);
+          if (cached) {
+            config.adapter = async () => ({
+              data: cached.data,
+              status: 200,
+              statusText: 'OK',
+              headers: { ...(cached.headers || {}), 'x-omark-cache-fallback': 'true' },
+              config,
+              request: {},
+            });
+            return config;
+          }
+        }
+
+        // 2. In-flight request deduplication: if identical request is pending, reuse promise!
+        const pending = inFlightRequests.get(cacheKey);
+        if (pending) {
+          config.adapter = () => pending;
+          return config;
+        }
+
+        // 3. Intercept adapter to track the promise in inFlightRequests
+        const baseAdapter =
+          typeof config.adapter === 'function'
+            ? config.adapter
+            : (axios as any).getAdapter(config.adapter || instance.defaults.adapter || axios.defaults.adapter);
+
+        if (typeof baseAdapter === 'function') {
+          config.adapter = async (cfg) => {
+            const promise = baseAdapter(cfg);
+            inFlightRequests.set(cacheKey, promise);
+            try {
+              return await promise;
+            } finally {
+              inFlightRequests.delete(cacheKey);
+            }
+          };
+        }
+      }
+
+      return config;
+    },
+    (error) => Promise.reject(error)
+  );
+};
+
+addAuthAndRateGuardInterceptor(apiClient);
+addAuthAndRateGuardInterceptor(erpClient);
 
 const addResponseInterceptor = (instance: AxiosInstance) => {
   instance.interceptors.response.use(
     (response) => {
-      // Store successful GET requests in memory cache for resilient 429 fallback
+      // Store successful GET requests in persistent cache for resilient 429 fallback
       if (response.config?.method?.toLowerCase() === 'get') {
         const cacheKey = getCacheKey(response.config);
-        memoryGetCache.set(cacheKey, {
+        saveToCache(cacheKey, {
           data: response.data,
           status: response.status,
           statusText: response.statusText,
@@ -107,8 +199,19 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
           timestamp: Date.now(),
         });
       } else if (['post', 'put', 'patch', 'delete'].includes(response.config?.method?.toLowerCase() || '')) {
-        // Clear cached data on mutations to keep views fresh
-        memoryGetCache.clear();
+        // Invalidate matching keys instead of clearing the entire cache
+        const url = response.config?.url || '';
+        const basePath = url.split('?')[0];
+        if (basePath) {
+          for (const [key] of memoryGetCache.entries()) {
+            if (key.includes(basePath)) {
+              memoryGetCache.delete(key);
+              try {
+                sessionStorage.removeItem(`${SESSION_CACHE_PREFIX}${key}`);
+              } catch {}
+            }
+          }
+        }
       }
       return response;
     },
@@ -189,56 +292,49 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
 
       // ── Handle 429 Rate Limiting ─────────────────────────────────────────
       if (isRateLimited && originalRequest && !isAuthEndpoint) {
-        // A. If this is a GET request, serve existing cached data immediately to keep ERP usable
+        // Extract server-provided retry headers
+        const retryAfterHeader = error.response?.headers?.['retry-after'];
+        const rateLimitResetHeader = error.response?.headers?.['ratelimit-reset'];
+        let resetSeconds = 60;
+        if (retryAfterHeader && !isNaN(parseInt(String(retryAfterHeader), 10))) {
+          resetSeconds = Math.max(parseInt(String(retryAfterHeader), 10), 1);
+        } else if (rateLimitResetHeader && !isNaN(parseInt(String(rateLimitResetHeader), 10))) {
+          resetSeconds = Math.max(parseInt(String(rateLimitResetHeader), 10), 1);
+        }
+
+        // Register global rate-limit lockout so subsequent requests don't hit the server
+        globalRateLimitResetUntil = Math.max(globalRateLimitResetUntil, Date.now() + resetSeconds * 1000);
+        window.dispatchEvent(
+          new CustomEvent('omark-rate-limited', {
+            detail: { seconds: resetSeconds, until: globalRateLimitResetUntil },
+          })
+        );
+
+        // A. If this is a GET request, serve cached data immediately (from memory or sessionStorage)
         if (originalRequest.method?.toLowerCase() === 'get') {
           const cacheKey = getCacheKey(originalRequest);
-          const cached = memoryGetCache.get(cacheKey);
+          const cached = getFromCache(cacheKey);
           if (cached) {
             console.warn(
-              `[Omark Rate Guard] 429 Rate limited for ${originalRequest.url}. Serving cached data from ${Math.round((Date.now() - cached.timestamp) / 1000)}s ago.`
+              `[Omark Rate Guard] 429 Rate limited for ${originalRequest.url}. Serving cached fallback from ${Math.round((Date.now() - cached.timestamp) / 1000)}s ago.`
             );
             return Promise.resolve({
               data: cached.data,
-              status: cached.status,
-              statusText: cached.statusText,
-              headers: { ...cached.headers, 'x-omark-cache-fallback': 'true' },
+              status: 200,
+              statusText: 'OK',
+              headers: { ...(cached.headers || {}), 'x-omark-cache-fallback': 'true' },
               config: originalRequest,
             } as AxiosResponse);
           }
         }
 
-        // B. Intelligent exponential backoff retry for essential requests
-        const MAX_RATE_LIMIT_RETRIES = 3;
+        // B. For very short rate limit windows (<= 5s), allow a single retry with jitter
+        const MAX_RATE_LIMIT_RETRIES = 1;
         const currentRetries = (originalRequest._rateLimitRetryCount as number) || 0;
 
-        if (currentRetries < MAX_RATE_LIMIT_RETRIES) {
+        if (resetSeconds <= 5 && currentRetries < MAX_RATE_LIMIT_RETRIES) {
           originalRequest._rateLimitRetryCount = currentRetries + 1;
-
-          // Parse retry headers from server if available
-          const retryAfterHeader = error.response?.headers?.['retry-after'];
-          const rateLimitResetHeader = error.response?.headers?.['ratelimit-reset'];
-
-          let delayMs = 0;
-          if (retryAfterHeader) {
-            const parsed = parseInt(String(retryAfterHeader), 10);
-            if (!isNaN(parsed) && parsed > 0) {
-              delayMs = Math.min(parsed * 1000, 8000);
-            }
-          } else if (rateLimitResetHeader) {
-            const parsed = parseInt(String(rateLimitResetHeader), 10);
-            if (!isNaN(parsed) && parsed > 0) {
-              delayMs = Math.min(parsed * 1000, 8000);
-            }
-          }
-
-          if (!delayMs || delayMs <= 0) {
-            const baseDelay = Math.pow(2, currentRetries) * 1000;
-            const jitter = Math.random() * 500;
-            delayMs = Math.min(baseDelay + jitter, 8000);
-          } else {
-            delayMs += Math.random() * 300;
-          }
-
+          const delayMs = resetSeconds * 1000 + Math.random() * 500;
           console.warn(`[Omark API] Retrying rate-limited ${originalRequest.url} in ${Math.round(delayMs)}ms (attempt ${currentRetries + 1}/${MAX_RATE_LIMIT_RETRIES})`);
           await new Promise((resolve) => setTimeout(resolve, delayMs));
           return instance(originalRequest);
@@ -264,11 +360,18 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
           .join(', ');
       }
 
+      const remainingSec = getRateLimitSecondsRemaining();
+      const remainingMin = Math.ceil(remainingSec / 60);
+      const rateLimitFallbackMsg =
+        remainingSec > 60
+          ? `Server rate limit reached. Normal requests will resume in ~${remainingMin} min. (Serving cached data where available)`
+          : `Server rate limit reached. Normal requests will resume in ${remainingSec || 'a few'}s.`;
+
       let rawMsg =
         serverData?.error?.message ||
         (Array.isArray(serverData?.message) ? serverData.message.join(', ') : serverData?.message) ||
         (typeof serverData?.error === 'string' ? serverData.error : null) ||
-        (isRateLimited ? 'The system is experiencing high traffic. Please wait a moment and try again.' : null) ||
+        (isRateLimited ? rateLimitFallbackMsg : null) ||
         error.message ||
         'An unexpected error occurred';
 
