@@ -27,6 +27,7 @@ import {
   Alert,
   Drawer,
   Empty,
+  notification,
 } from 'antd';
 import {
   DollarOutlined,
@@ -55,6 +56,12 @@ import {
   TeamOutlined,
   BarChartOutlined,
   PieChartOutlined,
+  LeftOutlined,
+  RightOutlined,
+  HistoryOutlined,
+  SwapOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer,
@@ -86,8 +93,12 @@ import {
   filterExpensesByRole,
   getRoleDashboardConfig,
   calculateRoleMetrics,
+  getDailyTrackingMetrics,
+  groupExpensesByDay,
   type ExpenseRoleView,
+  type DailyLedgerSummary,
 } from '@/utils/expenseRoleIsolation';
+import { HistoricalExpenseCrossCheck } from '@/components/expenses/HistoricalExpenseCrossCheck';
 import type { Role } from '@/types';
 import { tokens } from '@/constants/tokens';
 
@@ -206,6 +217,85 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
     return getRoleDashboardConfig(roleLens, user, currentBranchName);
   }, [roleLens, user, currentBranchName]);
 
+  // ── 24-Hour Daily Tracking State ─────────────────────────────────────────────
+  const [todayKey, setTodayKey] = useState<string>(() => dayjs().format('YYYY-MM-DD'));
+  const [activeDailyDate, setActiveDailyDate] = useState<string>(() => dayjs().format('YYYY-MM-DD'));
+  const [viewMode, setViewMode] = useState<'daily' | 'all_time'>('daily');
+  const [crossCheckOpen, setCrossCheckOpen] = useState(false);
+  const [countdownStr, setCountdownStr] = useState<string>('');
+
+  const isDailyMode = viewMode === 'daily';
+  const isTodayActive = activeDailyDate === todayKey;
+
+  // ── 24-Hour Automated Rollover Engine ────────────────────────────────────────
+  useEffect(() => {
+    const updateCountdownAndCheckDay = () => {
+      const now = dayjs();
+      const currentDay = now.format('YYYY-MM-DD');
+
+      // Check if 24 hours elapsed across midnight boundary or system woke up on a new day
+      if (currentDay !== todayKey) {
+        const prevDayFormatted = dayjs(todayKey).format('MMMM D, YYYY');
+        const newDayFormatted = now.format('MMMM D, YYYY');
+
+        setTodayKey(currentDay);
+        // Automatically set up the new page for daily tracking
+        setActiveDailyDate(currentDay);
+        try {
+          localStorage.setItem('omark_last_daily_cycle', currentDay);
+        } catch {
+          // ignore
+        }
+
+        notification.info({
+          message: '🌅 Fresh Daily Ledger Initialized',
+          description: `The 24-hour cycle has completed (${prevDayFormatted}). Today's fresh expense page (${newDayFormatted}) is now active for daily tracking.`,
+          duration: 8,
+          placement: 'topRight',
+        });
+
+        refetch();
+      }
+
+      // Calculate time remaining until next midnight rollover
+      const midnight = now.endOf('day');
+      const diffSec = midnight.diff(now, 'second');
+      const hours = Math.floor(diffSec / 3600);
+      const minutes = Math.floor((diffSec % 3600) / 60);
+      const seconds = diffSec % 60;
+      setCountdownStr(`${hours}h ${minutes}m ${seconds}s`);
+    };
+
+    updateCountdownAndCheckDay();
+    const interval = setInterval(updateCountdownAndCheckDay, 1000);
+    return () => clearInterval(interval);
+  }, [todayKey, refetch]);
+
+  // All historical days for this role
+  const allHistoricalDays = useMemo(() => {
+    return groupExpensesByDay(roleFilteredExpenses);
+  }, [roleFilteredExpenses]);
+
+  // Tailored daily metrics for activeDailyDate
+  const dailyMetrics = useMemo(() => {
+    return getDailyTrackingMetrics(roleFilteredExpenses, activeDailyDate, roleLens);
+  }, [roleFilteredExpenses, activeDailyDate, roleLens]);
+
+  // Stepper handlers
+  const handlePrevDay = () => {
+    const prev = dayjs(activeDailyDate).subtract(1, 'day').format('YYYY-MM-DD');
+    setActiveDailyDate(prev);
+    setViewMode('daily');
+  };
+
+  const handleNextDay = () => {
+    const next = dayjs(activeDailyDate).add(1, 'day').format('YYYY-MM-DD');
+    if (next <= todayKey) {
+      setActiveDailyDate(next);
+      setViewMode('daily');
+    }
+  };
+
   // ── Local Filter State ───────────────────────────────────────────────────────
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
@@ -233,6 +323,30 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
   // ── Apply Multi-Criteria Filters ────────────────────────────────────────────
   const baseFilteredExpenses = useMemo(() => {
     return roleFilteredExpenses.filter((e) => {
+      // 1. Daily tracking filter: When in daily mode, isolate strictly to activeDailyDate
+      if (isDailyMode) {
+        const expDate = dayjs(e.incurredOn || e.createdAt);
+        const expDateKey = expDate.isValid() ? expDate.format('YYYY-MM-DD') : todayKey;
+        if (expDateKey !== activeDailyDate) {
+          return false;
+        }
+      } else {
+        // In all_time mode, apply general date filters if selected
+        if (customDateRange && customDateRange[0] && customDateRange[1]) {
+          const d = dayjs(e.incurredOn || e.createdAt);
+          if (!d.isValid()) return false;
+          if (d.isBefore(customDateRange[0].startOf('day')) || d.isAfter(customDateRange[1].endOf('day'))) return false;
+        } else if (dateFilter !== 'all') {
+          const d = dayjs(e.incurredOn || e.createdAt);
+          if (!d.isValid()) return false;
+          const now = dayjs();
+          if (dateFilter === 'today' && !d.isSame(now, 'day')) return false;
+          if (dateFilter === 'weekly' && !d.isSame(now, 'week')) return false;
+          if (dateFilter === 'monthly' && !d.isSame(now, 'month')) return false;
+          if (dateFilter === 'yearly' && !d.isSame(now, 'year')) return false;
+        }
+      }
+
       // Branch filter (if Admin chooses a specific branch, or 'all')
       if (branchFilter !== 'all') {
         const matchesDirect = e.branchId === branchFilter;
@@ -263,24 +377,21 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         return false;
       }
 
-      // Date Range
-      if (customDateRange && customDateRange[0] && customDateRange[1]) {
-        const d = dayjs(e.incurredOn || e.createdAt);
-        if (!d.isValid()) return false;
-        if (d.isBefore(customDateRange[0].startOf('day')) || d.isAfter(customDateRange[1].endOf('day'))) return false;
-      } else if (dateFilter !== 'all') {
-        const d = dayjs(e.incurredOn || e.createdAt);
-        if (!d.isValid()) return false;
-        const now = dayjs();
-        if (dateFilter === 'today' && !d.isSame(now, 'day')) return false;
-        if (dateFilter === 'weekly' && !d.isSame(now, 'week')) return false;
-        if (dateFilter === 'monthly' && !d.isSame(now, 'month')) return false;
-        if (dateFilter === 'yearly' && !d.isSame(now, 'year')) return false;
-      }
-
       return true;
     });
-  }, [roleFilteredExpenses, branchFilter, searchText, categoryFilter, typeFilter, dateFilter, customDateRange, branches]);
+  }, [
+    roleFilteredExpenses,
+    isDailyMode,
+    activeDailyDate,
+    todayKey,
+    branchFilter,
+    searchText,
+    categoryFilter,
+    typeFilter,
+    dateFilter,
+    customDateRange,
+    branches,
+  ]);
 
   // Counts for status tabs
   const counts = useMemo(() => ({
@@ -354,7 +465,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       category: defaultCat,
       type: defaultType,
       amountGHS: undefined,
-      date: dayjs(),
+      date: isDailyMode ? dayjs(activeDailyDate) : dayjs(),
       branchId: user?.branchId || branches[0]?.id,
       description: '',
     });
@@ -439,11 +550,16 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       const encodedUri = encodeURI(csvContent);
       const link = document.createElement('a');
       link.setAttribute('href', encodedUri);
-      link.setAttribute('download', `omark_expenses_${roleLens}_${dayjs().format('YYYY-MM-DD')}.csv`);
+      link.setAttribute(
+        'download',
+        isDailyMode
+          ? `omark_expenses_${roleLens}_daily_${activeDailyDate}.csv`
+          : `omark_expenses_${roleLens}_alltime_${dayjs().format('YYYY-MM-DD')}.csv`
+      );
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      message.success('Expense report exported as CSV!');
+      message.success(isDailyMode ? `Daily expense report for ${activeDailyDate} exported!` : 'Expense report exported as CSV!');
     }
   };
 
@@ -758,6 +874,196 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         </div>
       </Card>
 
+      {/* ── 24-Hour Daily Cycle Control & Cross-Check Navigator ────────────── */}
+      <Card
+        style={{
+          borderRadius: 14,
+          marginBottom: 20,
+          background: isTodayActive
+            ? 'linear-gradient(135deg, #ffffff 0%, #f6ffed 100%)'
+            : 'linear-gradient(135deg, #ffffff 0%, #f9f0ff 100%)',
+          border: isTodayActive ? '1px solid #b7eb8f' : '1px solid #d3adf7',
+          boxShadow: '0 2px 10px rgba(0,0,0,0.02)',
+        }}
+        bodyStyle={{ padding: '14px 20px' }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 14 }}>
+          {/* Left: Active Daily Ledger Badge & Status */}
+          <Space size={10} wrap align="center">
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 10,
+                background: isTodayActive ? '#d9f7be' : '#efdbff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: isTodayActive ? '#389e0d' : '#722ed1',
+                fontSize: 20,
+              }}
+            >
+              <CalendarOutlined />
+            </div>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <Text strong style={{ fontSize: 16, color: '#111827' }}>
+                  {dayjs(activeDailyDate).format('dddd, MMMM D, YYYY')}
+                </Text>
+                {isTodayActive ? (
+                  <Tag color="success" style={{ borderRadius: 12, fontWeight: 700, padding: '2px 10px' }}>
+                    ● Today's Fresh Daily Sheet
+                  </Tag>
+                ) : (
+                  <Tag color="purple" style={{ borderRadius: 12, fontWeight: 700, padding: '2px 10px' }}>
+                    📜 Historical Daily Sheet
+                  </Tag>
+                )}
+                {isTodayActive && (
+                  <Tooltip title="Every 24 hours at midnight, this dashboard automatically rolls over and sets up a fresh daily expense sheet for daily tracking.">
+                    <Tag color="blue" icon={<ClockCircleOutlined />} style={{ borderRadius: 12, fontSize: 11 }}>
+                      Auto-Rolls In: {countdownStr || 'Calculating...'}
+                    </Tag>
+                  </Tooltip>
+                )}
+              </div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                {isDailyMode
+                  ? isTodayActive
+                    ? 'Automated 24h daily tracking active • Fresh daily ledger initialized for operational spend'
+                    : `Cross-checking historical daily ledger for ${dayjs(activeDailyDate).format('MMMM D, YYYY')}. Click 'Today' to return to active cycle.`
+                  : 'Viewing cumulative all-time corporate ledger across all recorded operational dates.'}
+              </Text>
+            </div>
+          </Space>
+
+          {/* Right: Date Navigation Stepper & Mode Switcher */}
+          <Space size={8} wrap align="center">
+            <Space.Compact>
+              <Button
+                icon={<LeftOutlined />}
+                onClick={handlePrevDay}
+                title="Go to Previous Day"
+              >
+                Prev Day
+              </Button>
+              <DatePicker
+                value={dayjs(activeDailyDate)}
+                onChange={(d) => {
+                  if (d) {
+                    setActiveDailyDate(d.format('YYYY-MM-DD'));
+                    setViewMode('daily');
+                  }
+                }}
+                allowClear={false}
+                style={{ width: 130 }}
+                format="YYYY-MM-DD"
+              />
+              <Button
+                type={isTodayActive && isDailyMode ? 'primary' : 'default'}
+                onClick={() => {
+                  setActiveDailyDate(todayKey);
+                  setViewMode('daily');
+                }}
+                style={{ fontWeight: 600 }}
+              >
+                Today
+              </Button>
+              <Button
+                icon={<RightOutlined />}
+                onClick={handleNextDay}
+                disabled={activeDailyDate >= todayKey}
+                title="Go to Next Day"
+              >
+                Next Day
+              </Button>
+            </Space.Compact>
+
+            <Button
+              icon={<HistoryOutlined />}
+              onClick={() => setCrossCheckOpen(true)}
+              style={{
+                borderRadius: 8,
+                borderColor: '#bfdbfe',
+                color: '#1e40af',
+                fontWeight: 600,
+                background: '#eff6ff',
+              }}
+            >
+              Cross-Check Archives ({allHistoricalDays.length} Days)
+            </Button>
+
+            <Segmented
+              value={viewMode}
+              onChange={(v) => setViewMode(v as any)}
+              options={[
+                { label: '🗓️ Daily Sheet (24h)', value: 'daily' },
+                { label: '🌐 All-Time Ledger', value: 'all_time' },
+              ]}
+              style={{ fontWeight: 600 }}
+            />
+          </Space>
+        </div>
+      </Card>
+
+      {/* ── Fresh Daily Ledger Clean Slate Card (when daily mode has 0 expenses) ── */}
+      {isDailyMode && baseFilteredExpenses.length === 0 && (
+        <Card
+          style={{
+            borderRadius: 14,
+            border: '1px dashed #b7eb8f',
+            background: 'linear-gradient(135deg, #f6ffed 0%, #e6fffb 100%)',
+            textAlign: 'center',
+            marginBottom: 20,
+          }}
+          bodyStyle={{ padding: '32px 24px' }}
+        >
+          <div style={{ maxWidth: 540, margin: '0 auto' }}>
+            <div
+              style={{
+                width: 52,
+                height: 52,
+                borderRadius: '50%',
+                background: '#d9f7be',
+                color: '#389e0d',
+                fontSize: 24,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                marginBottom: 12,
+              }}
+            >
+              <CheckCircleOutlined />
+            </div>
+            <Title level={4} style={{ margin: '0 0 6px 0', color: '#135200' }}>
+              Fresh Daily Expense Page Initialized
+            </Title>
+            <Paragraph style={{ color: '#595959', fontSize: 13, marginBottom: 16 }}>
+              {isTodayActive
+                ? `The 24-hour cycle for today (${dayjs(activeDailyDate).format('dddd, MMMM D, YYYY')}) is active with a clean slate. No operational expenses have been incurred yet today.`
+                : `No expense records were logged on ${dayjs(activeDailyDate).format('dddd, MMMM D, YYYY')}. You can log expenses for this date or cross-check other dates.`}
+            </Paragraph>
+            <Space size={12}>
+              <Button
+                type="primary"
+                icon={<PlusOutlined />}
+                onClick={handleOpenAddModal}
+                style={{ borderRadius: 8, background: tokens.primary }}
+              >
+                {isTodayActive ? 'Record Today\'s First Expense' : `Record Expense for ${dayjs(activeDailyDate).format('MMM D')}`}
+              </Button>
+              <Button
+                icon={<HistoryOutlined />}
+                onClick={() => setCrossCheckOpen(true)}
+                style={{ borderRadius: 8 }}
+              >
+                Cross-Check Historical Dates
+              </Button>
+            </Space>
+          </div>
+        </Card>
+      )}
+
       {/* ── Role KPI Metrics Row ──────────────────────────────────────────── */}
       <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
         <Col xs={24} sm={12} lg={6}>
@@ -773,16 +1079,37 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             <Statistic
               title={
                 <Text type="secondary" style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase' }}>
-                  Total Role Expenditure
+                  {isDailyMode ? `Daily Spend • ${dayjs(activeDailyDate).format('MMM D')}` : 'Total Role Expenditure'}
                 </Text>
               }
-              value={metrics.totalGHS}
+              value={isDailyMode ? dailyMetrics.totalGHS : metrics.totalGHS}
               prefix="₵"
               precision={2}
               valueStyle={{ color: tokens.primary, fontWeight: 800, fontSize: 24 }}
             />
             <div style={{ marginTop: 6, fontSize: 11, color: '#8c8c8c' }}>
-              {metrics.totalCount} requisition{metrics.totalCount === 1 ? '' : 's'} on record
+              {isDailyMode ? (
+                <span>
+                  {dailyMetrics.count} voucher{dailyMetrics.count === 1 ? '' : 's'} today • Trend:{' '}
+                  <span
+                    style={{
+                      fontWeight: 600,
+                      color:
+                        dailyMetrics.spendTrendPercent === null
+                          ? '#8c8c8c'
+                          : dailyMetrics.spendTrendPercent > 0
+                          ? '#cf1322'
+                          : '#389e0d',
+                    }}
+                  >
+                    {dailyMetrics.spendTrendPercent !== null
+                      ? `${dailyMetrics.spendTrendPercent > 0 ? '+' : ''}${dailyMetrics.spendTrendPercent}% vs yesterday`
+                      : 'Baseline day'}
+                  </span>
+                </span>
+              ) : (
+                `${metrics.totalCount} requisition${metrics.totalCount === 1 ? '' : 's'} on record`
+              )}
             </div>
           </Card>
         </Col>
@@ -800,16 +1127,16 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             <Statistic
               title={
                 <Text type="secondary" style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase' }}>
-                  {metrics.stat1.label}
+                  {isDailyMode ? 'Authorized for Day' : metrics.stat1.label}
                 </Text>
               }
-              value={metrics.stat1.valueGHS}
+              value={isDailyMode ? dailyMetrics.roleMetrics.stat1.valueGHS : metrics.stat1.valueGHS}
               prefix="₵"
               precision={2}
-              valueStyle={{ color: metrics.stat1.color, fontWeight: 800, fontSize: 24 }}
+              valueStyle={{ color: '#52c41a', fontWeight: 800, fontSize: 24 }}
             />
             <div style={{ marginTop: 6, fontSize: 11, color: '#8c8c8c' }}>
-              Authorized expenditure
+              {isDailyMode ? 'Approved & disbursed for date' : 'Authorized expenditure'}
             </div>
           </Card>
         </Col>
@@ -827,16 +1154,18 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             <Statistic
               title={
                 <Text type="secondary" style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase' }}>
-                  {metrics.stat2.label}
+                  {isDailyMode ? 'Pending Authorization' : metrics.stat2.label}
                 </Text>
               }
-              value={metrics.stat2.valueGHS}
+              value={isDailyMode ? dailyMetrics.roleMetrics.stat2.valueGHS : metrics.stat2.valueGHS}
               prefix="₵"
               precision={2}
-              valueStyle={{ color: metrics.stat2.color, fontWeight: 800, fontSize: 24 }}
+              valueStyle={{ color: '#fa8c16', fontWeight: 800, fontSize: 24 }}
             />
             <div style={{ marginTop: 6, fontSize: 11, color: '#8c8c8c' }}>
-              {metrics.pendingCount} requisition{metrics.pendingCount === 1 ? '' : 's'} pending
+              {isDailyMode
+                ? `${dailyMetrics.roleMetrics.pendingCount} requisition${dailyMetrics.roleMetrics.pendingCount === 1 ? '' : 's'} pending sign-off`
+                : `${metrics.pendingCount} requisition${metrics.pendingCount === 1 ? '' : 's'} pending`}
             </div>
           </Card>
         </Col>
@@ -854,16 +1183,40 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             <Statistic
               title={
                 <Text type="secondary" style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase' }}>
-                  {metrics.stat3.label}
+                  {isDailyMode ? 'Daily Ledger Status' : metrics.stat3.label}
                 </Text>
               }
-              value={metrics.stat3.valueGHS}
-              prefix="₵"
-              precision={2}
-              valueStyle={{ color: metrics.stat3.color, fontWeight: 800, fontSize: 24 }}
+              value={
+                isDailyMode
+                  ? dailyMetrics.closureStatus === 'clean_slate'
+                    ? 'Clean Slate'
+                    : dailyMetrics.closureStatus === 'fully_approved'
+                    ? 'Reconciled'
+                    : dailyMetrics.closureStatus === 'pending_authorization'
+                    ? 'Pending Sign-Off'
+                    : 'Flagged / Review'
+                  : metrics.stat3.valueGHS
+              }
+              prefix={isDailyMode ? undefined : '₵'}
+              precision={isDailyMode ? undefined : 2}
+              valueStyle={{
+                color: isDailyMode
+                  ? dailyMetrics.closureStatus === 'fully_approved'
+                    ? '#52c41a'
+                    : dailyMetrics.closureStatus === 'pending_authorization'
+                    ? '#fa8c16'
+                    : '#1890ff'
+                  : metrics.stat3.color,
+                fontWeight: 800,
+                fontSize: 22,
+              }}
             />
             <div style={{ marginTop: 6, fontSize: 11, color: '#8c8c8c' }}>
-              Specialized domain breakdown
+              {isDailyMode
+                ? isTodayActive
+                  ? 'Active 24-hour cycle'
+                  : 'Historical daily closure'
+                : 'Specialized domain breakdown'}
             </div>
           </Card>
         </Col>
@@ -1025,6 +1378,32 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
 
       {/* ── Data Table ────────────────────────────────────────────────────── */}
       <Card
+        title={
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <Space size={8}>
+              <FileTextOutlined style={{ color: tokens.primary }} />
+              <Text strong style={{ fontSize: 14 }}>
+                {isDailyMode
+                  ? `Daily Expense Ledger • ${dayjs(activeDailyDate).format('dddd, MMMM D, YYYY')}`
+                  : 'Corporate Master Expense Ledger (All-Time Archive)'}
+              </Text>
+              <Tag color={isDailyMode ? (isTodayActive ? 'success' : 'purple') : 'blue'} style={{ borderRadius: 10 }}>
+                {finalExpenses.length} Record{finalExpenses.length === 1 ? '' : 's'}
+              </Tag>
+            </Space>
+
+            {isDailyMode && !isTodayActive && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => setActiveDailyDate(todayKey)}
+                style={{ padding: 0, fontWeight: 600 }}
+              >
+                Return to Today's Active Sheet ➔
+              </Button>
+            )}
+          </div>
+        }
         style={{
           borderRadius: 14,
           border: '1px solid #f0f0f0',
@@ -1050,10 +1429,14 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
                   description={
                     <div>
                       <Text strong style={{ display: 'block', fontSize: 14 }}>
-                        No {roleConfig.badgeLabel} records match your filters
+                        {isDailyMode
+                          ? `No ${roleConfig.badgeLabel} entries on ${dayjs(activeDailyDate).format('MMM D, YYYY')}`
+                          : `No ${roleConfig.badgeLabel} records match your filters`}
                       </Text>
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        Click "Record Expense" to create a new requisition.
+                        {isDailyMode
+                          ? 'This daily page is fresh. Click "Record Expense" to add a requisition.'
+                          : 'Try clearing search filters or click "Record Expense".'}
                       </Text>
                     </div>
                   }
@@ -1299,6 +1682,19 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
           onChange={(e) => setRejectionNote(e.target.value)}
         />
       </Modal>
+
+      {/* ── Historical Expense Cross-Check Drawer ─────────────────────────── */}
+      <HistoricalExpenseCrossCheck
+        open={crossCheckOpen}
+        onClose={() => setCrossCheckOpen(false)}
+        expenses={roleFilteredExpenses}
+        activeDate={activeDailyDate}
+        onSelectDate={(date) => {
+          setActiveDailyDate(date);
+          setViewMode('daily');
+        }}
+        roleTitle={roleConfig.badgeLabel}
+      />
     </div>
   );
 };

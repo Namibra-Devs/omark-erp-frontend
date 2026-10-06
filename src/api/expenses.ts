@@ -71,6 +71,53 @@ export function isDummyFuelExpense(expense: any): boolean {
 }
 
 export const DEFAULT_ROLE_OPERATIONAL_EXPENSES: ExpenseEntity[] = [
+  // ── Today's Fresh Cycle Operational Expenses ──────────────────────────────
+  {
+    id: 'exp-role-sec-today',
+    code: 'EXP-SEC-TODAY-001',
+    category: 'Client Hospitality',
+    type: 'internal',
+    amountMinor: 32000, // GHS 320.00
+    incurredOn: dayjs().format('YYYY-MM-DD'),
+    branchId: 'b1',
+    branchName: 'Kumasi Main',
+    description: 'Executive client lounge refreshments, mineral water packs & coffee beans for morning meetings',
+    status: 'approved',
+    recordedByUserRole: 'secretary',
+    createdAt: dayjs().toISOString(),
+    updatedAt: dayjs().toISOString(),
+  },
+  {
+    id: 'exp-role-bm-today',
+    code: 'EXP-BM-TODAY-001',
+    category: 'Power & Fuel',
+    type: 'internal',
+    amountMinor: 65000, // GHS 650.00
+    incurredOn: dayjs().format('YYYY-MM-DD'),
+    branchId: 'b1',
+    branchName: 'Kumasi Main',
+    description: 'Standby generator diesel fuel replenishment for showroom continuity',
+    status: 'pending',
+    recordedByUserRole: 'branch_manager',
+    createdAt: dayjs().toISOString(),
+    updatedAt: dayjs().toISOString(),
+  },
+  {
+    id: 'exp-role-mkt-today',
+    code: 'EXP-MKT-TODAY-001',
+    category: 'Digital Media Ads',
+    type: 'external',
+    amountMinor: 120000, // GHS 1,200.00
+    incurredOn: dayjs().format('YYYY-MM-DD'),
+    branchId: 'b2',
+    branchName: 'Accra Central',
+    description: 'Social media sponsored video ad promotion for weekend land exhibition',
+    status: 'pending',
+    recordedByUserRole: 'marketing_director',
+    createdAt: dayjs().toISOString(),
+    updatedAt: dayjs().toISOString(),
+  },
+
   // ── Secretary Role Expenses ───────────────────────────────────────────────
   {
     id: 'exp-role-sec-001',

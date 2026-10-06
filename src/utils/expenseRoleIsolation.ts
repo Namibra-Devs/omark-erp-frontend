@@ -1,4 +1,5 @@
 // src/utils/expenseRoleIsolation.ts
+import dayjs from 'dayjs';
 import type { ExpenseEntity } from '@/api/expenses';
 import type { Role, User } from '@/types';
 import { getBranchCanonicalKey } from '@/utils/branchIsolation';
@@ -340,5 +341,186 @@ export function calculateRoleMetrics(expenses: ExpenseEntity[], role: ExpenseRol
     stat2,
     stat3,
     stat4,
+  };
+}
+
+// ── Daily Tracking & Historical Cross-Checking Helpers ──────────────────────────
+
+export interface DailyLedgerSummary {
+  date: string; // 'YYYY-MM-DD'
+  formattedDate: string; // 'Tue, Oct 6, 2026'
+  dayOfWeek: string; // 'Tuesday'
+  isToday: boolean;
+  isYesterday: boolean;
+  totalMinor: number;
+  totalGHS: number;
+  count: number;
+  pendingCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  topCategory: string;
+  categoryBreakdown: { category: string; amountMinor: number; amountGHS: number; count: number }[];
+  expenses: ExpenseEntity[];
+  spendChangeVsPrevPercent?: number; // relative to preceding day in chronological timeline
+}
+
+/**
+ * Groups a collection of expenses into individual daily ledger summaries,
+ * sorted from newest day to oldest day, with full breakdown and trend analysis.
+ */
+export function groupExpensesByDay(expenses: ExpenseEntity[]): DailyLedgerSummary[] {
+  const map = new Map<string, ExpenseEntity[]>();
+  const todayKey = dayjs().format('YYYY-MM-DD');
+  const yesterdayKey = dayjs().subtract(1, 'day').format('YYYY-MM-DD');
+
+  expenses.forEach((expense) => {
+    const rawDate = expense.incurredOn || expense.createdAt;
+    const dateKey = dayjs(rawDate).isValid() ? dayjs(rawDate).format('YYYY-MM-DD') : todayKey;
+    const list = map.get(dateKey) || [];
+    list.push(expense);
+    map.set(dateKey, list);
+  });
+
+  // Sort dates descending (newest first)
+  const sortedDates = Array.from(map.keys()).sort((a, b) => b.localeCompare(a));
+
+  const summaries: DailyLedgerSummary[] = sortedDates.map((dateKey) => {
+    const dayExpenses = map.get(dateKey) || [];
+    const d = dayjs(dateKey);
+    const totalMinor = dayExpenses.reduce((sum, e) => sum + (e.amountMinor || 0), 0);
+    const pendingCount = dayExpenses.filter((e) => e.status === 'pending').length;
+    const approvedCount = dayExpenses.filter((e) => e.status === 'approved').length;
+    const rejectedCount = dayExpenses.filter((e) => e.status === 'rejected').length;
+
+    // Categories breakdown
+    const catMap = new Map<string, { minor: number; count: number }>();
+    dayExpenses.forEach((e) => {
+      const cat = e.category || 'General Operations';
+      const prev = catMap.get(cat) || { minor: 0, count: 0 };
+      catMap.set(cat, { minor: prev.minor + (e.amountMinor || 0), count: prev.count + 1 });
+    });
+
+    const categoryBreakdown = Array.from(catMap.entries())
+      .map(([category, { minor, count }]) => ({
+        category,
+        amountMinor: minor,
+        amountGHS: minor / 100,
+        count,
+      }))
+      .sort((a, b) => b.amountMinor - a.amountMinor);
+
+    const topCategory = categoryBreakdown.length > 0 ? categoryBreakdown[0].category : 'General Operations';
+
+    return {
+      date: dateKey,
+      formattedDate: d.isValid() ? d.format('ddd, MMM D, YYYY') : dateKey,
+      dayOfWeek: d.isValid() ? d.format('dddd') : '',
+      isToday: dateKey === todayKey,
+      isYesterday: dateKey === yesterdayKey,
+      totalMinor,
+      totalGHS: totalMinor / 100,
+      count: dayExpenses.length,
+      pendingCount,
+      approvedCount,
+      rejectedCount,
+      topCategory,
+      categoryBreakdown,
+      expenses: dayExpenses,
+    };
+  });
+
+  // Compute spendChangeVsPrevPercent compared to previous day in the chronological chain
+  for (let i = 0; i < summaries.length; i++) {
+    const current = summaries[i];
+    const prevInList = summaries[i + 1]; // chronological prior day (since list is descending)
+    if (prevInList && prevInList.totalMinor > 0) {
+      current.spendChangeVsPrevPercent = Math.round(
+        ((current.totalMinor - prevInList.totalMinor) / prevInList.totalMinor) * 100
+      );
+    }
+  }
+
+  return summaries;
+}
+
+/**
+ * Calculates tailored metrics for an active daily ledger sheet.
+ */
+export function getDailyTrackingMetrics(
+  expenses: ExpenseEntity[],
+  targetDate: string,
+  role: ExpenseRoleView = 'all'
+) {
+  const targetKey = dayjs(targetDate).isValid() ? dayjs(targetDate).format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
+  const prevKey = dayjs(targetKey).subtract(1, 'day').format('YYYY-MM-DD');
+
+  const todayExpenses = expenses.filter((e) => {
+    const raw = e.incurredOn || e.createdAt;
+    return dayjs(raw).isValid() && dayjs(raw).format('YYYY-MM-DD') === targetKey;
+  });
+
+  const prevExpenses = expenses.filter((e) => {
+    const raw = e.incurredOn || e.createdAt;
+    return dayjs(raw).isValid() && dayjs(raw).format('YYYY-MM-DD') === prevKey;
+  });
+
+  const todayTotalMinor = todayExpenses.reduce((s, e) => s + (e.amountMinor || 0), 0);
+  const prevTotalMinor = prevExpenses.reduce((s, e) => s + (e.amountMinor || 0), 0);
+
+  let spendTrendPercent: number | null = null;
+  if (prevTotalMinor > 0) {
+    spendTrendPercent = Math.round(((todayTotalMinor - prevTotalMinor) / prevTotalMinor) * 100);
+  }
+
+  const roleMetrics = calculateRoleMetrics(todayExpenses, role);
+
+  let closureStatus: 'clean_slate' | 'fully_approved' | 'pending_authorization' | 'has_rejected' = 'clean_slate';
+  if (todayExpenses.length === 0) {
+    closureStatus = 'clean_slate';
+  } else if (todayExpenses.some((e) => e.status === 'pending')) {
+    closureStatus = 'pending_authorization';
+  } else if (todayExpenses.some((e) => e.status === 'rejected')) {
+    closureStatus = 'has_rejected';
+  } else {
+    closureStatus = 'fully_approved';
+  }
+
+  return {
+    targetDate: targetKey,
+    formattedDate: dayjs(targetKey).format('dddd, MMMM D, YYYY'),
+    isToday: targetKey === dayjs().format('YYYY-MM-DD'),
+    isYesterday: targetKey === prevKey,
+    expenses: todayExpenses,
+    count: todayExpenses.length,
+    totalGHS: todayTotalMinor / 100,
+    prevTotalGHS: prevTotalMinor / 100,
+    spendTrendPercent,
+    closureStatus,
+    roleMetrics,
+  };
+}
+
+/**
+ * Cross-checks two daily ledgers side-by-side to assess differences in expenditure and volume.
+ */
+export function compareDailyLedgers(
+  dayA?: DailyLedgerSummary,
+  dayB?: DailyLedgerSummary
+) {
+  const totalA = dayA?.totalGHS || 0;
+  const totalB = dayB?.totalGHS || 0;
+  const diffGHS = totalA - totalB;
+  const percentDiff = totalB > 0 ? Math.round(((totalA - totalB) / totalB) * 100) : null;
+  const countA = dayA?.count || 0;
+  const countB = dayB?.count || 0;
+
+  return {
+    totalA,
+    totalB,
+    diffGHS,
+    percentDiff,
+    countA,
+    countB,
+    diffCount: countA - countB,
   };
 }
