@@ -29,6 +29,10 @@ export const SECRETARY_CATEGORIES = [
   'Office Maintenance',
   'Front Desk Operations',
   'Staff Refreshments',
+  'Utilities & Internet',
+  'Transport & Local Transit',
+  'Premises Repairs',
+  'General Operational Expenses',
 ];
 
 export const MARKETING_DIRECTOR_CATEGORIES = [
@@ -80,13 +84,13 @@ export function getRoleDashboardConfig(
       return {
         role: 'secretary',
         title: 'Secretary & Administration Expense Hub',
-        subtitle: 'Petty cash ledger, office supplies requisition, courier dispatch, and front-desk hospitality.',
+        subtitle: 'Daily operational expenses, petty cash ledger, office requisitions, hospitality, courier dispatch, and vendor payments.',
         badgeLabel: 'Secretary / Administration View',
         badgeColor: '#13c2c2',
         badgeBg: '#e6fffb',
-        privacyNotice: '🔒 Private Role View: Showing secretarial & front-office administrative expenditures. Other departmental finances are strictly confidential.',
+        privacyNotice: '🔒 Private Role View: Showing secretarial & front-office administrative expenditures with automated daily tracking cycles.',
         defaultCategories: SECRETARY_CATEGORIES,
-        allowedTypes: ['internal'],
+        allowedTypes: ['internal', 'external'],
         canAuthorize: false,
       };
 

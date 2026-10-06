@@ -32,10 +32,10 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
   open,
   onClose,
   onSuccess,
-  defaultSource = 'customer_service',
+  defaultSource = 'marketing',
 }) => {
   const { user, hasRole } = useAuth();
-  const isAdmin = hasRole(['admin', 'branch_manager', 'marketing_director']);
+  const canAssignStaff = hasRole(['admin', 'branch_manager', 'marketing_director', 'secretary', 'customer_service']);
   const [form] = Form.useForm();
   const createProspect = useCreateProspectMutation();
 
@@ -61,7 +61,7 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
       );
 
       const { photo, ...prospectValues } = values;
-      const effectiveSource = values.source || (user?.role === 'marketing_director' || user?.role === 'marketing_staff' ? 'marketing' : defaultSource);
+      const effectiveSource = values.source || defaultSource || 'marketing';
       const payload = {
         ...prospectValues,
         source: effectiveSource,
@@ -72,6 +72,13 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
 
       const taggedPayload = tagPayloadWithBranch(payload, user);
       const newProspect = await createProspect.mutateAsync(taggedPayload);
+
+      // Instant global cross-department broadcast
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('omark-prospects-changed', { detail: newProspect }));
+        window.dispatchEvent(new CustomEvent('omark-analytics-changed'));
+      }
+
       message.success('Prospect added successfully!');
       form.resetFields();
       onClose();
@@ -174,12 +181,12 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
           <Col xs={24} sm={12}>
             <Form.Item name="source" label="Prospect Source" rules={[{ required: true }]}>
               <Select>
-                <Option value="customer_service">Customer Service / Front Desk</Option>
                 <Option value="marketing">Marketing / Sales Outreach</Option>
+                <Option value="customer_service">Customer Service / Front Desk</Option>
               </Select>
             </Form.Item>
           </Col>
-          {isAdmin && (
+          {canAssignStaff && (
             <Col xs={24} sm={12}>
               <Form.Item name="assignedUserId" label="Assign To Staff">
                 <Select placeholder="Select staff member" showSearch optionFilterProp="children" allowClear>

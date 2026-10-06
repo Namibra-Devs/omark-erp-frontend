@@ -160,6 +160,7 @@ export interface Installment {
   dueDate: string;
   expectedAmountMinor: number;
   isPaid: boolean;
+  paidAmountMinor?: number;
   paidAt?: string;
 }
 

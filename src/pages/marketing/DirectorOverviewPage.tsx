@@ -199,7 +199,6 @@ export const DirectorOverviewPage: React.FC = () => {
         u.role === 'marketing_director' ||
         allProspects.some(
           (p) =>
-            (p.source === 'marketing' || !p.source) &&
             (p.assignedUserId === u.id || (p as any).createdByUserId === u.id || (p as any).assignedStaffId === u.id)
         )
     );
@@ -216,8 +215,7 @@ export const DirectorOverviewPage: React.FC = () => {
 
       const staffProspects = allProspects.filter(
         (p) =>
-          (p.source === 'marketing' || !p.source) &&
-          (p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id)
+          p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id
       );
 
       const staffCustomers = allCustomers.filter(
@@ -342,7 +340,7 @@ export const DirectorOverviewPage: React.FC = () => {
   const marketerCountForAvg = Math.max(marketers.length, 1);
 
   const allMarketingProspects = useMemo(() => {
-    return allProspects.filter((p) => p.source === 'marketing' || !p.source);
+    return allProspects.filter((p) => p.source === 'marketing' || p.source === 'customer_service' || !p.source);
   }, [allProspects]);
 
   const summary = {

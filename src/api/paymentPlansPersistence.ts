@@ -31,6 +31,7 @@ export interface RecordPaymentParams {
   reference?: string;
   sequence?: number;
   installmentOrdinal?: string;
+  notes?: string;
 }
 
 /**
@@ -123,6 +124,7 @@ export async function recordPlanPaymentWithBackend(
   const method = payment.method || 'bank_transfer';
   const reference = payment.reference || `REC-${Date.now().toString().slice(-6)}`;
   const paidOnDate = payment.paidOn || new Date().toISOString();
+  const notes = payment.notes;
 
   // 1. Save locally for instant UI update
   recordLocalInstallmentPayment(
@@ -131,7 +133,8 @@ export async function recordPlanPaymentWithBackend(
     payment.amountMinor,
     method,
     reference,
-    paidOnDate
+    paidOnDate,
+    notes
   );
 
   // 2. Resolve real backend plan ID and persist to backend
@@ -147,6 +150,7 @@ export async function recordPlanPaymentWithBackend(
         paidOn: dayjs(paidOnDate).format('YYYY-MM-DD'),
         method,
         reference,
+        notes,
       });
       result = unwrapData(res);
 
@@ -158,7 +162,8 @@ export async function recordPlanPaymentWithBackend(
           payment.amountMinor,
           method,
           reference,
-          paidOnDate
+          paidOnDate,
+          notes
         );
       }
     }
@@ -166,14 +171,18 @@ export async function recordPlanPaymentWithBackend(
     console.warn('[recordPlanPaymentWithBackend] Backend save warning:', apiErr);
   }
 
-  // 3. Dispatch automated SMS receipt to customer
+  // 3. Dispatch automated SMS receipt to customer with dynamically updated balance
   try {
-    const remainingMinor = Math.max(0, (plan.balanceMinor || 0) - payment.amountMinor);
+    const rawPrevBalance = plan.balanceMinor !== undefined 
+      ? plan.balanceMinor 
+      : ((plan.totalAmountMinor || 35000000) - (plan.downPaymentMinor || 0));
+    const dynamicRemainingMinor = Math.max(0, rawPrevBalance - payment.amountMinor);
+
     await dispatchPaymentReceiptSMS({
       customerPhone: customerInfo?.phone,
       customerName: customerInfo?.name,
       amountMinor: payment.amountMinor,
-      remainingBalanceMinor: remainingMinor,
+      remainingBalanceMinor: dynamicRemainingMinor,
       propertyName: customerInfo?.propertyName,
       reference,
       method: String(method),
