@@ -472,14 +472,6 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
     setAddModalOpen(true);
   };
 
-  useEffect(() => {
-    const handleTrigger = () => {
-      handleOpenAddModal();
-    };
-    window.addEventListener('omark-open-record-expense', handleTrigger);
-    return () => window.removeEventListener('omark-open-record-expense', handleTrigger);
-  }, [roleConfig, roleLens, isDailyMode, activeDailyDate, branches, user]);
-
   const handleCreateExpense = async (values: any) => {
     try {
       const userName = user

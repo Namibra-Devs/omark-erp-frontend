@@ -1,9 +1,15 @@
 // src/api/paymentPlansPersistence.ts
 import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import dayjs from 'dayjs';
-import type { ApiResponse, PaymentPlan, PaymentMethod } from '@/types';
-import { recordLocalInstallmentPayment } from '@/utils/paymentPlanSchedule';
+import type { ApiResponse, PaymentPlan, PaymentPlanStatus, PaymentMethod } from '@/types';
+import { buildPaymentPlanSchedule, recordLocalInstallmentPayment } from '@/utils/paymentPlanSchedule';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
+
+function getOrdinal(n: number): string {
+  const s = ['th', 'st', 'nd', 'rd'];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
 
 export interface PlanIdentifier {
   id: string;
@@ -14,7 +20,7 @@ export interface PlanIdentifier {
   monthlyAmountMinor?: number;
   startDate?: string;
   balanceMinor?: number;
-  status?: string;
+  status?: PaymentPlanStatus;
 }
 
 export interface CustomerInfo {
@@ -31,7 +37,6 @@ export interface RecordPaymentParams {
   reference?: string;
   sequence?: number;
   installmentOrdinal?: string;
-  notes?: string;
 }
 
 /**
@@ -115,26 +120,50 @@ export async function resolveOrCreateBackendPlan(
  * 2. Permanently persists to the backend database (resolving/creating backend plan if needed)
  * 3. Automatically dispatches customer receipt SMS prompting them of payment
  */
+export interface RecordPaymentResult {
+  success: boolean;
+  realPlanId: string;
+  result?: any;
+  receiptNumber: string;
+  sequence: number;
+  installmentOrdinal: string;
+  isPartialPayment: boolean;
+  isOverpayment: boolean;
+  deficitRolledOverMinor: number;
+  surplusAppliedMinor: number;
+  newBalanceMinor: number;
+  updatedSchedule: ReturnType<typeof buildPaymentPlanSchedule>;
+}
+
+/**
+ * Universal payment recorder:
+ * 1. Automatically determines target installment sequence if not specified
+ * 2. Saves locally for instantaneous 0ms UI reactivity with dynamic amortization recalculation
+ * 3. Permanently persists to the backend database (resolving/creating backend plan if needed)
+ * 4. Automatically dispatches customer receipt SMS prompting them of payment
+ * 5. Returns dynamic schedule recalculation details for immediate receipt and statement generation
+ */
 export async function recordPlanPaymentWithBackend(
   plan: PlanIdentifier,
   payment: RecordPaymentParams,
   customerInfo?: CustomerInfo
-): Promise<{ success: boolean; realPlanId: string; result?: any }> {
-  const sequence = payment.sequence || 1;
+): Promise<RecordPaymentResult> {
+  // Pre-calculate schedule to detect next due installment sequence if sequence wasn't provided
+  const currentSchedule = buildPaymentPlanSchedule(plan);
+  const sequence = payment.sequence || currentSchedule.nextDueRow?.sequence || 1;
+  const ordinal = payment.installmentOrdinal || getOrdinal(sequence);
   const method = payment.method || 'bank_transfer';
   const reference = payment.reference || `REC-${Date.now().toString().slice(-6)}`;
   const paidOnDate = payment.paidOn || new Date().toISOString();
-  const notes = payment.notes;
 
-  // 1. Save locally for instant UI update
+  // 1. Save locally for instant UI update and dynamic amortization
   recordLocalInstallmentPayment(
     plan.id,
     sequence,
     payment.amountMinor,
     method,
     reference,
-    paidOnDate,
-    notes
+    paidOnDate
   );
 
   // 2. Resolve real backend plan ID and persist to backend
@@ -150,7 +179,6 @@ export async function recordPlanPaymentWithBackend(
         paidOn: dayjs(paidOnDate).format('YYYY-MM-DD'),
         method,
         reference,
-        notes,
       });
       result = unwrapData(res);
 
@@ -162,8 +190,7 @@ export async function recordPlanPaymentWithBackend(
           payment.amountMinor,
           method,
           reference,
-          paidOnDate,
-          notes
+          paidOnDate
         );
       }
     }
@@ -171,22 +198,27 @@ export async function recordPlanPaymentWithBackend(
     console.warn('[recordPlanPaymentWithBackend] Backend save warning:', apiErr);
   }
 
-  // 3. Dispatch automated SMS receipt to customer with dynamically updated balance
-  try {
-    const rawPrevBalance = plan.balanceMinor !== undefined 
-      ? plan.balanceMinor 
-      : ((plan.totalAmountMinor || 35000000) - (plan.downPaymentMinor || 0));
-    const dynamicRemainingMinor = Math.max(0, rawPrevBalance - payment.amountMinor);
+  // 3. Immediately recalculate updated schedule to obtain new balance & amortization adjustments
+  const updatedSchedule = buildPaymentPlanSchedule(plan);
+  const targetRow = updatedSchedule.rows.find((r: any) => r.sequence === sequence);
 
+  const isPartialPayment = Boolean(targetRow?.isPartiallyPaid);
+  const deficitRolledOverMinor = targetRow?.deficitMinor || 0;
+  const surplusAppliedMinor = (targetRow?.surplusAppliedMinor || 0) + (payment.amountMinor > (targetRow?.installmentMinor || 0) ? payment.amountMinor - (targetRow?.installmentMinor || 0) : 0);
+  const isOverpayment = surplusAppliedMinor > 0;
+  const newBalanceMinor = updatedSchedule.currentBalanceMinor;
+
+  // 4. Dispatch automated SMS receipt to customer
+  try {
     await dispatchPaymentReceiptSMS({
       customerPhone: customerInfo?.phone,
       customerName: customerInfo?.name,
       amountMinor: payment.amountMinor,
-      remainingBalanceMinor: dynamicRemainingMinor,
+      remainingBalanceMinor: newBalanceMinor,
       propertyName: customerInfo?.propertyName,
       reference,
       method: String(method),
-      installmentOrdinal: payment.installmentOrdinal,
+      installmentOrdinal: ordinal,
       recordedBy: customerInfo?.recordedBy,
     });
   } catch (smsErr) {
@@ -197,5 +229,14 @@ export async function recordPlanPaymentWithBackend(
     success: true,
     realPlanId,
     result,
+    receiptNumber: reference,
+    sequence,
+    installmentOrdinal: ordinal,
+    isPartialPayment,
+    isOverpayment,
+    deficitRolledOverMinor,
+    surplusAppliedMinor,
+    newBalanceMinor,
+    updatedSchedule,
   };
 }

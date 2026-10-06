@@ -285,17 +285,17 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
           <Text strong style={{ color: record.isOverdue ? '#cf1322' : undefined }}>
             {val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
           </Text>
-          {record.deficitCarriedMinor > 0 && (
-            <Tooltip title={`Includes ₵${record.deficitCarriedGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })} deficit rolled over from previous installment`}>
+          {record.deficitMinor > 0 && (
+            <Tooltip title={`Includes GH₵ ${record.deficitGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })} unpaid deficit rolled over from partial payment`}>
               <Tag color="volcano" style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>
-                +₵{record.deficitCarriedGHS.toLocaleString('en-US', { minimumFractionDigits: 0 })} deficit
+                +GH₵ {record.deficitGHS.toFixed(0)} deficit
               </Tag>
             </Tooltip>
           )}
           {record.surplusAppliedMinor > 0 && (
-            <Tooltip title={`Reduced by ₵${record.surplusAppliedGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })} surplus credited from previous overpayment`}>
+            <Tooltip title={`Reduced by GH₵ ${record.surplusAppliedGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })} surplus advance from overpayment`}>
               <Tag color="cyan" style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>
-                -₵{record.surplusAppliedGHS.toLocaleString('en-US', { minimumFractionDigits: 0 })} surplus
+                -GH₵ {record.surplusAppliedGHS.toFixed(0)} surplus
               </Tag>
             </Tooltip>
           )}
@@ -338,17 +338,17 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       render: (_: any, record: ScheduleInstallmentRow) => {
         if (record.isPaid) {
           return (
-            <Tooltip title={record.paidAt ? `Paid on ${dayjs(record.paidAt).format('DD MMM YYYY')}${record.notes ? ` • ${record.notes}` : ''}` : 'Paid'}>
+            <Tooltip title={record.paidAt ? `Paid on ${dayjs(record.paidAt).format('DD MMM YYYY')}` : 'Paid'}>
               <Tag color="green" icon={<CheckCircleOutlined />}>
                 Paid
               </Tag>
             </Tooltip>
           );
         }
-        if (record.status === 'partially_paid') {
+        if (record.isPartiallyPaid || record.status === 'partially_paid') {
           return (
             <Tooltip
-              title={`Partially Paid: ₵${(record.paidGHS || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} credited. Remaining deficit of ₵${(record.deficitGHS || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} automatically rolled over to subsequent installment.`}
+              title={`Partially Paid: GH₵ ${(record.paidAmountGHS || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} credited. Remaining deficit of GH₵ ${(record.deficitGHS || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })} rolled over.`}
             >
               <Tag color="orange" icon={<ClockCircleOutlined />}>
                 Partially Paid
@@ -380,7 +380,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
     columns.push({
       title: 'Actions',
       key: 'actions',
-      width: 200,
+      width: 190,
       fixed: 'right' as const,
       render: (_: any, record: ScheduleInstallmentRow) => {
         if (record.isPaid) {
@@ -424,7 +424,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
                 fontSize: 12,
               }}
             >
-              {record.status === 'partially_paid' ? 'Pay Balance' : 'Record Payment'}
+              {record.isPartiallyPaid ? 'Pay Deficit' : 'Record Payment'}
             </Button>
           </Space>
         );

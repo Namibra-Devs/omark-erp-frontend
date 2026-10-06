@@ -1,4 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
+// src/pages/dashboard/SecretaryDashboardPage.tsx
+import React, { useState, useMemo } from 'react';
 import {
   Card,
   Row,
@@ -25,7 +26,6 @@ import {
   Tooltip,
   Tabs,
   Divider,
-  Descriptions,
 } from 'antd';
 import {
   DollarOutlined,
@@ -48,9 +48,9 @@ import {
   FilterOutlined,
   ArrowUpOutlined,
   SafetyCertificateOutlined,
-  PrinterOutlined,
-  MoneyCollectOutlined,
-  AuditOutlined,
+  SearchOutlined,
+  EyeOutlined,
+  DashboardOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer,
@@ -67,12 +67,11 @@ import {
   Tooltip as RechartsTooltip,
   Legend,
 } from 'recharts';
-import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation } from '@/api/customers';
 import { useProspectsQuery } from '@/api/prospects';
-import { usePaymentPlansQuery, getProgressBand, paymentPlansKeys } from '@/api/paymentPlans';
+import { usePaymentPlansQuery, getProgressBand } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
 import { useCreateExpenseMutation } from '@/api/expenses';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
@@ -83,7 +82,7 @@ import {
   getPlanPaymentOverrides,
   recordLocalInstallmentPayment,
   usePaymentPlanScheduleListener,
-  getOrdinal,
+  type PaymentPlanScheduleInfo,
 } from '@/utils/paymentPlanSchedule';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
@@ -101,8 +100,11 @@ import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { StatusTag } from '@/components/shared/StatusTag';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
+import { PaymentReceiptModal, type PaymentReceiptData } from '@/components/paymentPlan/PaymentReceiptModal';
+import { CustomerStatementModal } from '@/components/paymentPlan/CustomerStatementModal';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
 
@@ -198,28 +200,15 @@ export const SecretaryDashboardPage: React.FC = () => {
     refetch: refetchDashboard
   } = useSecretaryDashboardQuery();
 
-  const queryClient = useQueryClient();
-
   const {
     data: customersData,
     isLoading: customersLoading,
     refetch: refetchCustomers
   } = useCustomersQuery({ pageSize: 100 });
 
-  const { data: prospectsData, refetch: refetchProspects } = useProspectsQuery({ pageSize: 10000 });
+  const { data: prospectsData } = useProspectsQuery({ pageSize: 10000 });
   const existingCustomersList = customersData?.items ?? [];
   const existingProspectsList = prospectsData?.items ?? [];
-
-  // Listen for prospects changed globally so Secretary reflects instantly when prospect is added
-  useEffect(() => {
-    const handleProspectsChanged = () => {
-      refetchProspects();
-      refetchCustomers();
-      refetchDashboard();
-    };
-    window.addEventListener('omark-prospects-changed', handleProspectsChanged);
-    return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
-  }, [refetchProspects, refetchCustomers, refetchDashboard]);
 
   const {
     data: paymentPlansData,
@@ -237,18 +226,32 @@ export const SecretaryDashboardPage: React.FC = () => {
   const updateCustomer = useUpdateCustomerMutation();
 
   // ── UI State ──────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<'overview' | 'expenses'>('overview');
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
   const [addPaymentModal, setAddPaymentModal] = useState(false);
-  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
-  const [receiptData, setReceiptData] = useState<any>(null);
-  const [enteredAmount, setEnteredAmount] = useState<number | undefined>(undefined);
+  const [addExpenseModal, setAddExpenseModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
   const [form] = Form.useForm();
   const [paymentForm] = Form.useForm();
+  const [expenseForm] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [expenseLoading, setExpenseLoading] = useState(false);
   const [pipelineMetric, setPipelineMetric] = useState<'amount' | 'count'>('amount');
+
+  // Dynamic Installment & Receipt / Statement Modals
+  const [activeTab, setActiveTab] = useState('overview');
+  const [receiptModalOpen, setReceiptModalOpen] = useState(false);
+  const [receiptData, setReceiptData] = useState<PaymentReceiptData | null>(null);
+  const [statementModalOpen, setStatementModalOpen] = useState(false);
+  const [statementPlan, setStatementPlan] = useState<any>(null);
+  const [statementCustomerName, setStatementCustomerName] = useState<string>('');
+  const [statementCustomerPhone, setStatementCustomerPhone] = useState<string>('');
+  const [statementPropertyName, setStatementPropertyName] = useState<string>('');
+  const [customAmountEntered, setCustomAmountEntered] = useState<number | null>(null);
+  const [prospectSearchText, setProspectSearchText] = useState('');
+  const [prospectStatusFilter, setProspectStatusFilter] = useState('all');
+
+  const createExpenseMutation = useCreateExpenseMutation();
 
   usePaymentPlanScheduleListener();
 
@@ -471,42 +474,54 @@ export const SecretaryDashboardPage: React.FC = () => {
   }, [branchFilteredDueSoon, defaulters, paymentPlans, customerMap]);
 
   const selectedCustId = selectedCustomer?.customerId || selectedCustomer?.id;
-  const selectedPlan = useMemo(() => {
-    if (!selectedCustomer) return null;
-    let found = paymentPlans.find(
-      (p: any) =>
-        (selectedCustId && p.customerId === selectedCustId) ||
-        (selectedCustomer?.planId && p.id === selectedCustomer.planId) ||
-        (selectedCustomer?.id && p.id === selectedCustomer.id)
-    );
-    if (!found && selectedCustId) {
-      found = {
-        id: `plan-${selectedCustId}`,
-        customerId: selectedCustId,
-        propertyId: '',
-        totalAmountMinor: 35000000,
-        downPaymentMinor: 7000000,
-        balanceMinor: 28000000,
-        monthlyAmountMinor: 4666667,
-        numMonths: 6,
-        currency: 'GHS',
-        status: 'active',
-        progressPercent: 20,
-        progressBand: 'yellow',
-        startDate: dayjs().format('YYYY-MM-DD'),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-    }
-    return found;
-  }, [paymentPlans, selectedCustomer, selectedCustId]);
+  const selectedPlan = paymentPlans.find(
+    (p: any) =>
+      (selectedCustId && p.customerId === selectedCustId) ||
+      (selectedCustomer?.planId && p.id === selectedCustomer.planId) ||
+      (selectedCustomer?.id && p.id === selectedCustomer.id)
+  );
+  const recordPayment = useRecordPaymentMutation(selectedPlan?.id ?? '');
 
-  const selectedScheduleInfo = useMemo(() => {
+  const selectedSchedule = useMemo(() => {
     if (!selectedPlan) return null;
     return buildPaymentPlanSchedule(selectedPlan);
   }, [selectedPlan]);
 
-  const recordPayment = useRecordPaymentMutation(selectedPlan?.id ?? '');
+  const targetInstallment = selectedSchedule?.nextDueRow || selectedSchedule?.rows[0];
+  const expectedMonthlyGHS = targetInstallment
+    ? targetInstallment.installmentGHS
+    : selectedPlan?.monthlyAmountMinor
+    ? selectedPlan.monthlyAmountMinor / 100
+    : 0;
+  const totalRemainingBalanceGHS = selectedSchedule
+    ? selectedSchedule.currentBalanceGHS
+    : (selectedPlan?.balanceMinor || 0) / 100;
+
+  // Secretary Individual Prospects & Front-Desk Conversions
+  const secretaryProspects = useMemo(() => {
+    const userId = user?.id;
+    const userName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim().toLowerCase() : '';
+    return existingProspectsList.filter((p) => {
+      if (userId && (p.createdByUserId === userId || p.assignedUserId === userId || (p as any).creator?.id === userId)) {
+        return true;
+      }
+      if (userName && (p.createdByName?.toLowerCase().includes(userName) || (p as any).creator?.name?.toLowerCase().includes(userName))) {
+        return true;
+      }
+      if ((p as any).source === 'customer_service' || (p as any).source === 'walk_in') {
+        return true;
+      }
+      return false;
+    });
+  }, [existingProspectsList, user]);
+
+  const secretaryConverted = useMemo(() => {
+    return secretaryProspects.filter((p) => (p as any).converted || p.status === 'meeting_completed');
+  }, [secretaryProspects]);
+
+  const secretaryConversionRate = secretaryProspects.length > 0
+    ? Math.round((secretaryConverted.length / secretaryProspects.length) * 1000) / 10
+    : 0;
 
   const activePlansCount = paymentPlans.length;
   const calculatedMonthlyRevenue = paymentPlans.reduce(
@@ -757,55 +772,6 @@ export const SecretaryDashboardPage: React.FC = () => {
   }, [cashFlowTrendData]);
 
   // ── Table Columns ──────────────────────────────────────────────────────────
-  const openPaymentModalForRecord = (record: any) => {
-    setSelectedCustomer(record);
-    const targetCustId = record.customerId || record.id;
-    let plan = paymentPlans.find(
-      (p: any) =>
-        (targetCustId && p.customerId === targetCustId) ||
-        (record.planId && p.id === record.planId) ||
-        (record.id && p.id === record.id)
-    );
-    if (!plan && targetCustId) {
-      plan = {
-        id: `plan-${targetCustId}`,
-        customerId: targetCustId,
-        propertyId: '',
-        totalAmountMinor: 35000000,
-        downPaymentMinor: 7000000,
-        balanceMinor: 28000000,
-        monthlyAmountMinor: 4666667,
-        numMonths: 6,
-        currency: 'GHS',
-        status: 'active',
-        progressPercent: 20,
-        progressBand: 'yellow',
-        startDate: dayjs().format('YYYY-MM-DD'),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-    }
-    const sched = plan ? buildPaymentPlanSchedule(plan) : null;
-    const activeInst = sched?.nextActiveInstallment;
-    const defaultAmountGHS = activeInst
-      ? activeInst.installmentGHS
-      : record.overdueAmountMinor
-      ? record.overdueAmountMinor / 100
-      : record.amountMinor
-      ? record.amountMinor / 100
-      : 5000;
-
-    paymentForm.setFieldsValue({
-      amount: defaultAmountGHS,
-      paymentDate: dayjs(),
-      method: 'bank_transfer',
-      reference: `REC-SEC-${Date.now().toString().slice(-6)}`,
-      notes: activeInst ? `${activeInst.ordinal} installment payment` : 'Installment payment',
-    });
-    setEnteredAmount(defaultAmountGHS);
-    setAddPaymentModal(true);
-  };
-
   const defaulterColumns = [
     {
       title: 'Customer Name',
@@ -848,15 +814,58 @@ export const SecretaryDashboardPage: React.FC = () => {
     {
       title: 'Action',
       key: 'action',
-      render: (_: any, record: any) => (
-        <Button 
-          type="link" 
-          size="small"
-          onClick={() => openPaymentModalForRecord(record)}
-        >
-          Record Payment
-        </Button>
-      ),
+      render: (_: any, record: any) => {
+        const custPlan = paymentPlans.find(
+          (p: any) => p.customerId === record.customerId || p.id === record.planId
+        );
+        return (
+          <Space size={4}>
+            <Button 
+              type="link" 
+              size="small"
+              onClick={() => {
+                setSelectedCustomer(record);
+                if (custPlan) {
+                  const sched = buildPaymentPlanSchedule(custPlan);
+                  const row = sched.nextDueRow || sched.rows[0];
+                  const exp = row ? row.installmentGHS : (custPlan.monthlyAmountMinor ? custPlan.monthlyAmountMinor / 100 : 0);
+                  paymentForm.setFieldsValue({
+                    amount: exp,
+                    paymentDate: dayjs(),
+                    method: 'cash',
+                    reference: '',
+                  });
+                  setCustomAmountEntered(exp);
+                } else {
+                  paymentForm.resetFields();
+                  paymentForm.setFieldsValue({ paymentDate: dayjs(), method: 'cash' });
+                  setCustomAmountEntered(null);
+                }
+                setAddPaymentModal(true);
+              }}
+            >
+              Record Payment
+            </Button>
+            {custPlan && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => {
+                  setStatementPlan(custPlan);
+                  setStatementCustomerName(record.name);
+                  setStatementCustomerPhone(record.phone);
+                  setStatementPropertyName(
+                    propertyMap[custPlan.propertyId]?.houseNumber || propertyMap[custPlan.propertyId]?.title
+                  );
+                  setStatementModalOpen(true);
+                }}
+              >
+                Statement
+              </Button>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -913,14 +922,163 @@ export const SecretaryDashboardPage: React.FC = () => {
     {
       title: 'Action',
       key: 'action',
+      render: (_: any, record: any) => {
+        const custPlan = paymentPlans.find(
+          (p: any) => p.customerId === record.customerId || p.id === record.planId
+        );
+        return (
+          <Space size={4}>
+            <Button 
+              type="link" 
+              size="small"
+              onClick={() => {
+                setSelectedCustomer(record);
+                if (custPlan) {
+                  const sched = buildPaymentPlanSchedule(custPlan);
+                  const row = sched.nextDueRow || sched.rows[0];
+                  const exp = row ? row.installmentGHS : (custPlan.monthlyAmountMinor ? custPlan.monthlyAmountMinor / 100 : 0);
+                  paymentForm.setFieldsValue({
+                    amount: exp,
+                    paymentDate: dayjs(),
+                    method: 'cash',
+                    reference: '',
+                  });
+                  setCustomAmountEntered(exp);
+                } else {
+                  paymentForm.resetFields();
+                  paymentForm.setFieldsValue({ paymentDate: dayjs(), method: 'cash' });
+                  setCustomAmountEntered(null);
+                }
+                setAddPaymentModal(true);
+              }}
+            >
+              Record Payment
+            </Button>
+            {custPlan && (
+              <Button
+                type="link"
+                size="small"
+                onClick={() => {
+                  setStatementPlan(custPlan);
+                  setStatementCustomerName(record.name);
+                  setStatementCustomerPhone(record.phone);
+                  setStatementPropertyName(
+                    propertyMap[custPlan.propertyId]?.houseNumber || propertyMap[custPlan.propertyId]?.title
+                  );
+                  setStatementModalOpen(true);
+                }}
+              >
+                Statement
+              </Button>
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
+
+  // ── Secretary Prospects Tab Table & Columns ──────────────────────────────
+  const filteredSecretaryProspects = useMemo(() => {
+    return secretaryProspects.filter((p) => {
+      const q = prospectSearchText.trim().toLowerCase();
+      const matchSearch =
+        !q ||
+        `${p.firstName || ''} ${p.lastName || ''}`.toLowerCase().includes(q) ||
+        (p.phoneNumber && p.phoneNumber.toLowerCase().includes(q)) ||
+        (p.address && p.address.toLowerCase().includes(q)) ||
+        (p.reasonForContact && p.reasonForContact.toLowerCase().includes(q));
+
+      const matchStatus =
+        prospectStatusFilter === 'all' ||
+        p.status === prospectStatusFilter ||
+        (prospectStatusFilter === 'converted' && (p as any).converted);
+
+      return matchSearch && matchStatus;
+    });
+  }, [secretaryProspects, prospectSearchText, prospectStatusFilter]);
+
+  const secretaryProspectColumns = [
+    {
+      title: 'Prospect Name',
+      key: 'name',
       render: (_: any, record: any) => (
-        <Button 
-          type="link" 
-          size="small"
-          onClick={() => openPaymentModalForRecord(record)}
-        >
-          Record Payment
-        </Button>
+        <Space direction="vertical" size={0}>
+          <Text strong style={{ fontSize: 13 }}>
+            {record.firstName} {record.lastName}
+          </Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            <PhoneOutlined style={{ marginRight: 4 }} />
+            {record.phoneNumber || 'No phone'}
+          </Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Address / Location',
+      dataIndex: 'address',
+      key: 'address',
+      render: (addr: string) => addr || '—',
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      render: (status: string) => <StatusTag status={status} type="prospect" />,
+    },
+    {
+      title: 'Reason / Interest',
+      dataIndex: 'reasonForContact',
+      key: 'reasonForContact',
+      ellipsis: true,
+      render: (text: string) => text || '—',
+    },
+    {
+      title: 'Source',
+      dataIndex: 'source',
+      key: 'source',
+      render: (source: string) => (
+        <Tag color="cyan" style={{ textTransform: 'capitalize' }}>
+          {source ? source.replace(/_/g, ' ') : 'Desk Inquiry'}
+        </Tag>
+      ),
+    },
+    {
+      title: 'Date Logged',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      render: (d: string) => (d ? dayjs(d).format('DD MMM YYYY') : '—'),
+    },
+    {
+      title: 'Action',
+      key: 'action',
+      render: (_: any, record: any) => (
+        <Space size={4}>
+          <Button
+            type="primary"
+            size="small"
+            style={{ background: '#52c41a', borderColor: '#52c41a' }}
+            onClick={() => {
+              form.setFieldsValue({
+                firstName: record.firstName,
+                lastName: record.lastName,
+                phoneNumber: record.phoneNumber,
+                address: record.address,
+                type: 'payment_plan',
+              });
+              setAddCustomerModal(true);
+            }}
+          >
+            Convert to Customer
+          </Button>
+          <Button
+            size="small"
+            onClick={() =>
+              navigate(`/marketing/prospects?search=${encodeURIComponent(record.phoneNumber || record.lastName || '')}`)
+            }
+          >
+            View
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -987,41 +1145,29 @@ export const SecretaryDashboardPage: React.FC = () => {
 
     try {
       setLoading(true);
-      const amountGHS = Number(values.amount);
-      const amountMinor = Math.round(amountGHS * 100);
-      const paidOn = values.paymentDate ? values.paymentDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
-      const method = values.method || 'bank_transfer';
-      const reference = values.reference || `REC-SEC-${Date.now().toString().slice(-6)}`;
-      const notes = values.notes;
-
-      const activeInst = selectedScheduleInfo?.nextActiveInstallment;
-      const sequence = activeInst?.sequence || selectedCustomer?.sequence || 1;
-      const ordinal = activeInst?.ordinal || getOrdinal(sequence);
-      const expectedMinor = activeInst ? activeInst.installmentMinor : amountMinor;
-
-      const prevBalanceMinor = selectedScheduleInfo?.currentBalanceMinor ?? (selectedPlan.balanceMinor || 0);
-
-      const isUnderpayment = amountMinor < expectedMinor;
-      const isOverpayment = amountMinor > expectedMinor;
-      const deficitMinor = isUnderpayment ? expectedMinor - amountMinor : 0;
-      const surplusMinor = isOverpayment ? amountMinor - expectedMinor : 0;
+      const amountMinor = Math.round(values.amount * 100);
+      const paidOn = values.paymentDate.format('YYYY-MM-DD');
+      const method = values.method;
+      const reference = values.reference || `REC-SEC-${Date.now().toString().slice(-4)}`;
 
       const cust = customerMap[selectedPlan.customerId] || selectedCustomer;
       const phone = cust?.phone || cust?.phoneNumber || selectedCustomer?.phone;
       const name = cust?.name || `${cust?.firstName || ''} ${cust?.lastName || ''}`.trim() || selectedCustomer?.name || 'Customer';
       const prop = propertyMap[selectedPlan.propertyId];
 
+      const targetSequence = targetInstallment?.sequence || 1;
+      const ordinal = targetInstallment?.ordinal || '1st';
+
       // Persist permanently to backend database, save local state, and dispatch automated SMS prompt
-      await recordPlanPaymentWithBackend(
+      const result = await recordPlanPaymentWithBackend(
         selectedPlan,
         {
           amountMinor,
           paidOn,
           method,
           reference,
-          sequence,
+          sequence: targetSequence,
           installmentOrdinal: ordinal,
-          notes,
         },
         {
           name,
@@ -1031,44 +1177,33 @@ export const SecretaryDashboardPage: React.FC = () => {
         }
       );
 
-      // Re-calculate updated schedule with dynamic amortization
-      const updatedSchedule = buildPaymentPlanSchedule(selectedPlan);
-
-      // Invalidate relevant queries so all balances sync globally
-      queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
-      queryClient.invalidateQueries({ queryKey: ['customers'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-
-      // Generate Receipt and Customer Statement
+      // Prepare official payment receipt data
       setReceiptData({
-        receiptNumber: reference,
-        paymentDate: paidOn,
+        receiptNumber: result.receiptNumber || reference,
         customerName: name,
         customerPhone: phone,
-        propertyName: prop ? (prop.houseNumber || prop.title) : 'Assigned Property Plot',
-        amountPaidGHS: amountGHS,
+        propertyName: prop ? prop.houseNumber || prop.title : undefined,
+        amountPaidGHS: values.amount,
+        paymentDate: paidOn,
         paymentMethod: method,
-        sequence,
-        ordinal,
-        prevBalanceGHS: prevBalanceMinor / 100,
-        newBalanceGHS: updatedSchedule.currentBalanceGHS,
-        isUnderpayment,
-        isOverpayment,
-        deficitGHS: deficitMinor / 100,
-        surplusGHS: surplusMinor / 100,
-        statusText: isUnderpayment
-          ? `Partially Paid (₵${(deficitMinor / 100).toFixed(2)} deficit rolled over to subsequent installment)`
-          : isOverpayment
-          ? `Paid in Full (₵${(surplusMinor / 100).toFixed(2)} surplus credited forward)`
-          : 'Paid in Full',
-        scheduleRows: updatedSchedule.rows,
-        cashierName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Authorized Secretary',
+        reference,
+        recordedBy: user?.firstName ? `${user.firstName} ${user.lastName} (Secretary)` : 'Secretary',
+        planId: selectedPlan.id,
+        installmentOrdinal: result.installmentOrdinal || ordinal,
+        installmentSequence: result.sequence || targetSequence,
+        expectedAmountGHS: expectedMonthlyGHS,
+        isPartialPayment: result.isPartialPayment,
+        isOverpayment: result.isOverpayment,
+        deficitRolledOverGHS: result.deficitRolledOverMinor / 100,
+        surplusAppliedGHS: result.surplusAppliedMinor / 100,
+        newOutstandingBalanceGHS: result.newBalanceMinor / 100,
+        totalContractGHS: (selectedPlan.totalAmountMinor || 0) / 100,
       });
 
-      message.success('Payment recorded and dynamic amortization schedule updated!');
+      message.success('Payment recorded successfully! Dynamic installment schedule updated.');
       setAddPaymentModal(false);
       paymentForm.resetFields();
-      setEnteredAmount(undefined);
+      setCustomAmountEntered(null);
       setReceiptModalOpen(true);
       refetchPaymentPlans();
       refetchDashboard();
@@ -1076,6 +1211,31 @@ export const SecretaryDashboardPage: React.FC = () => {
       message.error(error?.error?.message || error?.message || 'Failed to record payment');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleInitiateExpense = async (values: any) => {
+    try {
+      setExpenseLoading(true);
+      const amountMinor = Math.round(values.amountGHS * 100);
+      await createExpenseMutation.mutateAsync({
+        category: values.category,
+        type: values.type || 'internal',
+        amountMinor,
+        incurredOn: values.incurredOn.format('YYYY-MM-DD'),
+        description: values.description,
+        branchId: user?.branchId,
+        recordedByUserId: user?.id,
+        recordedByUserName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Secretary',
+        recordedByUserRole: 'secretary',
+      });
+      message.success('Expense submitted successfully for Admin & Accounts approval!');
+      setAddExpenseModal(false);
+      expenseForm.resetFields();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to initiate expense');
+    } finally {
+      setExpenseLoading(false);
     }
   };
 
@@ -1138,10 +1298,7 @@ export const SecretaryDashboardPage: React.FC = () => {
           </Button>
           <Button
             icon={<DollarOutlined />}
-            onClick={() => {
-              setActiveTab('expenses');
-              window.dispatchEvent(new CustomEvent('omark-open-record-expense'));
-            }}
+            onClick={() => setAddExpenseModal(true)}
           >
             Record Expense
           </Button>
@@ -1163,9 +1320,9 @@ export const SecretaryDashboardPage: React.FC = () => {
         </Space>
       </div>
 
-      {/* ── Stats Cards ────────────────────────────────────────────────────── */}
+      {/* ── Stats Cards: 6 Key Metrics (including Secretary Prospect Portfolio & Conversion) ── */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={4}>
           <Card
             style={{
               borderRadius: 12,
@@ -1182,7 +1339,7 @@ export const SecretaryDashboardPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={4}>
           <Card
             style={{
               borderRadius: 12,
@@ -1199,7 +1356,7 @@ export const SecretaryDashboardPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={4}>
           <Card
             style={{
               borderRadius: 12,
@@ -1216,7 +1373,7 @@ export const SecretaryDashboardPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={12} lg={4}>
           <Card
             style={{
               borderRadius: 12,
@@ -1234,19 +1391,66 @@ export const SecretaryDashboardPage: React.FC = () => {
             />
           </Card>
         </Col>
+        <Col xs={24} sm={12} lg={4}>
+          <Card
+            style={{
+              borderRadius: 12,
+              boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
+              border: '1px solid #f0f0f0',
+              borderTop: '3px solid #13c2c2',
+              cursor: 'pointer',
+            }}
+            onClick={() => setActiveTab('prospects')}
+          >
+            <Statistic
+              title={<span style={{ fontWeight: 500, color: '#595959' }}>My Logged Prospects</span>}
+              value={secretaryProspects.length}
+              prefix={<UserAddOutlined style={{ color: '#13c2c2', marginRight: 6 }} />}
+              valueStyle={{ color: '#13c2c2', fontWeight: 700 }}
+            />
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {secretaryConverted.length} converted to customers &rarr;
+            </Text>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={4}>
+          <Card
+            style={{
+              borderRadius: 12,
+              boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
+              border: '1px solid #f0f0f0',
+              borderTop: '3px solid #fa8c16',
+            }}
+          >
+            <Statistic
+              title={<span style={{ fontWeight: 500, color: '#595959' }}>Front-Desk Conversion</span>}
+              value={secretaryConversionRate}
+              suffix="%"
+              prefix={<RiseOutlined style={{ color: '#fa8c16', marginRight: 6 }} />}
+              valueStyle={{ color: '#fa8c16', fontWeight: 700 }}
+            />
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {secretaryProspects.length} total desk inquiries
+            </Text>
+          </Card>
+        </Col>
       </Row>
 
-      {/* ── Tabbed View: Overview vs Secretary Operational Expenses ────────── */}
+      {/* ── Dashboard Navigation Tabs ────────────────────────────────────────── */}
       <Tabs
         activeKey={activeTab}
-        onChange={(k) => setActiveTab(k as 'overview' | 'expenses')}
-        style={{ marginTop: 8 }}
+        onChange={setActiveTab}
+        style={{ marginBottom: 24 }}
         items={[
           {
             key: 'overview',
-            label: <span><RiseOutlined /> Overview & Collections</span>,
+            label: (
+              <span>
+                <DashboardOutlined /> Overview & Analytics
+              </span>
+            ),
             children: (
-              <div>
+              <>
                 {/* ── Financial & Operational Live Analytics Charts ──────────────────── */}
                 <div style={{ marginBottom: 24 }}>
         <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
@@ -1651,118 +1855,219 @@ export const SecretaryDashboardPage: React.FC = () => {
           </Col>
         ))}
       </Row>
-
-      {/* ── Client Check-Ins & Front Desk Activity ─────────────────────── */}
-      <div style={{ marginBottom: 24 }}>
-        <ClientCheckInsTable
-          title="Branch Front-Desk Client & Visitor Check-Ins"
-          branchId={userBranchId}
-        />
-      </div>
-
-      {/* ── Action Tables: Full Width Defaulters followed by Due Soon ────────── */}
-      <div style={{ marginBottom: 24 }}>
-        <Card
-          style={{
-            marginBottom: 24,
-            borderRadius: 12,
-            boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
-            border: '1px solid #f0f0f0',
-          }}
-          title={
-            <span>
-              <WarningOutlined style={{ color: '#ff4d4f', marginRight: 8 }} />
-              Defaulters
-              <Badge count={dashboard.defaulters.length} style={{ marginLeft: 8 }} />
-            </span>
-          }
-          extra={
-            dashboard.defaulters.length > 0 && (
-              <Button 
-                size="small" 
-                onClick={() => navigate('/customers?status=defaulted')}
+              </>
+            ),
+          },
+          {
+            key: 'prospects',
+            label: (
+              <span>
+                <UserAddOutlined /> My Logged Prospects ({secretaryProspects.length})
+              </span>
+            ),
+            children: (
+              <Card
+                style={{
+                  borderRadius: 12,
+                  boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
+                  border: '1px solid #f0f0f0',
+                  marginBottom: 24,
+                }}
+                title={
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                    <div>
+                      <Space>
+                        <UserAddOutlined style={{ color: tokens.primary }} />
+                        <span>Front-Desk Prospects & Inquiries</span>
+                      </Space>
+                      <div style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 'normal', marginTop: 2 }}>
+                        Prospects registered at branch front-desk by {user?.firstName} &bull; {secretaryConverted.length} converted ({secretaryConversionRate}% conversion rate)
+                      </div>
+                    </div>
+                    <Space wrap>
+                      <Input
+                        placeholder="Search prospects..."
+                        prefix={<SearchOutlined />}
+                        allowClear
+                        value={prospectSearchText}
+                        onChange={(e) => setProspectSearchText(e.target.value)}
+                        style={{ width: 220 }}
+                      />
+                      <Select
+                        value={prospectStatusFilter}
+                        onChange={setProspectStatusFilter}
+                        style={{ width: 170 }}
+                      >
+                        <Option value="all">All Statuses</Option>
+                        <Option value="new">New</Option>
+                        <Option value="meeting_scheduled">Meeting Scheduled</Option>
+                        <Option value="meeting_completed">Meeting Completed</Option>
+                        <Option value="converted">Converted</Option>
+                      </Select>
+                      <Button
+                        type="primary"
+                        icon={<UserAddOutlined />}
+                        onClick={() => setAddProspectModal(true)}
+                      >
+                        Add Prospect
+                      </Button>
+                    </Space>
+                  </div>
+                }
               >
-                View All
-              </Button>
-            )
-          }
-        >
-          {dashboard.defaulters.length > 0 ? (
-            <Table
-              columns={defaulterColumns}
-              dataSource={dashboard.defaulters}
-              rowKey="customerId"
-              pagination={{ pageSize: 5 }}
-              size="small"
-              scroll={{ x: 700 }}
-            />
-          ) : (
-            <Empty
-              description={
-                <span style={{ color: '#52c41a' }}>
-                  <CheckCircleOutlined /> No defaulters — all payments on track
-                </span>
-              }
-            />
-          )}
-        </Card>
+                <Table
+                  columns={secretaryProspectColumns}
+                  dataSource={filteredSecretaryProspects}
+                  rowKey="id"
+                  pagination={{ pageSize: 8 }}
+                  size="small"
+                />
+              </Card>
+            ),
+          },
+          {
+            key: 'collections',
+            label: (
+              <span>
+                <DollarOutlined /> Collections & Defaulters ({dashboard.defaulters.length + dashboard.dueSoon.length})
+              </span>
+            ),
+            children: (
+              <div style={{ marginBottom: 24 }}>
+                <Card
+                  style={{
+                    marginBottom: 24,
+                    borderRadius: 12,
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
+                    border: '1px solid #f0f0f0',
+                  }}
+                  title={
+                    <span>
+                      <WarningOutlined style={{ color: '#ff4d4f', marginRight: 8 }} />
+                      Defaulters
+                      <Badge count={dashboard.defaulters.length} style={{ marginLeft: 8 }} />
+                    </span>
+                  }
+                  extra={
+                    dashboard.defaulters.length > 0 && (
+                      <Button 
+                        size="small" 
+                        onClick={() => navigate('/customers?status=defaulted')}
+                      >
+                        View All
+                      </Button>
+                    )
+                  }
+                >
+                  {dashboard.defaulters.length > 0 ? (
+                    <Table
+                      columns={defaulterColumns}
+                      dataSource={dashboard.defaulters}
+                      rowKey="customerId"
+                      pagination={{ pageSize: 5 }}
+                      size="small"
+                      scroll={{ x: 700 }}
+                    />
+                  ) : (
+                    <Empty
+                      description={
+                        <span style={{ color: '#52c41a' }}>
+                          <CheckCircleOutlined /> No defaulters — all payments on track
+                        </span>
+                      }
+                    />
+                  )}
+                </Card>
 
-        <Card
-          style={{
-            borderRadius: 12,
-            boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
-            border: '1px solid #f0f0f0',
-          }}
-          title={
-            <span>
-              <ClockCircleOutlined style={{ color: '#faad14', marginRight: 8 }} />
-              Due Soon
-              <Badge count={dashboard.dueSoon.length} style={{ marginLeft: 8 }} />
-            </span>
-          }
-          extra={
-            dashboard.dueSoon.length > 0 && (
-              <Button 
-                size="small" 
-                onClick={() => navigate('/payment-plans?status=active')}
-              >
-                View All
-              </Button>
-            )
-          }
-        >
-          {dashboard.dueSoon.length > 0 ? (
-            <Table
-              columns={dueSoonColumns}
-              dataSource={dashboard.dueSoon}
-              rowKey="customerId"
-              pagination={{ pageSize: 5 }}
-              size="small"
-              scroll={{ x: 700 }}
-            />
-          ) : (
-            <Empty description="No payments due soon" />
-          )}
-        </Card>
-      </div>
-    </div>
-  ),
-},
-{
-  key: 'expenses',
-  label: (
-    <span>
-      <DollarOutlined /> Secretary Operational Expenses
-    </span>
-  ),
-  children: (
-    <div style={{ marginTop: 12 }}>
-      <RoleExpenseDashboard fixedRole="secretary" compact />
-    </div>
-  ),
-},
-]}
-/>
+                <Card
+                  style={{
+                    borderRadius: 12,
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
+                    border: '1px solid #f0f0f0',
+                  }}
+                  title={
+                    <span>
+                      <ClockCircleOutlined style={{ color: '#faad14', marginRight: 8 }} />
+                      Due Soon
+                      <Badge count={dashboard.dueSoon.length} style={{ marginLeft: 8 }} />
+                    </span>
+                  }
+                  extra={
+                    dashboard.dueSoon.length > 0 && (
+                      <Button 
+                        size="small" 
+                        onClick={() => navigate('/payment-plans?status=active')}
+                      >
+                        View All
+                      </Button>
+                    )
+                  }
+                >
+                  {dashboard.dueSoon.length > 0 ? (
+                    <Table
+                      columns={dueSoonColumns}
+                      dataSource={dashboard.dueSoon}
+                      rowKey="customerId"
+                      pagination={{ pageSize: 5 }}
+                      size="small"
+                      scroll={{ x: 700 }}
+                    />
+                  ) : (
+                    <Empty description="No payments due soon" />
+                  )}
+                </Card>
+              </div>
+            ),
+          },
+          {
+            key: 'expenses',
+            label: (
+              <span>
+                <DollarOutlined /> Operational Expenses (Secretary)
+              </span>
+            ),
+            children: (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                  <div>
+                    <Title level={4} style={{ margin: 0 }}>
+                      Secretary Petty Cash & Operational Expenses
+                    </Title>
+                    <Text type="secondary" style={{ fontSize: 13 }}>
+                      Daily tracking, automated 24-hour cycle resetting, and multi-tier approval workflow
+                    </Text>
+                  </div>
+                  <Button
+                    type="primary"
+                    icon={<DollarOutlined />}
+                    onClick={() => setAddExpenseModal(true)}
+                    style={{ background: tokens.primary }}
+                  >
+                    Initiate Operational Expense
+                  </Button>
+                </div>
+                <RoleExpenseDashboard fixedRole="secretary" compact />
+              </div>
+            ),
+          },
+          {
+            key: 'checkins',
+            label: (
+              <span>
+                <IdcardOutlined /> Front-Desk Check-Ins {activeVisitorsCount > 0 && `(${activeVisitorsCount})`}
+              </span>
+            ),
+            children: (
+              <div style={{ marginTop: 8 }}>
+                <ClientCheckInsTable
+                  title="Branch Front-Desk Client & Visitor Check-Ins"
+                  branchId={userBranchId}
+                />
+              </div>
+            ),
+          },
+        ]}
+      />
 
       {/* ── Add Customer Modal ────────────────────────────────────────────── */}
       <Modal
@@ -1941,12 +2246,12 @@ export const SecretaryDashboardPage: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* ── Dynamic Custom Payment Modal with Live Amortization Preview ── */}
+      {/* ── Record Payment Modal (Dynamic Amortization & Flexible Installment Engine) ── */}
       <Modal
         title={
           <Space>
-            <MoneyCollectOutlined style={{ color: tokens.primary }} />
-            <span>Record Payment & Dynamic Schedule Amortization</span>
+            <DollarOutlined style={{ color: tokens.primary }} />
+            <span>Record Payment & Dynamic Schedule Recalculation</span>
           </Space>
         }
         open={addPaymentModal}
@@ -1954,432 +2259,287 @@ export const SecretaryDashboardPage: React.FC = () => {
           setAddPaymentModal(false);
           paymentForm.resetFields();
           setSelectedCustomer(null);
-          setEnteredAmount(undefined);
+          setCustomAmountEntered(null);
         }}
         footer={null}
-        width={620}
+        width={580}
         style={{ top: 20 }}
+        destroyOnClose
       >
-        {(() => {
-          const activeInst = selectedScheduleInfo?.nextActiveInstallment;
-          const targetSequence = activeInst?.sequence || selectedCustomer?.sequence || 1;
-          const targetOrdinal = activeInst?.ordinal || getOrdinal(targetSequence);
-          const expectedMonthlyMinor = activeInst
-            ? activeInst.installmentMinor
-            : (selectedCustomer?.overdueAmountMinor || selectedCustomer?.amountMinor || 500000);
-          const expectedMonthlyGHS = expectedMonthlyMinor / 100;
-          const totalPlanBalanceGHS = selectedScheduleInfo
-            ? selectedScheduleInfo.currentBalanceGHS
-            : ((selectedPlan?.balanceMinor || 0) / 100);
-          const currentAmount = enteredAmount !== undefined ? enteredAmount : expectedMonthlyGHS;
-          const diff = currentAmount - expectedMonthlyGHS;
-          const isUnderpayment = currentAmount > 0 && currentAmount < expectedMonthlyGHS;
-          const isOverpayment = currentAmount > expectedMonthlyGHS;
-          const isFullPayoff = currentAmount >= totalPlanBalanceGHS && totalPlanBalanceGHS > 0;
-
-          return (
-            <div>
-              {/* Customer & Installment Header Summary */}
-              <Card size="small" style={{ marginBottom: 16, background: '#fafafa', borderRadius: 8 }}>
-                <Row gutter={12}>
-                  <Col span={12}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>Customer</Text>
-                    <div>
-                      <Text strong>{selectedCustomer?.name || 'Customer'}</Text>
-                      {selectedCustomer?.phone && (
-                        <span style={{ fontSize: 12, color: '#888', marginLeft: 6 }}>({selectedCustomer.phone})</span>
-                      )}
-                    </div>
-                  </Col>
-                  <Col span={12}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>Target Installment</Text>
-                    <div>
-                      <Tag color="blue">{targetOrdinal} Installment</Tag>
-                      {activeInst?.dueDate && (
-                        <span style={{ fontSize: 12, color: '#888' }}>Due: {activeInst.dueDate}</span>
-                      )}
-                    </div>
-                  </Col>
-                </Row>
-                <Divider style={{ margin: '8px 0' }} />
-                <Row gutter={12}>
-                  <Col span={12}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>Expected Installment</Text>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: tokens.primary }}>
-                      GH₵ {expectedMonthlyGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                  </Col>
-                  <Col span={12}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>Total Outstanding Balance</Text>
-                    <div style={{ fontSize: 16, fontWeight: 700, color: '#cf1322' }}>
-                      GH₵ {totalPlanBalanceGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                  </Col>
-                </Row>
-              </Card>
-
-              {/* Quick Amount Presets */}
-              <div style={{ marginBottom: 16 }}>
-                <Text style={{ fontSize: 12, fontWeight: 600, display: 'block', marginBottom: 6 }}>
-                  Quick Amount Presets:
-                </Text>
-                <Space wrap size={[8, 8]}>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      paymentForm.setFieldsValue({ amount: expectedMonthlyGHS });
-                      setEnteredAmount(expectedMonthlyGHS);
-                    }}
-                  >
-                    Exact Expected (₵{expectedMonthlyGHS.toFixed(0)})
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      const half = Number((expectedMonthlyGHS * 0.5).toFixed(2));
-                      paymentForm.setFieldsValue({ amount: half });
-                      setEnteredAmount(half);
-                    }}
-                  >
-                    50% Partial (₵{(expectedMonthlyGHS * 0.5).toFixed(0)})
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      const dbl = Number((expectedMonthlyGHS * 2).toFixed(2));
-                      paymentForm.setFieldsValue({ amount: dbl });
-                      setEnteredAmount(dbl);
-                    }}
-                  >
-                    Double Payment (₵{(expectedMonthlyGHS * 2).toFixed(0)})
-                  </Button>
-                  {totalPlanBalanceGHS > 0 && (
-                    <Button
-                      size="small"
-                      type="dashed"
-                      onClick={() => {
-                        paymentForm.setFieldsValue({ amount: totalPlanBalanceGHS });
-                        setEnteredAmount(totalPlanBalanceGHS);
-                      }}
-                    >
-                      Full Payoff (₵{totalPlanBalanceGHS.toFixed(0)})
-                    </Button>
-                  )}
-                </Space>
-              </div>
-
-              {/* Real-time Dynamic Feedback Preview */}
-              {currentAmount > 0 && (
-                <div style={{ marginBottom: 16 }}>
-                  {isFullPayoff ? (
-                    <Alert
-                      type="success"
-                      showIcon
-                      message="Complete Plan Settlement"
-                      description={`Payment of GH₵ ${currentAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} pays off the full remaining balance. Plan will be marked Completed.`}
-                    />
-                  ) : isUnderpayment ? (
-                    <Alert
-                      type="warning"
-                      showIcon
-                      message="Underpayment (Partial Payment) Detected"
-                      description={
-                        <div>
-                          <div>• Credited Amount: <strong>GH₵ {currentAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong></div>
-                          <div>• Installment Status: <Tag color="orange">Partially Paid</Tag></div>
-                          <div>• Unpaid Deficit: <strong>GH₵ {Math.abs(diff).toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong> will automatically roll over into subsequent monthly installments.</div>
-                        </div>
-                      }
-                    />
-                  ) : isOverpayment ? (
-                    <Alert
-                      type="success"
-                      showIcon
-                      message="Overpayment / Surplus Pre-payment Detected"
-                      description={
-                        <div>
-                          <div>• Credited Amount: <strong>GH₵ {currentAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong></div>
-                          <div>• Installment Status: <Tag color="green">Paid in Full</Tag></div>
-                          <div>• Surplus Credit: <strong>GH₵ {diff.toLocaleString('en-US', { minimumFractionDigits: 2 })}</strong> will automatically reduce future scheduled installment(s).</div>
-                        </div>
-                      }
-                    />
-                  ) : (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="Exact Scheduled Installment"
-                      description={`Matches the scheduled installment amount of GH₵ ${expectedMonthlyGHS.toFixed(2)}. Installment marked Paid in Full.`}
-                    />
-                  )}
-                </div>
-              )}
-
-              <Form form={paymentForm} layout="vertical" onFinish={handleRecordPayment}>
-                <Form.Item
-                  name="amount"
-                  label="Payment Amount (GH₵)"
-                  rules={[{ required: true, message: 'Please enter payment amount' }]}
-                  extra="Accepts custom manual entry (exact, underpayment, or overpayment surplus)."
-                >
-                  <InputNumber
-                    style={{ width: '100%' }}
-                    prefix="GH₵"
-                    precision={2}
-                    min={0.01}
-                    placeholder="Enter amount"
-                    onChange={(val) => setEnteredAmount(typeof val === 'number' ? val : undefined)}
-                  />
-                </Form.Item>
-
-                <Row gutter={12}>
-                  <Col span={12}>
-                    <Form.Item
-                      name="paymentDate"
-                      label="Payment Date"
-                      rules={[{ required: true, message: 'Select payment date' }]}
-                      initialValue={dayjs()}
-                    >
-                      <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-                    </Form.Item>
-                  </Col>
-                  <Col span={12}>
-                    <Form.Item
-                      name="method"
-                      label="Payment Method"
-                      rules={[{ required: true, message: 'Select method' }]}
-                      initialValue="bank_transfer"
-                    >
-                      <Select placeholder="Select method">
-                        <Option value="cash">Cash</Option>
-                        <Option value="bank_transfer">Bank Transfer</Option>
-                        <Option value="mobile_money">Mobile Money</Option>
-                        <Option value="cheque">Cheque</Option>
-                      </Select>
-                    </Form.Item>
-                  </Col>
-                </Row>
-
-                <Form.Item
-                  name="reference"
-                  label="Reference / Receipt Number"
-                  extra="Auto-generated if left empty."
-                >
-                  <Input placeholder="e.g. REC-SEC-123456" />
-                </Form.Item>
-
-                <Form.Item
-                  name="notes"
-                  label="Payment Notes / Remarks"
-                >
-                  <Input.TextArea rows={2} placeholder="Optional notes regarding this installment payment..." />
-                </Form.Item>
-
-                <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
-                  <Space>
-                    <Button onClick={() => {
-                      setAddPaymentModal(false);
-                      paymentForm.resetFields();
-                      setSelectedCustomer(null);
-                      setEnteredAmount(undefined);
-                    }}>
-                      Cancel
-                    </Button>
-                    <Button type="primary" htmlType="submit" loading={loading} icon={<MoneyCollectOutlined />}>
-                      Record Payment & Recalculate
-                    </Button>
-                  </Space>
-                </Form.Item>
-              </Form>
-            </div>
-          );
-        })()}
-      </Modal>
-
-      {/* ── Official Payment Receipt & Customer Statement Modal ── */}
-      <Modal
-        title={
-          <Space>
-            <PrinterOutlined style={{ color: tokens.primary }} />
-            <span>Official Payment Receipt & Statement</span>
-          </Space>
-        }
-        open={receiptModalOpen}
-        onCancel={() => setReceiptModalOpen(false)}
-        footer={[
-          <Button key="close" onClick={() => setReceiptModalOpen(false)}>
-            Close
-          </Button>,
-          <Button
-            key="print"
-            type="primary"
-            icon={<PrinterOutlined />}
-            onClick={() => window.print()}
+        {selectedCustomer && (
+          <div
+            style={{
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 10,
+              padding: '12px 16px',
+              marginBottom: 16,
+            }}
           >
-            Print Receipt & Statement
-          </Button>,
-        ]}
-        width={760}
-        style={{ top: 20 }}
-      >
-        {receiptData && (
-          <div id="payment-receipt-print" style={{ padding: '8px 4px' }}>
-            {/* Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', borderBottom: '2px solid #1890ff', paddingBottom: 12, marginBottom: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
               <div>
-                <Title level={4} style={{ margin: 0, color: tokens.primary }}>
-                  NAMIBRA / OMARK REAL ESTATE
-                </Title>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  Official Payment Receipt & Dynamic Customer Statement
+                <Text strong style={{ fontSize: 15, color: '#0f172a' }}>
+                  {selectedCustomer.name}
                 </Text>
+                {selectedCustomer.phone && (
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    <PhoneOutlined style={{ marginRight: 4 }} /> {selectedCustomer.phone}
+                  </div>
+                )}
+                {selectedPlan && (
+                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                    Property: <strong>{propertyMap[selectedPlan.propertyId]?.houseNumber || propertyMap[selectedPlan.propertyId]?.title || 'Assigned Property'}</strong>
+                  </div>
+                )}
               </div>
-              <div style={{ textAlign: 'right' }}>
-                <Tag color="blue" style={{ fontSize: 13, padding: '4px 8px' }}>
-                  #{receiptData.receiptNumber}
-                </Tag>
-                <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
-                  Date: {receiptData.paymentDate}
-                </div>
-              </div>
+              <Tag color="blue" style={{ borderRadius: 6, fontWeight: 600 }}>
+                {targetInstallment?.ordinal ? `${targetInstallment.ordinal} Installment` : 'Installment'}
+              </Tag>
             </div>
 
-            {/* Customer & Unit Details */}
-            <Descriptions size="small" bordered column={2} style={{ marginBottom: 16 }}>
-              <Descriptions.Item label="Customer Name">
-                <strong>{receiptData.customerName}</strong>
-              </Descriptions.Item>
-              <Descriptions.Item label="Phone Number">
-                {receiptData.customerPhone || '—'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Property / Unit">
-                {receiptData.propertyName}
-              </Descriptions.Item>
-              <Descriptions.Item label="Issued By">
-                {receiptData.cashierName}
-              </Descriptions.Item>
-              <Descriptions.Item label="Payment Method">
-                <Tag color="cyan">{(receiptData.paymentMethod || 'cash').toUpperCase()}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Target Installment">
-                {receiptData.ordinal} Installment (Seq #{receiptData.sequence})
-              </Descriptions.Item>
-            </Descriptions>
+            <Divider style={{ margin: '10px 0' }} />
 
-            {/* Payment Summary Cards */}
-            <Row gutter={12} style={{ marginBottom: 16 }}>
-              <Col span={8}>
-                <Card size="small" style={{ background: '#f6ffed', borderColor: '#b7eb8f' }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>Amount Credited</Text>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#52c41a' }}>
-                    GH₵ {receiptData.amountPaidGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  </div>
-                </Card>
+            <Row gutter={12}>
+              <Col span={12}>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>
+                  Scheduled Installment
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#0284c7' }}>
+                  GH₵ {expectedMonthlyGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
               </Col>
-              <Col span={8}>
-                <Card size="small" style={{ background: '#f5f5f5' }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>Previous Balance</Text>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#595959' }}>
-                    GH₵ {receiptData.prevBalanceGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  </div>
-                </Card>
-              </Col>
-              <Col span={8}>
-                <Card size="small" style={{ background: '#fff2e8', borderColor: '#ffbb96' }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>New Outstanding Balance</Text>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: '#d4380d' }}>
-                    GH₵ {receiptData.newBalanceGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                  </div>
-                </Card>
+              <Col span={12}>
+                <div style={{ fontSize: 11, color: '#64748b', textTransform: 'uppercase', fontWeight: 600 }}>
+                  Total Outstanding Balance
+                </div>
+                <div style={{ fontSize: 16, fontWeight: 700, color: '#b91c1c' }}>
+                  GH₵ {totalRemainingBalanceGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </div>
               </Col>
             </Row>
+          </div>
+        )}
 
-            {/* Dynamic Deficit / Surplus Notice */}
-            {receiptData.isUnderpayment && (
+        {/* Quick Amount Presets */}
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 6 }}>
+            Quick Amount Presets:
+          </div>
+          <Space wrap size={6}>
+            <Button
+              size="small"
+              onClick={() => {
+                paymentForm.setFieldsValue({ amount: expectedMonthlyGHS });
+                setCustomAmountEntered(expectedMonthlyGHS);
+              }}
+            >
+              Exact (GH₵ {expectedMonthlyGHS.toFixed(2)})
+            </Button>
+            {expectedMonthlyGHS > 0 && (
+              <Button
+                size="small"
+                onClick={() => {
+                  const half = Math.round((expectedMonthlyGHS / 2) * 100) / 100;
+                  paymentForm.setFieldsValue({ amount: half });
+                  setCustomAmountEntered(half);
+                }}
+              >
+                Half / 50% (GH₵ {(expectedMonthlyGHS / 2).toFixed(2)})
+              </Button>
+            )}
+            {expectedMonthlyGHS > 0 && (
+              <Button
+                size="small"
+                onClick={() => {
+                  const dbl = Math.round(expectedMonthlyGHS * 2 * 100) / 100;
+                  paymentForm.setFieldsValue({ amount: dbl });
+                  setCustomAmountEntered(dbl);
+                }}
+              >
+                2 Months (GH₵ {(expectedMonthlyGHS * 2).toFixed(2)})
+              </Button>
+            )}
+            {totalRemainingBalanceGHS > 0 && (
+              <Button
+                size="small"
+                onClick={() => {
+                  paymentForm.setFieldsValue({ amount: totalRemainingBalanceGHS });
+                  setCustomAmountEntered(totalRemainingBalanceGHS);
+                }}
+              >
+                Clear Balance (GH₵ {totalRemainingBalanceGHS.toFixed(2)})
+              </Button>
+            )}
+          </Space>
+        </div>
+
+        {/* Dynamic Real-time Recalculation Preview Box */}
+        {(() => {
+          const amt = customAmountEntered !== null ? customAmountEntered : paymentForm.getFieldValue('amount');
+          if (amt === undefined || amt === null || isNaN(amt) || amt <= 0) return null;
+
+          const diff = Number((amt - expectedMonthlyGHS).toFixed(2));
+          const isPartial = diff < -0.01;
+          const isOver = diff > 0.01;
+          const deficit = isPartial ? Math.abs(diff) : 0;
+          const surplus = isOver ? diff : 0;
+          const newOutstanding = Math.max(0, Number((totalRemainingBalanceGHS - amt).toFixed(2)));
+
+          if (isPartial) {
+            return (
               <Alert
                 type="warning"
                 showIcon
-                style={{ marginBottom: 16 }}
-                message="Partial Payment Recorded"
-                description={`Deficit of GH₵ ${receiptData.deficitGHS.toFixed(2)} has been automatically added to subsequent monthly installments.`}
+                style={{ marginBottom: 16, borderRadius: 8 }}
+                message={
+                  <span style={{ fontWeight: 700 }}>
+                    ⚠️ Underpayment (Partial Payment) Detected
+                  </span>
+                }
+                description={
+                  <div style={{ fontSize: 12, marginTop: 4 }}>
+                    <div>
+                      • Credited Now: <strong>GH₵ {amt.toFixed(2)}</strong> (Installment flagged as <Tag color="gold" style={{ margin: '0 4px' }}>Partially Paid</Tag>)
+                    </div>
+                    <div>
+                      • Unpaid Deficit: <strong style={{ color: '#d97706' }}>GH₵ {deficit.toFixed(2)}</strong>
+                    </div>
+                    <div style={{ marginTop: 4, fontStyle: 'italic', color: '#b45309' }}>
+                      &rarr; Dynamic Amortization: Unpaid deficit of GH₵ {deficit.toFixed(2)} will automatically roll over into subsequent monthly installment(s).
+                    </div>
+                    <div style={{ marginTop: 4, fontWeight: 600 }}>
+                      • Total Outstanding Balance: GH₵ {newOutstanding.toFixed(2)}
+                    </div>
+                  </div>
+                }
               />
-            )}
-            {receiptData.isOverpayment && (
+            );
+          }
+
+          if (isOver) {
+            return (
               <Alert
                 type="success"
                 showIcon
-                style={{ marginBottom: 16 }}
-                message="Surplus Pre-payment Credited"
-                description={`Surplus amount of GH₵ ${receiptData.surplusGHS.toFixed(2)} has been credited forward to reduce upcoming scheduled installments.`}
-              />
-            )}
-
-            {/* Recalculated Remaining Breakdown Table */}
-            <Title level={5} style={{ marginBottom: 8 }}>
-              Recalculated Amortization Schedule & Statement
-            </Title>
-            <Table
-              dataSource={receiptData.scheduleRows || []}
-              rowKey="sequence"
-              size="small"
-              pagination={false}
-              columns={[
-                {
-                  title: '#',
-                  dataIndex: 'ordinal',
-                  key: 'ordinal',
-                  width: 90,
-                },
-                {
-                  title: 'Due Date',
-                  dataIndex: 'dueDate',
-                  key: 'dueDate',
-                  render: (d: string) => dayjs(d).isValid() ? dayjs(d).format('DD MMM YYYY') : d,
-                },
-                {
-                  title: 'Scheduled (GH₵)',
-                  dataIndex: 'installmentGHS',
-                  key: 'installmentGHS',
-                  align: 'right',
-                  render: (val: number, r: any) => (
+                style={{ marginBottom: 16, borderRadius: 8 }}
+                message={
+                  <span style={{ fontWeight: 700 }}>
+                    ✨ Overpayment / Pre-payment Detected
+                  </span>
+                }
+                description={
+                  <div style={{ fontSize: 12, marginTop: 4 }}>
                     <div>
-                      <span>₵{val.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
-                      {r.deficitCarriedMinor > 0 && (
-                        <div style={{ fontSize: 10, color: '#fa8c16' }}>
-                          (+₵{(r.deficitCarriedMinor / 100).toFixed(2)} deficit)
-                        </div>
-                      )}
-                      {r.surplusAppliedMinor > 0 && (
-                        <div style={{ fontSize: 10, color: '#52c41a' }}>
-                          (-₵{(r.surplusAppliedMinor / 100).toFixed(2)} surplus)
-                        </div>
-                      )}
+                      • Credited Now: <strong>GH₵ {amt.toFixed(2)}</strong> (Current month flagged as <Tag color="green" style={{ margin: '0 4px' }}>Paid</Tag>)
                     </div>
-                  ),
-                },
-                {
-                  title: 'Paid (GH₵)',
-                  dataIndex: 'paidGHS',
-                  key: 'paidGHS',
-                  align: 'right',
-                  render: (val: number) => `₵${(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
-                },
-                {
-                  title: 'Status',
-                  dataIndex: 'status',
-                  key: 'status',
-                  align: 'center',
-                  render: (st: string) => {
-                    if (st === 'completed') return <Tag color="green">Paid</Tag>;
-                    if (st === 'partially_paid') return <Tag color="orange">Partially Paid</Tag>;
-                    if (st === 'overdue') return <Tag color="red">Overdue</Tag>;
-                    return <Tag color="blue">Pending</Tag>;
-                  },
-                },
-              ]}
+                    <div>
+                      • Surplus Advance: <strong style={{ color: '#16a34a' }}>GH₵ {surplus.toFixed(2)}</strong>
+                    </div>
+                    <div style={{ marginTop: 4, fontStyle: 'italic', color: '#15803d' }}>
+                      &rarr; Dynamic Amortization: Surplus of GH₵ {surplus.toFixed(2)} will apply directly against future scheduled installments, reducing the next month's payment.
+                    </div>
+                    <div style={{ marginTop: 4, fontWeight: 600 }}>
+                      • Total Outstanding Balance: GH₵ {newOutstanding.toFixed(2)}
+                    </div>
+                  </div>
+                }
+              />
+            );
+          }
+
+          return (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, borderRadius: 8 }}
+              message={<span style={{ fontWeight: 700 }}>✅ Exact Scheduled Installment</span>}
+              description={
+                <div style={{ fontSize: 12, marginTop: 4 }}>
+                  <div>
+                    • Full monthly installment of <strong>GH₵ {amt.toFixed(2)}</strong> will be credited.
+                  </div>
+                  <div>• Installment status marked as <Tag color="green" style={{ margin: '0 4px' }}>Paid</Tag>.</div>
+                  <div style={{ fontWeight: 600, marginTop: 4 }}>
+                    • Total Outstanding Balance: GH₵ {newOutstanding.toFixed(2)}
+                  </div>
+                </div>
+              }
             />
-          </div>
-        )}
+          );
+        })()}
+
+        <Form form={paymentForm} layout="vertical" onFinish={handleRecordPayment}>
+          <Form.Item
+            name="amount"
+            label="Payment Amount (GHS) — Enter Any Custom Amount"
+            rules={[
+              { required: true, message: 'Please enter amount' },
+              {
+                validator: async (_, value) => {
+                  if (value && value <= 0) {
+                    throw new Error('Amount must be greater than zero');
+                  }
+                },
+              },
+            ]}
+            extra="Accepts any manual entry: Underpayments roll deficit forward; overpayments reduce future installments."
+          >
+            <InputNumber
+              style={{ width: '100%' }}
+              prefix="GH₵"
+              precision={2}
+              min={0.01}
+              placeholder="Enter custom payment amount"
+              onChange={(val) => setCustomAmountEntered(val ?? null)}
+            />
+          </Form.Item>
+
+          <Form.Item
+            name="paymentDate"
+            label="Payment Date"
+            rules={[{ required: true, message: 'Please select payment date' }]}
+            initialValue={dayjs()}
+          >
+            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+          </Form.Item>
+
+          <Form.Item
+            name="method"
+            label="Payment Method"
+            rules={[{ required: true, message: 'Please select payment method' }]}
+            initialValue="cash"
+          >
+            <Select placeholder="Select method">
+              <Option value="cash">Cash</Option>
+              <Option value="bank_transfer">Bank Transfer</Option>
+              <Option value="mobile_money">Mobile Money</Option>
+              <Option value="cheque">Cheque</Option>
+            </Select>
+          </Form.Item>
+
+          <Form.Item
+            name="reference"
+            label="Reference / Receipt Number (Optional)"
+          >
+            <Input placeholder="e.g. TR-2026-0041 or MOMO-Ref" />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => {
+                setAddPaymentModal(false);
+                paymentForm.resetFields();
+                setSelectedCustomer(null);
+                setCustomAmountEntered(null);
+              }}>
+                Cancel
+              </Button>
+              <Button type="primary" htmlType="submit" loading={loading} style={{ background: '#1677ff', fontWeight: 600 }}>
+                Record Payment & Recalculate
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
       </Modal>
 
       <AddProspectModal
@@ -2388,6 +2548,123 @@ export const SecretaryDashboardPage: React.FC = () => {
         onSuccess={() => {
           handleRefresh();
         }}
+      />
+
+      {/* ── Record Operational Expense Modal ── */}
+      <Modal
+        title={
+          <Space>
+            <DollarOutlined style={{ color: tokens.primary }} />
+            <span>Initiate Operational Expense (Secretary)</span>
+          </Space>
+        }
+        open={addExpenseModal}
+        onCancel={() => {
+          setAddExpenseModal(false);
+          expenseForm.resetFields();
+        }}
+        footer={null}
+        width={540}
+      >
+        <Form form={expenseForm} layout="vertical" onFinish={handleInitiateExpense}>
+          <Alert
+            type="info"
+            showIcon
+            message="Pending Approval Workflow"
+            description="All operational expenses initiated by the Secretary Dashboard will be placed in 'pending' status for review and authorization by Admin and Accounts dashboards."
+            style={{ marginBottom: 16 }}
+          />
+
+          <Row gutter={12}>
+            <Col span={14}>
+              <Form.Item
+                name="category"
+                label="Expense Category"
+                rules={[{ required: true, message: 'Please pick category' }]}
+                initialValue="Office Supplies"
+              >
+                <Select placeholder="Select category">
+                  <Option value="Office Supplies">Office Supplies & Stationery</Option>
+                  <Option value="Client Hospitality">Client Hospitality & Refreshments</Option>
+                  <Option value="Courier & Dispatch">Courier & Dispatch Services</Option>
+                  <Option value="Utilities & Internet">Utilities & Internet</Option>
+                  <Option value="Fuel & Transport">Fuel & Transport</Option>
+                  <Option value="Maintenance & Repairs">Maintenance & Repairs</Option>
+                  <Option value="Other">Other Operational Cost</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={10}>
+              <Form.Item name="type" label="Expense Type" initialValue="internal" rules={[{ required: true }]}>
+                <Select>
+                  <Option value="internal">🏢 Internal Operations</Option>
+                  <Option value="external">🚚 External / Project</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="amountGHS"
+                label="Amount (GH₵)"
+                rules={[{ required: true, message: 'Enter amount' }]}
+              >
+                <InputNumber style={{ width: '100%' }} min={0.01} precision={2} prefix="GH₵" placeholder="0.00" />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="incurredOn"
+                label="Incurred Date"
+                initialValue={dayjs()}
+                rules={[{ required: true }]}
+              >
+                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="description"
+            label="Detailed Purpose / Notes"
+            rules={[{ required: true, message: 'Explain what this expense is for' }]}
+          >
+            <Input.TextArea rows={3} placeholder="Provide details on the purchase, receipt number, vendor, or purpose..." />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => {
+                setAddExpenseModal(false);
+                expenseForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+              <Button type="primary" htmlType="submit" loading={expenseLoading}>
+                Submit Expense for Approval
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* ── Official Dynamic Payment Receipt Modal ──────────────────────── */}
+      <PaymentReceiptModal
+        open={receiptModalOpen}
+        onClose={() => setReceiptModalOpen(false)}
+        receipt={receiptData}
+      />
+
+      {/* ── Official Customer Statement & Dynamic Amortization Ledger Modal ─ */}
+      <CustomerStatementModal
+        open={statementModalOpen}
+        onClose={() => setStatementModalOpen(false)}
+        plan={statementPlan}
+        customerName={statementCustomerName}
+        customerPhone={statementCustomerPhone}
+        propertyName={statementPropertyName}
       />
     </div>
   );

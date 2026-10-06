@@ -9,34 +9,30 @@ export interface ScheduleInstallmentRow {
   ordinal: string; // e.g., '1st', '2nd', '3rd', '4th', '5th', '6th'
   dueDate: string;
   dueDateFormatted: string; // e.g., '31 Jul 2026'
-  installmentMinor: number; // Dynamically adjusted expected amount for this month
+  baseInstallmentMinor: number;
+  baseInstallmentGHS: number;
+  installmentMinor: number; // Adjusted expected amount for this month
   installmentGHS: number;
+  paidAmountMinor: number; // Actual cash credited to this installment
+  paidAmountGHS: number;
+  deficitMinor: number; // Deficit rolled over to future installments
+  deficitGHS: number;
+  surplusAppliedMinor: number; // Surplus credited from previous overpayments
+  surplusAppliedGHS: number;
   accumulatedMinor: number;
   accumulatedGHS: number;
   remainingBalanceMinor: number;
   remainingBalanceGHS: number;
   isPaid: boolean;
+  isPartiallyPaid: boolean;
   paidAt?: string;
   paymentMethod?: string;
   reference?: string;
-  status: 'overdue' | 'due_today' | 'pending' | 'completed' | 'partially_paid';
+  status: 'overdue' | 'due_today' | 'pending' | 'partially_paid' | 'completed';
+  statusLabel: 'Paid' | 'Partially Paid' | 'Overdue' | 'Due Today' | 'Upcoming';
   isOverdue: boolean;
   isDueToday: boolean;
   priorityScore: number; // 0 for overdue, 1 for due_today, 2 for partially_paid, 3 for pending, 4 for completed
-
-  // Dynamic amortization & ledger fields
-  originalExpectedMinor: number;
-  originalExpectedGHS: number;
-  paidMinor: number;
-  paidGHS: number;
-  deficitMinor: number; // Deficit in this installment rolling over to subsequent installments
-  deficitGHS: number;
-  surplusAppliedMinor: number; // Surplus credit applied from prior installment(s)
-  surplusAppliedGHS: number;
-  deficitCarriedMinor: number; // Deficit rolled in from prior installment(s)
-  deficitCarriedGHS: number;
-  isPartiallyPaid: boolean;
-  notes?: string;
 }
 
 export interface PaymentPlanScheduleInfo {
@@ -56,15 +52,42 @@ export interface PaymentPlanScheduleInfo {
   agreementRemainingGHS: number;
   agreementTotalGHS: number;
   rows: ScheduleInstallmentRow[];
+  nextDueRow?: ScheduleInstallmentRow;
   agreementLeadText: string;
   agreementDueText: string;
   planTitleText: string;
   hasOverdue: boolean;
   overdueCount: number;
   pendingCount: number;
-  paidCount: number;
   partiallyPaidCount: number;
-  nextActiveInstallment?: ScheduleInstallmentRow;
+  paidCount: number;
+}
+
+export interface PlanPaymentTransaction {
+  id: string;
+  sequence?: number;
+  amountMinor: number;
+  paidOn: string;
+  method: PaymentMethod | string;
+  reference?: string;
+  notes?: string;
+  recordedBy?: string;
+}
+
+export interface LocalPlanOverride {
+  paidInstallments: Record<
+    number,
+    {
+      paidAt: string;
+      amountMinor: number;
+      method?: PaymentMethod | string;
+      reference?: string;
+      notes?: string;
+    }
+  >;
+  transactions?: PlanPaymentTransaction[];
+  balanceMinor?: number;
+  updatedAt: string;
 }
 
 const OVERRIDES_STORAGE_KEY = 'omark_payment_plan_overrides';
@@ -90,28 +113,6 @@ export function numberToWord(n: number): string {
     'twenty-three', 'twenty-four'
   ];
   return words[n] || String(n);
-}
-
-export interface LocalPaymentRecord {
-  sequence: number;
-  paidAt: string;
-  amountMinor: number;
-  method?: PaymentMethod | string;
-  reference?: string;
-  notes?: string;
-}
-
-interface LocalPlanOverride {
-  paidInstallments: Record<number, {
-    paidAt: string;
-    amountMinor: number;
-    method?: PaymentMethod | string;
-    reference?: string;
-    notes?: string;
-    records?: LocalPaymentRecord[];
-  }>;
-  balanceMinor?: number;
-  updatedAt: string;
 }
 
 type OverridesMap = Record<string, LocalPlanOverride>;
@@ -142,7 +143,7 @@ export const getPlanPaymentOverrides = (planId: string): LocalPlanOverride | und
 };
 
 /**
- * Records an installment payment locally so UI updates reactively and persists
+ * Records an installment payment locally with dynamic ledger logging so UI updates reactively and persists
  */
 export const recordLocalInstallmentPayment = (
   planId: string,
@@ -154,41 +155,33 @@ export const recordLocalInstallmentPayment = (
   notes?: string
 ): void => {
   const map = loadOverrides();
-  const existing = map[planId] || { paidInstallments: {}, updatedAt: new Date().toISOString() };
-  if (!existing.paidInstallments) {
-    existing.paidInstallments = {};
+  const existing = map[planId] || { paidInstallments: {}, transactions: [], updatedAt: new Date().toISOString() };
+
+  if (!existing.transactions) {
+    existing.transactions = [];
   }
 
-  const newRecord: LocalPaymentRecord = {
-    sequence,
+  // Accumulate or record payment for this sequence
+  const currentSeqPayment = existing.paidInstallments[sequence];
+  const newAmount = (currentSeqPayment?.amountMinor || 0) + amountMinor;
+
+  existing.paidInstallments[sequence] = {
     paidAt: paidOn || new Date().toISOString(),
-    amountMinor,
+    amountMinor: newAmount,
     method: method || 'bank_transfer',
     reference: reference || `PAY-INST-${sequence}-${Date.now().toString().slice(-4)}`,
     notes,
   };
 
-  const prev = existing.paidInstallments[sequence];
-  if (prev) {
-    // Accumulate payment for this installment sequence
-    existing.paidInstallments[sequence] = {
-      paidAt: newRecord.paidAt,
-      amountMinor: prev.amountMinor + amountMinor,
-      method: newRecord.method,
-      reference: newRecord.reference,
-      notes: newRecord.notes || prev.notes,
-      records: [...(prev.records || []), newRecord],
-    };
-  } else {
-    existing.paidInstallments[sequence] = {
-      paidAt: newRecord.paidAt,
-      amountMinor,
-      method: newRecord.method,
-      reference: newRecord.reference,
-      notes: newRecord.notes,
-      records: [newRecord],
-    };
-  }
+  existing.transactions.push({
+    id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+    sequence,
+    amountMinor,
+    paidOn: paidOn || new Date().toISOString(),
+    method: method || 'bank_transfer',
+    reference: reference || `REC-${Date.now().toString().slice(-6)}`,
+    notes,
+  });
 
   existing.updatedAt = new Date().toISOString();
   map[planId] = existing;
@@ -202,7 +195,7 @@ export const usePaymentPlanScheduleListener = () => {
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    const handler = () => setTick(t => t + 1);
+    const handler = () => setTick((t) => t + 1);
     window.addEventListener(SCHEDULE_CHANGE_EVENT, handler);
     window.addEventListener('storage', handler);
     return () => {
@@ -213,13 +206,10 @@ export const usePaymentPlanScheduleListener = () => {
 };
 
 /**
- * Builds the official Payment Plan Schedule matching the contract document with
- * dynamic amortization:
- * - Underpayments credit exact cash received, flag status as 'partially_paid', and roll
- *   deficit forward into subsequent installments.
- * - Overpayments credit exact cash received, flag status as 'completed', and cascade surplus
- *   forward to reduce or eliminate subsequent installments.
- * - Total Outstanding Balance and customer statements are recalculated dynamically.
+ * Builds the official Payment Plan Schedule with dynamic amortization:
+ * - Dynamic balance adjustment for partial payments (deficit automatically rolls over into subsequent installments)
+ * - Dynamic amortization for overpayments (surplus automatically credits and reduces future scheduled installments)
+ * - Accurate real-time total outstanding balance calculation
  */
 export function buildPaymentPlanSchedule(
   plan: Partial<PaymentPlan> & { id: string },
@@ -227,15 +217,16 @@ export function buildPaymentPlanSchedule(
 ): PaymentPlanScheduleInfo {
   const overrides = getPlanPaymentOverrides(plan.id);
   const numMonths = Math.max(plan.numMonths || 6, 1);
-  
+
   // Total contract liability to be settled in installments:
   // In real estate agreements, this is totalAmount minus downPayment, or the initial balance
   const downPaymentMinor = plan.downPaymentMinor || 0;
   const totalAmountMinor = plan.totalAmountMinor || 0;
-  
-  let totalScheduledMinor = totalAmountMinor > downPaymentMinor 
-    ? totalAmountMinor - downPaymentMinor 
-    : (plan.balanceMinor || totalAmountMinor || 35000000);
+
+  let totalScheduledMinor =
+    totalAmountMinor > downPaymentMinor
+      ? totalAmountMinor - downPaymentMinor
+      : (plan.balanceMinor || totalAmountMinor || 35000000);
 
   if (totalScheduledMinor <= 0) {
     totalScheduledMinor = plan.balanceMinor || 35000000;
@@ -250,67 +241,61 @@ export function buildPaymentPlanSchedule(
 
   // Base monthly amount rounded to pesewas/cents
   const baseMonthlyMinor = Math.floor(totalScheduledMinor / numMonths);
+  let runningRemainderMinor = totalScheduledMinor;
+
   const today = dayjs().startOf('day');
 
-  // Compute total cash received across all records
-  let totalPaidMinor = 0;
-  for (let i = 1; i <= numMonths; i++) {
-    const existing = sortedApi.find(item => item.sequence === i);
-    const localPayment = overrides?.paidInstallments?.[i];
-    if (localPayment?.amountMinor !== undefined) {
-      totalPaidMinor += localPayment.amountMinor;
-    } else if (existing?.paidAmountMinor !== undefined && existing.paidAmountMinor > 0) {
-      totalPaidMinor += existing.paidAmountMinor;
-    } else if (existing?.isPaid) {
-      totalPaidMinor += (existing.expectedAmountMinor || baseMonthlyMinor);
-    }
-  }
+  // Total payments tracked across plan
+  const planIsFullyCompleted = plan.status === 'completed' || (plan.balanceMinor !== undefined && plan.balanceMinor <= 0);
 
-  if (plan.status === 'completed') {
-    totalPaidMinor = Math.max(totalPaidMinor, totalScheduledMinor);
-  } else if (plan.balanceMinor !== undefined && totalPaidMinor === 0) {
-    totalPaidMinor = Math.max(0, totalScheduledMinor - plan.balanceMinor);
-  }
-
-  const currentBalanceMinor = Math.max(0, totalScheduledMinor - totalPaidMinor);
-
-  // Dynamic amortization simulation
-  const rows: ScheduleInstallmentRow[] = [];
-  let runningRemainderMinor = totalScheduledMinor;
-  let carriedDeficitMinor = 0;
+  // Rolling amortization trackers:
   let carriedSurplusMinor = 0;
-  let accumulatedCreditedMinor = 0;
+  let carriedDeficitMinor = 0;
+  let totalCashPaidMinor = 0;
+  const rows: ScheduleInstallmentRow[] = [];
 
   for (let i = 1; i <= numMonths; i++) {
-    const existing = sortedApi.find(item => item.sequence === i);
+    const existing = sortedApi.find((item) => item.sequence === i);
     const localPayment = overrides?.paidInstallments?.[i];
 
-    // Determine baseline original expected amount
-    let baseOriginalExpectedMinor = existing?.expectedAmountMinor ?? 0;
-    if (!baseOriginalExpectedMinor || baseOriginalExpectedMinor <= 0) {
+    // Determine baseline expected amount for this month
+    let baseInstallmentMinor = existing?.expectedAmountMinor ?? 0;
+    if (!baseInstallmentMinor || baseInstallmentMinor <= 0) {
       if (i === numMonths) {
-        baseOriginalExpectedMinor = runningRemainderMinor;
+        baseInstallmentMinor = runningRemainderMinor;
       } else {
-        baseOriginalExpectedMinor = baseMonthlyMinor;
+        baseInstallmentMinor = baseMonthlyMinor;
       }
     }
-    runningRemainderMinor -= baseOriginalExpectedMinor;
+    runningRemainderMinor -= baseInstallmentMinor;
 
-    const originalExpectedMinor = baseOriginalExpectedMinor;
-    const deficitCarriedMinor = carriedDeficitMinor;
-
-    // Apply carried surplus from prior installments if any
+    // Apply rolling surplus or deficit from prior months:
     let surplusAppliedMinor = 0;
-    const nominalWithDeficit = originalExpectedMinor + deficitCarriedMinor;
+    let adjustedExpectedMinor = baseInstallmentMinor + carriedDeficitMinor;
+
     if (carriedSurplusMinor > 0) {
-      surplusAppliedMinor = Math.min(carriedSurplusMinor, nominalWithDeficit);
-      carriedSurplusMinor -= surplusAppliedMinor;
+      if (carriedSurplusMinor >= adjustedExpectedMinor) {
+        surplusAppliedMinor = adjustedExpectedMinor;
+        carriedSurplusMinor -= adjustedExpectedMinor;
+        adjustedExpectedMinor = 0;
+      } else {
+        surplusAppliedMinor = carriedSurplusMinor;
+        adjustedExpectedMinor -= carriedSurplusMinor;
+        carriedSurplusMinor = 0;
+      }
+    }
+    // Deficit was absorbed into adjustedExpectedMinor, so reset carried deficit
+    carriedDeficitMinor = 0;
+
+    // Determine actual cash paid for this installment:
+    let paidAmountMinor = localPayment?.amountMinor ?? ((existing as any)?.actualAmountMinor || 0);
+
+    // If marked paid on the verified backend record without exact amount
+    if (paidAmountMinor === 0 && (planIsFullyCompleted || existing?.isPaid)) {
+      paidAmountMinor = baseInstallmentMinor;
     }
 
-    // Dynamic adjusted expected amount for this month
-    const adjustedExpectedMinor = Math.max(0, nominalWithDeficit - surplusAppliedMinor);
-    // Absorbed into adjustedExpectedMinor, so reset carriedDeficit
-    carriedDeficitMinor = 0;
+    totalCashPaidMinor += paidAmountMinor;
 
     // Compute due date
     let dueDateObj = existing?.dueDate ? dayjs(existing.dueDate) : startDate.add(i - 1, 'month');
@@ -320,87 +305,74 @@ export function buildPaymentPlanSchedule(
     const dueDateStr = dueDateObj.format('YYYY-MM-DD');
     const dueDateFormatted = dueDateObj.format('D MMM YYYY');
 
-    // How much direct cash was credited to this installment
-    let paidAmountMinor = 0;
-    let paidAt = localPayment?.paidAt || existing?.paidAt;
-    let paymentMethod = localPayment?.method || (existing?.isPaid ? 'bank_transfer' : undefined);
-    let reference = localPayment?.reference || (existing?.isPaid ? `VERIFIED-${i}` : undefined);
-    let notes = localPayment?.notes;
-
-    if (localPayment?.amountMinor !== undefined) {
-      paidAmountMinor = localPayment.amountMinor;
-    } else if (existing?.paidAmountMinor !== undefined && existing.paidAmountMinor > 0) {
-      paidAmountMinor = existing.paidAmountMinor;
-    } else if (existing?.isPaid) {
-      paidAmountMinor = adjustedExpectedMinor;
-    }
-
-    const isDueToday = dueDateObj.isSame(today, 'day');
-    const isOverdue = dueDateObj.isBefore(today, 'day');
-
-    let status: 'overdue' | 'due_today' | 'pending' | 'completed' | 'partially_paid' = 'pending';
+    // Dynamic Amortization Evaluation:
     let isPaid = false;
     let isPartiallyPaid = false;
     let deficitMinor = 0;
-    let priorityScore = 3; // default pending
+    let status: 'overdue' | 'due_today' | 'pending' | 'partially_paid' | 'completed' = 'pending';
+    let statusLabel: 'Paid' | 'Partially Paid' | 'Overdue' | 'Due Today' | 'Upcoming' = 'Upcoming';
+    let priorityScore = 3;
 
     if (paidAmountMinor > 0) {
-      if (paidAmountMinor < adjustedExpectedMinor) {
-        // UNDERPAYMENT (Partial Payment):
-        // Credit exact cash received. Flag as Partially Paid.
-        // Roll deficit over to subsequent monthly installments!
-        isPartiallyPaid = true;
-        isPaid = false;
-        status = 'partially_paid';
-        priorityScore = 1;
-        deficitMinor = adjustedExpectedMinor - paidAmountMinor;
-        carriedDeficitMinor += deficitMinor;
-      } else if (paidAmountMinor === adjustedExpectedMinor) {
-        // EXACT PAYMENT
+      if (paidAmountMinor >= adjustedExpectedMinor) {
+        // Full payment or Overpayment
         isPaid = true;
-        isPartiallyPaid = false;
+        const surplus = paidAmountMinor - adjustedExpectedMinor;
+        if (surplus > 0) {
+          // Carry surplus over to reduce upcoming future installments!
+          carriedSurplusMinor += surplus;
+        }
         status = 'completed';
+        statusLabel = 'Paid';
         priorityScore = 4;
-        deficitMinor = 0;
       } else {
-        // OVERPAYMENT (Surplus / Pre-payment):
-        // Credit exact cash received. Flag as Paid.
-        // Apply surplus directly against future scheduled installments!
-        isPaid = true;
-        isPartiallyPaid = false;
-        status = 'completed';
-        priorityScore = 4;
-        deficitMinor = 0;
-        const surplusMinor = paidAmountMinor - adjustedExpectedMinor;
-        carriedSurplusMinor += surplusMinor;
+        // Underpayment (Partial Payment)
+        isPartiallyPaid = true;
+        deficitMinor = adjustedExpectedMinor - paidAmountMinor;
+        // Automatically roll unpaid deficit into subsequent monthly installments!
+        carriedDeficitMinor += deficitMinor;
+        status = 'partially_paid';
+        statusLabel = 'Partially Paid';
+        priorityScore = 2;
       }
     } else {
-      // No direct payment on this installment sequence
-      if (adjustedExpectedMinor === 0 && (surplusAppliedMinor > 0 || currentBalanceMinor <= 0)) {
-        // Wiped out / paid in full via prior surplus credit or full payoff!
+      // 0 cash paid directly this month
+      if (adjustedExpectedMinor === 0 && surplusAppliedMinor > 0) {
+        // Fully covered by prior overpayment / surplus!
         isPaid = true;
         status = 'completed';
+        statusLabel = 'Paid';
         priorityScore = 4;
-        paidAt = paidAt || dayjs().toISOString();
-        notes = notes || 'Paid in full via pre-payment surplus credit';
-      } else if (plan.status === 'completed' || currentBalanceMinor <= 0) {
-        isPaid = true;
-        status = 'completed';
-        priorityScore = 4;
-      } else if (isOverdue) {
-        status = 'overdue';
-        priorityScore = 0;
-      } else if (isDueToday) {
-        status = 'due_today';
-        priorityScore = 2;
       } else {
-        status = 'pending';
-        priorityScore = 3;
+        // Unpaid
+        const isDueToday = dueDateObj.isSame(today, 'day');
+        const isOverdue = dueDateObj.isBefore(today, 'day');
+
+        if (isOverdue) {
+          status = 'overdue';
+          statusLabel = 'Overdue';
+          priorityScore = 0; // Highest collection priority
+        } else if (isDueToday) {
+          status = 'due_today';
+          statusLabel = 'Due Today';
+          priorityScore = 1;
+        } else {
+          status = 'pending';
+          statusLabel = 'Upcoming';
+          priorityScore = 3;
+        }
       }
     }
 
-    accumulatedCreditedMinor += (isPaid ? Math.max(paidAmountMinor, adjustedExpectedMinor) : paidAmountMinor);
-    const rowRemainingBalanceMinor = Math.max(0, totalScheduledMinor - accumulatedCreditedMinor);
+    // Remaining total plan balance after this month's payments
+    const remainingBalanceMinor = Math.max(0, totalScheduledMinor - totalCashPaidMinor);
+
+    const paidAt =
+      localPayment?.paidAt ||
+      existing?.paidAt ||
+      (isPaid ? plan.updatedAt || plan.startDate || dueDateStr : undefined);
+    const paymentMethod = localPayment?.method || (isPaid ? 'bank_transfer' : undefined);
+    const reference = localPayment?.reference || (isPaid ? `REC-${i}` : undefined);
 
     rows.push({
       id: existing?.id || `${plan.id}-inst-${i}`,
@@ -408,52 +380,56 @@ export function buildPaymentPlanSchedule(
       ordinal: getOrdinal(i),
       dueDate: dueDateStr,
       dueDateFormatted,
+      baseInstallmentMinor,
+      baseInstallmentGHS: baseInstallmentMinor / 100,
       installmentMinor: adjustedExpectedMinor,
       installmentGHS: adjustedExpectedMinor / 100,
-      accumulatedMinor: accumulatedCreditedMinor,
-      accumulatedGHS: accumulatedCreditedMinor / 100,
-      remainingBalanceMinor: i === numMonths ? 0 : rowRemainingBalanceMinor,
-      remainingBalanceGHS: i === numMonths ? 0 : rowRemainingBalanceMinor / 100,
-      isPaid,
-      paidAt,
-      paymentMethod,
-      reference,
-      notes,
-      status,
-      isOverdue: !isPaid && !isPartiallyPaid && isOverdue,
-      isDueToday: !isPaid && !isPartiallyPaid && isDueToday,
-      priorityScore,
-      originalExpectedMinor,
-      originalExpectedGHS: originalExpectedMinor / 100,
-      paidMinor: paidAmountMinor,
-      paidGHS: paidAmountMinor / 100,
+      paidAmountMinor,
+      paidAmountGHS: paidAmountMinor / 100,
       deficitMinor,
       deficitGHS: deficitMinor / 100,
       surplusAppliedMinor,
       surplusAppliedGHS: surplusAppliedMinor / 100,
-      deficitCarriedMinor,
-      deficitCarriedGHS: deficitCarriedMinor / 100,
+      accumulatedMinor: totalCashPaidMinor,
+      accumulatedGHS: totalCashPaidMinor / 100,
+      remainingBalanceMinor,
+      remainingBalanceGHS: remainingBalanceMinor / 100,
+      isPaid,
       isPartiallyPaid,
+      paidAt,
+      paymentMethod,
+      reference,
+      status,
+      statusLabel,
+      isOverdue: status === 'overdue',
+      isDueToday: status === 'due_today',
+      priorityScore,
     });
   }
 
+  // If there is any leftover carried deficit on the last month, it remains part of currentBalanceMinor
+  const currentBalanceMinor = Math.max(0, totalScheduledMinor - totalCashPaidMinor);
+
   const firstDueDate = rows[0]?.dueDateFormatted || startDate.format('D MMM YYYY');
-  const lastDueDate = rows[rows.length - 1]?.dueDateFormatted || startDate.add(numMonths - 1, 'month').format('D MMM YYYY');
+  const lastDueDate =
+    rows[rows.length - 1]?.dueDateFormatted ||
+    startDate.add(numMonths - 1, 'month').format('D MMM YYYY');
 
   const agreementRemainingGHS = totalScheduledMinor / 100;
   const agreementTotalGHS = (totalAmountMinor || totalScheduledMinor) / 100;
   const numMonthsWord = numberToWord(numMonths);
 
   const agreementLeadText = `Both parties have agreed that the remaining amount of ₵${agreementRemainingGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} shall be paid in ${numMonthsWord} (${numMonths}) monthly installments starting from ${firstDueDate} and ending in ${lastDueDate}`;
-  const agreementDueText = `Each monthly payment shall be due on or before the 1st day of every month, as detailed below:`;
+  const agreementDueText = `Each monthly payment shall be due on or before the specified due date, with dynamic balance adjustments applied for partial payments or surplus pre-payments:`;
   const planTitleText = `${numMonths}-MONTH PAYMENT PLAN (₵${agreementRemainingGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Total)`;
 
-  const overdueCount = rows.filter(r => r.isOverdue).length;
-  const pendingCount = rows.filter(r => !r.isPaid && !r.isPartiallyPaid).length;
-  const paidCount = rows.filter(r => r.isPaid).length;
-  const partiallyPaidCount = rows.filter(r => r.isPartiallyPaid).length;
+  const overdueCount = rows.filter((r) => r.status === 'overdue').length;
+  const partiallyPaidCount = rows.filter((r) => r.status === 'partially_paid').length;
+  const pendingCount = rows.filter((r) => r.status === 'pending' || r.status === 'due_today' || r.status === 'overdue').length;
+  const paidCount = rows.filter((r) => r.isPaid).length;
 
-  const nextActiveInstallment = rows.find(r => !r.isPaid) || rows[rows.length - 1];
+  // Find next upcoming / unpaid / partially paid installment
+  const nextDueRow = rows.find((r) => !r.isPaid);
 
   return {
     planId: plan.id,
@@ -463,8 +439,8 @@ export function buildPaymentPlanSchedule(
     downPaymentMinor,
     currentBalanceMinor,
     currentBalanceGHS: currentBalanceMinor / 100,
-    totalPaidMinor,
-    totalPaidGHS: totalPaidMinor / 100,
+    totalPaidMinor: totalCashPaidMinor,
+    totalPaidGHS: totalCashPaidMinor / 100,
     startDate: startDate.format('YYYY-MM-DD'),
     startDateFormatted: firstDueDate,
     endDate: rows[rows.length - 1]?.dueDate || startDate.add(numMonths - 1, 'month').format('YYYY-MM-DD'),
@@ -472,14 +448,14 @@ export function buildPaymentPlanSchedule(
     agreementRemainingGHS,
     agreementTotalGHS,
     rows,
+    nextDueRow,
     agreementLeadText,
     agreementDueText,
     planTitleText,
     hasOverdue: overdueCount > 0,
     overdueCount,
     pendingCount,
-    paidCount,
     partiallyPaidCount,
-    nextActiveInstallment,
+    paidCount,
   };
 }

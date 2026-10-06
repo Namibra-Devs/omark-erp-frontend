@@ -33,6 +33,9 @@ import {
   PlusOutlined,
   UserAddOutlined,
   HistoryOutlined,
+  RocketOutlined,
+  CheckSquareOutlined,
+  RiseOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -73,6 +76,16 @@ import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
+import {
+  type MarketingCampaign,
+  type MarketingTask,
+  getStoredCampaigns,
+  getStoredTasks,
+  calculateMarketingMetrics,
+} from '@/utils/marketingCampaignsStorage';
+import { MarketingCampaignsSection } from '@/components/marketing/MarketingCampaignsSection';
+import { MarketingTasksSection } from '@/components/marketing/MarketingTasksSection';
+import { MarketingConversionFunnel } from '@/components/marketing/MarketingConversionFunnel';
 
 const { Title, Text } = Typography;
 
@@ -90,6 +103,15 @@ export const DirectorOverviewPage: React.FC = () => {
   const [expenseLoading, setExpenseLoading] = useState(false);
   const [expenseForm] = Form.useForm();
   const createExpenseMutation = useCreateExpenseMutation();
+
+  // Marketing Campaigns & Tasks Local State
+  const [campaigns, setCampaigns] = useState<MarketingCampaign[]>(getStoredCampaigns());
+  const [tasks, setTasks] = useState<MarketingTask[]>(getStoredTasks());
+
+  const handleRefreshMarketing = () => {
+    setCampaigns(getStoredCampaigns());
+    setTasks(getStoredTasks());
+  };
 
   // Queries
   const { data, isLoading, isFetching, isError, error, refetch } = useMarketingDashboardQuery();
@@ -199,6 +221,7 @@ export const DirectorOverviewPage: React.FC = () => {
         u.role === 'marketing_director' ||
         allProspects.some(
           (p) =>
+            (p.source === 'marketing' || !p.source) &&
             (p.assignedUserId === u.id || (p as any).createdByUserId === u.id || (p as any).assignedStaffId === u.id)
         )
     );
@@ -215,7 +238,8 @@ export const DirectorOverviewPage: React.FC = () => {
 
       const staffProspects = allProspects.filter(
         (p) =>
-          p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id
+          (p.source === 'marketing' || !p.source) &&
+          (p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id)
       );
 
       const staffCustomers = allCustomers.filter(
@@ -340,7 +364,7 @@ export const DirectorOverviewPage: React.FC = () => {
   const marketerCountForAvg = Math.max(marketers.length, 1);
 
   const allMarketingProspects = useMemo(() => {
-    return allProspects.filter((p) => p.source === 'marketing' || p.source === 'customer_service' || !p.source);
+    return allProspects.filter((p) => p.source === 'marketing' || !p.source);
   }, [allProspects]);
 
   const summary = {
@@ -478,7 +502,12 @@ export const DirectorOverviewPage: React.FC = () => {
     }
   };
 
+  const marketingMetrics = useMemo(() => {
+    return calculateMarketingMetrics(campaigns, tasks, allProspects, user?.id, user?.firstName);
+  }, [campaigns, tasks, allProspects, user]);
+
   const handleRefresh = () => {
+    handleRefreshMarketing();
     Promise.all([
       refetch(),
       refetchAnalytics(),
@@ -1159,45 +1188,70 @@ export const DirectorOverviewPage: React.FC = () => {
         style={{ marginBottom: 24 }}
       />
 
-      {/* Summary Cards — every value below is derived directly from live
-          API data (marketing dashboard counts + 12-month analytics) */}
+      {/* Summary Cards — 5 Key Marketing Director Metrics + Director Individual Portfolio */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
         <Col xs={24} sm={12} lg={4}>
           <Card>
             <Statistic
-              title="Total Marketing Prospects"
-              value={summary.totalActive}
-              prefix={<TeamOutlined />}
+              title="Active Campaigns"
+              value={marketingMetrics.activeCampaignsCount}
+              prefix={<RocketOutlined />}
               valueStyle={{ color: tokens.primary, fontSize: 24 }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Added by all staff ({marketers.length} contributors)
+              of {marketingMetrics.totalCampaignsCount} campaigns (₵{(marketingMetrics.totalCampaignSpendGHS / 1000).toFixed(1)}k spent)
             </Text>
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={4}>
           <Card>
             <Statistic
-              title="Meetings Completed"
-              value={summary.totalMeetingsCompleted}
-              prefix={<CheckCircleOutlined />}
+              title="Total Prospects Acquired"
+              value={marketingMetrics.totalProspectsAcquired}
+              prefix={<TeamOutlined />}
+              valueStyle={{ color: '#1890ff', fontSize: 24 }}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {summary.totalActive} active in pipeline
+            </Text>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={4}>
+          <Card>
+            <Statistic
+              title="Lead Conversion Rate"
+              value={`${marketingMetrics.overallLeadConversionRate}%`}
+              prefix={<RiseOutlined />}
               valueStyle={{ color: '#52c41a', fontSize: 24 }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              +{summary.totalMeetingsScheduled} scheduled
+              {summary.totalConverted} converted buyers
             </Text>
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={4}>
           <Card>
             <Statistic
-              title="Converted"
-              value={summary.totalConverted}
-              prefix={<UserSwitchOutlined />}
+              title="Assigned Tasks"
+              value={marketingMetrics.tasksTotal}
+              prefix={<CheckSquareOutlined />}
+              valueStyle={{ color: '#fa8c16', fontSize: 24 }}
+            />
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              {marketingMetrics.tasksPending} pending, {marketingMetrics.tasksInProgress} in progress
+            </Text>
+          </Card>
+        </Col>
+        <Col xs={24} sm={12} lg={4}>
+          <Card>
+            <Statistic
+              title="Director Portfolio"
+              value={marketingMetrics.directorProspectsCount}
+              prefix={<CrownOutlined />}
               valueStyle={{ color: '#722ed1', fontSize: 24 }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              {summary.avgConversionRate.toFixed(1)}% avg. conversion rate
+              {marketingMetrics.directorConvertedCount} converted ({marketingMetrics.directorConversionRate}% rate)
             </Text>
           </Card>
         </Col>
@@ -1210,20 +1264,7 @@ export const DirectorOverviewPage: React.FC = () => {
               valueStyle={{ color: '#faad14', fontSize: 24 }}
             />
             <Text type="secondary" style={{ fontSize: 12 }}>
-              Company-wide, from Analytics
-            </Text>
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={4}>
-          <Card>
-            <Statistic
-              title="Team Size"
-              value={marketers.length}
-              prefix={<TeamOutlined />}
-              valueStyle={{ color: '#1890ff', fontSize: 24 }}
-            />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              Active marketers
+              Avg CPL: ₵{marketingMetrics.avgCostPerLeadGHS.toFixed(2)}
             </Text>
           </Card>
         </Col>
@@ -1239,6 +1280,20 @@ export const DirectorOverviewPage: React.FC = () => {
             label: <span><DashboardOutlined /> Overview</span>,
             children: (
               <>
+                {/* Marketing Conversion Funnel Section */}
+                <MarketingConversionFunnel
+                  funnelData={marketingMetrics.conversionFunnel}
+                  overallConversionRate={marketingMetrics.overallLeadConversionRate}
+                  totalAcquired={marketingMetrics.totalProspectsAcquired}
+                  totalConverted={summary.totalConverted}
+                />
+
+                {/* Active Campaigns Command Section */}
+                <MarketingCampaignsSection
+                  campaigns={campaigns}
+                  onRefresh={handleRefreshMarketing}
+                />
+
                 <Row gutter={16} style={{ marginBottom: 24 }}>
                   <Col span={24}>
                     <Card title="Revenue & Pipeline Trends (12 Months)" extra={<Text type="secondary" style={{ fontSize: 12 }}>Company-wide, from Analytics</Text>}>
@@ -1597,6 +1652,31 @@ export const DirectorOverviewPage: React.FC = () => {
                   </Card>
                 </Col>
               </Row>
+            ),
+          },
+          {
+            key: 'campaigns',
+            label: <span><RocketOutlined /> Campaigns Command ({campaigns.length})</span>,
+            children: (
+              <MarketingCampaignsSection
+                campaigns={campaigns}
+                onRefresh={handleRefreshMarketing}
+              />
+            ),
+          },
+          {
+            key: 'tasks',
+            label: <span><CheckSquareOutlined /> Marketing Tasks ({tasks.length})</span>,
+            children: (
+              <MarketingTasksSection
+                tasks={tasks}
+                teamMembers={allMarketingStaffUsers.map((u) => ({
+                  id: u.id,
+                  name: getUserFullName(u),
+                  role: u.role,
+                }))}
+                onRefresh={handleRefreshMarketing}
+              />
             ),
           },
           {
