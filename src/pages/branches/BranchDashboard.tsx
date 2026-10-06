@@ -46,6 +46,7 @@ import { tokens } from '@/constants/tokens';
 import { roleLabels } from '@/constants/enums';
 import { useBranchQuery } from '@/api/branches';
 import { useExpensesQuery, useCreateExpenseMutation } from '@/api/expenses';
+import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
 import { useComplaintsQuery } from '@/api/complaints';
 import { useUsersQuery, getUserPhone } from '@/api/users';
 import { useAuth } from '@/contexts/AuthContext';
@@ -364,45 +365,17 @@ export const BranchDashboard: React.FC = () => {
         )}
       </Card>
 
-      <Row gutter={16}>
-        <Col xs={24} lg={12}>
-          <Card
-            title={
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span><DollarOutlined style={{ marginRight: 8 }} />Branch Expenses</span>
-                <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => setAddExpenseModal(true)}>
-                  Record Expense
-                </Button>
-              </div>
-            }
-            style={{ marginBottom: 24 }}
-          >
-            {expenses.length > 0 ? (
-              <List
-                dataSource={expenses}
-                renderItem={(e) => (
-                  <List.Item
-                    extra={
-                      <div style={{ textAlign: 'right' }}>
-                        <Text strong style={{ display: 'block' }}>GHS {(e.amountMinor / 100).toLocaleString()}</Text>
-                        <Tag color={e.status === 'approved' ? 'green' : e.status === 'pending' ? 'gold' : 'red'} style={{ marginTop: 4 }}>
-                          {e.status === 'approved' ? 'Approved' : e.status === 'pending' ? 'Pending Approval' : 'Rejected'}
-                        </Tag>
-                      </div>
-                    }
-                  >
-                    <List.Item.Meta
-                      title={e.category}
-                      description={`${e.code || 'EXP'} · Incurred ${e.incurredOn}${e.description ? ` · ${e.description}` : ''}`}
-                    />
-                  </List.Item>
-                )}
-              />
-            ) : <Text type="secondary">No expenses recorded for this branch.</Text>}
-          </Card>
-        </Col>
+      {/* ── Branch Operations Expense Dashboard ── */}
+      <div style={{ marginBottom: 24 }}>
+        <RoleExpenseDashboard
+          fixedRole="branch_manager"
+          compact
+          customTitle={`${branch.name} Operations Expense Dashboard`}
+        />
+      </div>
 
-        <Col xs={24} lg={12}>
+      <Row gutter={16}>
+        <Col xs={24}>
           <Card title={<span><FileTextOutlined style={{ marginRight: 8 }} />Customer Support Feed</span>}>
             {complaints.length > 0 ? (
               <List

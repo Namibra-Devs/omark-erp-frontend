@@ -46,6 +46,7 @@ import { useProspectsQuery, useUpdateProspectMutation } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
 import { useAppointmentsQuery, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
 import { useCreateExpenseMutation } from '@/api/expenses';
+import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
 import { saveStoredInteraction } from '@/utils/interactionStorage';
 import { usePropertiesQuery } from '@/api/properties';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -1598,6 +1599,13 @@ export const DirectorOverviewPage: React.FC = () => {
                   </Card>
                 </Col>
               </Row>
+            ),
+          },
+          {
+            key: 'expenses',
+            label: <span><DollarOutlined /> Marketing Expenses & Budgets</span>,
+            children: (
+              <RoleExpenseDashboard fixedRole="marketing_director" compact />
             ),
           },
         ]}

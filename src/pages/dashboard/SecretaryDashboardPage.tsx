@@ -69,6 +69,7 @@ import { useProspectsQuery } from '@/api/prospects';
 import { usePaymentPlansQuery, getProgressBand } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
 import { useCreateExpenseMutation } from '@/api/expenses';
+import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
 import { usePropertiesQuery } from '@/api/properties';
 import { useBranchesQuery } from '@/api/branches';
 import {
@@ -1612,6 +1613,11 @@ export const SecretaryDashboardPage: React.FC = () => {
             <Empty description="No payments due soon" />
           )}
         </Card>
+      </div>
+
+      {/* ── Secretary Operational & Petty Cash Expense Dashboard ── */}
+      <div style={{ marginTop: 24 }}>
+        <RoleExpenseDashboard fixedRole="secretary" compact />
       </div>
 
       {/* ── Add Customer Modal ────────────────────────────────────────────── */}
