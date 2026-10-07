@@ -164,7 +164,7 @@ export const UsersPage: React.FC = () => {
     const allList = allProspectsData?.items ?? [];
     const mktList = mktProspectsData?.items ?? [];
     if (userItem.role === 'marketing_director') {
-      return mktList.length > 0 ? mktList.length : allList.filter((p) => p.source === 'marketing' || !p.source).length;
+      return mktProspectsData?.total ?? (mktList.length > 0 ? mktList.length : allList.filter((p) => p.source === 'marketing' || !p.source).length);
     }
     return allList.filter(
       (p) =>
@@ -656,7 +656,7 @@ export const UsersPage: React.FC = () => {
         const count = getStaffProspectCount(record);
         if (record.role === 'marketing_director') {
           return (
-            <Tooltip title="Manages departmental marketing prospects pipeline (362 prospects)">
+            <Tooltip title={`Manages departmental marketing prospects pipeline (${count} prospects)`}>
               <Tag
                 color="purple"
                 style={{ borderRadius: 12, padding: '2px 10px', fontWeight: 600, cursor: 'pointer' }}

@@ -129,8 +129,8 @@ export const ProspectsPage: React.FC = () => {
   }, [allExistingProspects, csProspectsData?.total]);
 
   const totalProspectCount = useMemo(() => {
-    return Math.max(allExistingProspects.length, marketingProspectCount + csProspectCount, allProspectsData?.total ?? 0);
-  }, [allExistingProspects.length, marketingProspectCount, csProspectCount, allProspectsData?.total]);
+    return marketingProspectCount + csProspectCount;
+  }, [marketingProspectCount, csProspectCount]);
 
   // Reset to page 1 whenever a filter changes, so a new, smaller result set
   // doesn't strand the user on a page that no longer exists.
@@ -199,12 +199,14 @@ export const ProspectsPage: React.FC = () => {
   }, [appointments]);
 
   // Full marketing prospects list across all pages for status breakdown calculation
-  // Defaults to 'marketing' (yielding 362), tallying identically with the dashboard
+  const isMarketingRole = user?.role === 'marketing_director' || user?.role === 'marketing_staff';
+  const effectiveSource = isMarketingRole ? 'marketing' : sourceFilter;
+
   const allMarketingProspects = useMemo(() => {
     let list = allExistingProspects;
-    if (sourceFilter === 'marketing') {
+    if (effectiveSource === 'marketing') {
       list = list.filter((p) => p.source === 'marketing' || !p.source);
-    } else if (sourceFilter === 'customer_service') {
+    } else if (effectiveSource === 'customer_service') {
       list = list.filter((p) => p.source === 'customer_service');
     }
     // If 'all', keep full combined dataset
@@ -957,20 +959,22 @@ export const ProspectsPage: React.FC = () => {
               size="middle"
             />
           </Col>
-          <Col xs={24} sm={12} md={5}>
-            <Select
-              style={{ width: '100%' }}
-              placeholder="Source"
-              value={sourceFilter}
-              onChange={setSourceFilter}
-              size="middle"
-              options={[
-                { value: 'marketing', label: `🎯 Marketing (${marketingProspectCount})` },
-                { value: 'all', label: `🌐 All Prospects (${totalProspectCount})` },
-                { value: 'customer_service', label: `🎧 Customer Service (${csProspectCount})` },
-              ]}
-            />
-          </Col>
+          {!isMarketingRole && (
+            <Col xs={24} sm={12} md={5}>
+              <Select
+                style={{ width: '100%' }}
+                placeholder="Source"
+                value={sourceFilter}
+                onChange={setSourceFilter}
+                size="middle"
+                options={[
+                  { value: 'marketing', label: `🎯 Marketing (${marketingProspectCount})` },
+                  { value: 'all', label: `🌐 All Prospects (${totalProspectCount})` },
+                  { value: 'customer_service', label: `🎧 Customer Service (${csProspectCount})` },
+                ]}
+              />
+            </Col>
+          )}
           <Col xs={24} sm={12} md={4}>
             <Select
               style={{ width: '100%' }}

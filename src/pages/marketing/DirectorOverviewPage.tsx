@@ -4,7 +4,7 @@ import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Space, Button,
   Progress, Tabs, Tooltip,
   Empty, Alert, List, Descriptions, Drawer, Spin,
-  message, Modal, Form, Input, Select, DatePicker, Avatar, Badge, Divider, InputNumber, Segmented,
+  message, Modal, Form, Input, Select, DatePicker, Avatar, Badge, Divider, InputNumber,
 } from 'antd';
 import {
   TeamOutlined,
@@ -14,7 +14,6 @@ import {
   ReloadOutlined,
   TrophyOutlined,
   CrownOutlined,
-  CustomerServiceOutlined,
   FireOutlined,
   InfoCircleOutlined,
   MailOutlined,
@@ -77,7 +76,6 @@ import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
-import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import {
   type MarketingCampaign,
   type MarketingTask,
@@ -121,51 +119,37 @@ export const DirectorOverviewPage: React.FC = () => {
   const { data: usersData, refetch: refetchUsers } = useUsersQuery({ pageSize: 500 });
   const allUsers = usersData?.items ?? [];
 
-  // Multi-source live queries: All prospects, Marketing-specific, and Customer Service (CS) prospects
+  // Marketing Director is strictly entitled to Marketing prospects only
   const { data: allProspectsData, refetch: refetchAllProspects } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData, refetch: refetchMktProspects } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
-  const { data: csProspectsData, refetch: refetchCsProspects } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
 
-  // Consolidate full live prospects pool from all endpoints & storage without omitting records
+  // Consolidate live marketing prospects pool without omitting records
   const allProspects = useMemo(() => {
     const prospectMap = new Map<string, any>();
-    (allProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
     (mktProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    (csProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    (allProspectsData?.items || []).forEach((p) => {
+      if (p.source === 'marketing' || !p.source) {
+        prospectMap.set(p.id, p);
+      }
+    });
     getStoredProspects().forEach((p) => {
-      if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
+      if (p.source === 'marketing' || !p.source) {
+        if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
+      }
     });
     return Array.from(prospectMap.values());
-  }, [allProspectsData, mktProspectsData, csProspectsData]);
+  }, [allProspectsData, mktProspectsData]);
 
-  const allMarketingProspects = useMemo(() => {
-    return allProspects.filter((p) => p.source === 'marketing' || !p.source);
-  }, [allProspects]);
-
-  const allCSProspects = useMemo(() => {
-    return allProspects.filter((p) => p.source === 'customer_service');
-  }, [allProspects]);
+  const allMarketingProspects = allProspects;
 
   // Exact live figures comparing local dataset with server-side totals
   const liveMarketingProspectsCount = useMemo(() => {
     return Math.max(allMarketingProspects.length, mktProspectsData?.total ?? 0);
   }, [allMarketingProspects.length, mktProspectsData?.total]);
 
-  const liveCSProspectsCount = useMemo(() => {
-    return Math.max(allCSProspects.length, csProspectsData?.total ?? 0);
-  }, [allCSProspects.length, csProspectsData?.total]);
-
-  const liveTotalProspectsCount = useMemo(() => {
-    return Math.max(
-      allProspects.length,
-      liveMarketingProspectsCount + liveCSProspectsCount,
-      allProspectsData?.total ?? 0
-    );
-  }, [allProspects.length, liveMarketingProspectsCount, liveCSProspectsCount, allProspectsData?.total]);
-
   const refetchProspects = React.useCallback(() => {
-    return Promise.all([refetchAllProspects(), refetchMktProspects(), refetchCsProspects()]);
-  }, [refetchAllProspects, refetchMktProspects, refetchCsProspects]);
+    return Promise.all([refetchAllProspects(), refetchMktProspects()]);
+  }, [refetchAllProspects, refetchMktProspects]);
 
   const { data: allCustomersData, refetch: refetchCustomers } = useCustomersQuery({ pageSize: 10000 });
   const allCustomers = allCustomersData?.items ?? [];
@@ -240,9 +224,6 @@ export const DirectorOverviewPage: React.FC = () => {
   const [prospectsSearch, setProspectsSearch] = useState('');
   const [prospectsStatusFilter, setProspectsStatusFilter] = useState<string>('all');
   const [prospectsStaffFilter, setProspectsStaffFilter] = useState<string>('all');
-  const [prospectsSourceFilter, setProspectsSourceFilter] = useState<'all' | 'marketing' | 'customer_service'>('marketing');
-  const [csProspectsSearch, setCsProspectsSearch] = useState('');
-  const [csProspectsStatusFilter, setCsProspectsStatusFilter] = useState<string>('all');
   const [customersSearch, setCustomersSearch] = useState('');
 
   // Drill-down Modal State for Marketer's Added Records
@@ -574,12 +555,11 @@ export const DirectorOverviewPage: React.FC = () => {
 
   const marketingMetrics = useMemo(() => {
     return calculateMarketingMetrics(campaigns, tasks, allProspects, user?.id, user?.firstName, {
-      totalProspects: liveTotalProspectsCount,
+      totalProspects: liveMarketingProspectsCount,
       marketingProspects: liveMarketingProspectsCount,
-      csProspects: liveCSProspectsCount,
       totalConverted: summary.totalConverted,
     });
-  }, [campaigns, tasks, allProspects, user, liveTotalProspectsCount, liveMarketingProspectsCount, liveCSProspectsCount, summary.totalConverted]);
+  }, [campaigns, tasks, allProspects, user, liveMarketingProspectsCount, summary.totalConverted]);
 
   const handleRefresh = () => {
     handleRefreshMarketing();
@@ -644,11 +624,6 @@ export const DirectorOverviewPage: React.FC = () => {
   // Filtered datasets for dedicated dashboard tabs
   const filteredDashboardProspects = useMemo(() => {
     let list = allProspects;
-    if (prospectsSourceFilter === 'marketing') {
-      list = list.filter((p) => p.source === 'marketing' || !p.source);
-    } else if (prospectsSourceFilter === 'customer_service') {
-      list = list.filter((p) => p.source === 'customer_service');
-    }
     if (prospectsStatusFilter && prospectsStatusFilter !== 'all') {
       list = list.filter((p) => {
         const s = String(p.status || '').toLowerCase();
@@ -682,33 +657,7 @@ export const DirectorOverviewPage: React.FC = () => {
       );
     }
     return list;
-  }, [allProspects, prospectsSourceFilter, prospectsSearch, prospectsStatusFilter, prospectsStaffFilter]);
-
-  // Dedicated filtered dataset for Customer Service prospects
-  const filteredDashboardCSProspects = useMemo(() => {
-    let list = allCSProspects;
-    if (csProspectsStatusFilter && csProspectsStatusFilter !== 'all') {
-      list = list.filter((p) => {
-        const s = String(p.status || '').toLowerCase();
-        if (csProspectsStatusFilter === 'canceled') {
-          return s === 'canceled' || s === 'cancelled';
-        }
-        return s === csProspectsStatusFilter.toLowerCase();
-      });
-    }
-    if (csProspectsSearch.trim()) {
-      const q = csProspectsSearch.trim().toLowerCase();
-      list = list.filter(
-        (p) =>
-          `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
-          p.phoneNumber?.toLowerCase().includes(q) ||
-          p.address?.toLowerCase().includes(q) ||
-          p.status?.toLowerCase().includes(q) ||
-          p.reasonForContact?.toLowerCase().includes(q)
-      );
-    }
-    return list;
-  }, [allCSProspects, csProspectsSearch, csProspectsStatusFilter]);
+  }, [allProspects, prospectsSearch, prospectsStatusFilter, prospectsStaffFilter]);
 
   const filteredDashboardCustomers = useMemo(() => {
     let list = allCustomers;
@@ -1327,12 +1276,12 @@ export const DirectorOverviewPage: React.FC = () => {
           <Card>
             <Statistic
               title="Total Prospects Acquired"
-              value={liveTotalProspectsCount}
+              value={liveMarketingProspectsCount}
               prefix={<TeamOutlined />}
               valueStyle={{ color: '#1890ff', fontSize: 24 }}
             />
             <Text type="secondary" style={{ fontSize: 11, display: 'block', lineHeight: 1.3 }}>
-              📣 {liveMarketingProspectsCount} Mkt | 🎧 {liveCSProspectsCount} CS ({summary.totalActive} active)
+              🎯 {summary.totalActive} active in pipeline ({summary.totalConverted} converted)
             </Text>
           </Card>
         </Col>
@@ -1404,19 +1353,9 @@ export const DirectorOverviewPage: React.FC = () => {
                 <MarketingConversionFunnel
                   funnelData={marketingMetrics.conversionFunnel}
                   overallConversionRate={marketingMetrics.overallLeadConversionRate}
-                  totalAcquired={liveTotalProspectsCount}
+                  totalAcquired={liveMarketingProspectsCount}
                   totalConverted={summary.totalConverted}
                 />
-
-                {/* Real-time Marketing vs CS Prospects Distribution */}
-                <div style={{ marginBottom: 24 }}>
-                  <ProspectsSourcePieChart
-                    prospects={allProspects}
-                    marketingCount={liveMarketingProspectsCount}
-                    csCount={liveCSProspectsCount}
-                    totalCount={liveTotalProspectsCount}
-                  />
-                </div>
 
                 {/* Active Campaigns Command Section */}
                 <MarketingCampaignsSection
@@ -1534,75 +1473,8 @@ export const DirectorOverviewPage: React.FC = () => {
                   </Space>
                 }
               >
-                <div style={{ marginBottom: 16 }}>
-                  <Segmented
-                    value={prospectsSourceFilter}
-                    onChange={(val: any) => setProspectsSourceFilter(val)}
-                    options={[
-                      { label: `📣 Marketing Leads (${liveMarketingProspectsCount})`, value: 'marketing' },
-                      { label: `🎧 Customer Service (${liveCSProspectsCount})`, value: 'customer_service' },
-                      { label: `👥 All Sources (${liveTotalProspectsCount})`, value: 'all' },
-                    ]}
-                  />
-                </div>
                 <Table
                   dataSource={filteredDashboardProspects}
-                  rowKey="id"
-                  pagination={{ pageSize: 10 }}
-                  scroll={{ x: 1000 }}
-                  columns={dashboardProspectColumns}
-                />
-              </Card>
-            ),
-          },
-          {
-            key: 'cs-prospects',
-            label: <span><CustomerServiceOutlined /> CS Prospects ({liveCSProspectsCount})</span>,
-            children: (
-              <Card
-                title={
-                  <Space>
-                    <CustomerServiceOutlined style={{ color: '#52c41a' }} />
-                    <span>Customer Service & Front Desk Prospects ({liveCSProspectsCount})</span>
-                  </Space>
-                }
-                extra={
-                  <Space wrap>
-                    <Input
-                      prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
-                      placeholder="Search CS prospects by name, phone, address..."
-                      value={csProspectsSearch}
-                      onChange={(e) => setCsProspectsSearch(e.target.value)}
-                      allowClear
-                      style={{ width: 280 }}
-                    />
-                    <Select
-                      value={csProspectsStatusFilter}
-                      onChange={setCsProspectsStatusFilter}
-                      style={{ width: 160 }}
-                      options={[
-                        { value: 'all', label: 'All Statuses' },
-                        { value: 'new', label: 'New' },
-                        { value: 'meeting_scheduled', label: 'Meeting Scheduled' },
-                        { value: 'meeting_completed', label: 'Meeting Completed' },
-                        { value: 'suspended', label: 'Suspended' },
-                        { value: 'postponed', label: 'Postponed' },
-                        { value: 'canceled', label: 'Canceled' },
-                        { value: 'purchased', label: 'Purchased' },
-                      ]}
-                    />
-                    <Button
-                      type="primary"
-                      icon={<CalendarOutlined />}
-                      onClick={() => handleOpenAppointmentModal()}
-                    >
-                      Book Appointment
-                    </Button>
-                  </Space>
-                }
-              >
-                <Table
-                  dataSource={filteredDashboardCSProspects}
                   rowKey="id"
                   pagination={{ pageSize: 10 }}
                   scroll={{ x: 1000 }}

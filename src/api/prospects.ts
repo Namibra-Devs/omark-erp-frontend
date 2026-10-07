@@ -283,8 +283,13 @@ export const useProspectsQuery = (filter?: ProspectsFilter, enabled = true) => {
 
         const stored = getStoredProspects();
         const mergedItems = mergeStoredProspects(allItems, stored, filter);
-        const addedCount = mergedItems.length - allItems.length;
-        const computedTotal = Math.max((firstPage.total ?? allItems.length) + Math.max(0, addedCount), mergedItems.length);
+        // Only count genuine offline drafts that are not already in the backend database
+        const unSyncedDraftsCount = stored.filter(
+          (s) =>
+            (s.id.startsWith('local_') || s.id.startsWith('temp_') || s.id.startsWith('offline_') || s.id.startsWith('draft_')) &&
+            matchesProspectFilter(s, filter)
+        ).length;
+        const computedTotal = Math.max((firstPage.total ?? allItems.length) + unSyncedDraftsCount, mergedItems.length);
 
         let pagedItems = mergedItems;
         if (filter?.pageSize && filter.pageSize <= 100) {

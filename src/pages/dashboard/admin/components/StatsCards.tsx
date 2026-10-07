@@ -83,11 +83,11 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
     {
       key: 'prospects',
       title: 'Marketing Prospects',
-      value: stats.marketingProspects ?? 362,
+      value: stats.marketingProspects ?? 0,
       icon: <TeamOutlined />,
       color: '#1890ff',
       bg: '#1890ff15',
-      subtext: `${stats.totalProspects || 903} total (${stats.csProspects || 541} CS)`,
+      subtext: `${stats.totalProspects ?? ((stats.marketingProspects ?? 0) + (stats.csProspects ?? 0))} total (${stats.csProspects ?? 0} CS)`,
       growth: 0,
       description: 'Active marketing prospects overseen by Director & team',
       delay: 100,

@@ -104,8 +104,8 @@ export const ProspectsSourcePieChart: React.FC<ProspectsSourcePieChartProps> = (
       mkt = allServerTotal;
     }
 
-    // Exact figure of adding the CS and Marketing prospects
-    const total = propTotalCount ? Math.max(propTotalCount, mkt + cs) : mkt + cs;
+    // Exact figure of adding the CS and Marketing prospects (must strictly tally)
+    const total = mkt + cs;
     const mktPct = total > 0 ? Math.round((mkt / total) * 100) : 0;
     const csPct = total > 0 ? 100 - mktPct : 0;
 

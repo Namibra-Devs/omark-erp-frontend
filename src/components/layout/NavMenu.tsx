@@ -276,12 +276,15 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    if (hasRole(['customer_service', 'admin', 'branch_manager', 'secretary', 'accounts', 'marketing_director'])) {
+    if (hasRole(['customer_service', 'admin', 'branch_manager', 'secretary', 'accounts'])) {
       items.push({
         key: '/cs/prospects',
         icon: <TeamOutlined />,
         label: 'CS Prospects',
       });
+    }
+
+    if (hasRole(['customer_service', 'admin', 'branch_manager', 'secretary', 'accounts', 'marketing_director'])) {
       items.push({
         key: '/cs/appointments',
         icon: <CalendarOutlined />,

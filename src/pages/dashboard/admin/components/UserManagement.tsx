@@ -164,6 +164,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   const navigate = useNavigate();
   const { branches } = useBranchContext();
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
+  const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
 
   const getStaffProspectCount = (staffId: string, role: string) => {
     const allP = allProspectsData?.items ?? [];
@@ -175,7 +176,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
           (p as any).assignedStaffId === staffId ||
           (p as any).createdByUserId === staffId
       ).length;
-      return { count: Math.max(mktCount, 362), directCount, isDirector: true };
+      return { count: Math.max(mktCount, mktProspectsData?.total ?? 0), directCount, isDirector: true };
     }
     const count = allP.filter(
       (p) =>

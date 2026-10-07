@@ -230,6 +230,11 @@ export const useAdminDashboard = () => {
     pageSize: 100,
   });
 
+  const { data: csProspectsData, isLoading: csProspectsLoading } = useProspectsQuery({
+    source: 'customer_service',
+    pageSize: 100,
+  });
+
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({
     page: 1,
     pageSize: 10,
@@ -288,6 +293,7 @@ export const useAdminDashboard = () => {
     statsLoading ||
     usersLoading ||
     prospectsLoading ||
+    csProspectsLoading ||
     customersLoading ||
     appointmentsLoading ||
     propertiesLoading ||
@@ -304,11 +310,12 @@ export const useAdminDashboard = () => {
   const allProspectItems = prospectsData?.items ?? [];
   const mktFromList = allProspectItems.filter((p) => p.source === 'marketing' || !p.source).length;
   const csFromList = allProspectItems.filter((p) => p.source === 'customer_service').length;
-  const marketingProspectsCount = Math.max(mktFromList, mktProspectsData?.total ?? 0, 362);
-  const csProspectsCount = Math.max(csFromList, 541);
-  const liveProspectsCount = Math.max(prospectsData?.total ?? 0, allProspectItems.length, marketingProspectsCount + csProspectsCount);
+  const marketingProspectsCount = mktProspectsData?.total ?? mktFromList;
+  const csProspectsCount = csProspectsData?.total ?? csFromList;
+  const totalProspects = (prospectsData?.total && prospectsData.total >= marketingProspectsCount + csProspectsCount)
+    ? prospectsData.total
+    : (marketingProspectsCount + csProspectsCount);
   const liveCustomersCount = Math.max(customersData?.total ?? 0, customersData?.items?.length ?? 0);
-  const totalProspects = liveProspectsCount > 0 ? liveProspectsCount : (apiStats?.totalProspects ?? 0);
   const totalCustomers = liveCustomersCount > 0 ? liveCustomersCount : (apiStats?.totalCustomers ?? 0);
 
   const rawPaymentPlans = paymentPlansData?.items ?? [];

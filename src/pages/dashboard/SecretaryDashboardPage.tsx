@@ -70,7 +70,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation } from '@/api/customers';
-import { useProspectsQuery } from '@/api/prospects';
+import { useProspectsQuery, getStoredProspects } from '@/api/prospects';
 import { usePaymentPlansQuery, getProgressBand } from '@/api/paymentPlans';
 import { useRecordPaymentMutation } from '@/api/payments';
 import { useCreateExpenseMutation } from '@/api/expenses';
@@ -86,7 +86,7 @@ import {
 } from '@/utils/paymentPlanSchedule';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
-import type { PaymentPlan, PaymentPlanStatus } from '@/types';
+import type { PaymentPlan, PaymentPlanStatus, Prospect } from '@/types';
 import { filterEntitiesByBranch, tagPayloadWithBranch, getUserBranchId } from '@/utils/branchIsolation';
 import { ClientCheckInsTable } from './admin/components/ClientCheckInsTable';
 import { useCheckIns } from '@/utils/visitorCheckIns';
@@ -207,8 +207,20 @@ export const SecretaryDashboardPage: React.FC = () => {
   } = useCustomersQuery({ pageSize: 100 });
 
   const { data: prospectsData } = useProspectsQuery({ pageSize: 10000 });
+  const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
   const existingCustomersList = customersData?.items ?? [];
-  const existingProspectsList = prospectsData?.items ?? [];
+
+  const existingProspectsList = useMemo(() => {
+    const prospectMap = new Map<string, Prospect>();
+    (prospectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    (mktProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    (csProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    getStoredProspects().forEach((p) => {
+      if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
+    });
+    return Array.from(prospectMap.values());
+  }, [prospectsData, mktProspectsData, csProspectsData]);
 
   const {
     data: paymentPlansData,
