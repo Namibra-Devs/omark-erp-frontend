@@ -159,8 +159,99 @@ export const CustomersPage: React.FC = () => {
   const rawCustomers: Customer[] = customersResponse?.items ?? [];
   const rawPaymentPlans: PaymentPlan[] = paymentPlansResponse?.items ?? [];
 
-  const customers: Customer[] = filterEntitiesByBranch(rawCustomers, user, branches);
-  const paymentPlans: PaymentPlan[] = filterEntitiesByBranch(rawPaymentPlans, user, branches);
+  const isMarketingStaff = user?.role === 'marketing_staff';
+  const staffFullName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : '';
+
+  // Helper to determine if a customer was added or assigned to a marketing staff member
+  const isCustomerAssignedOrAddedByStaff = (
+    customer: Customer,
+    staffId: string,
+    staffName?: string,
+    prospectsList: Prospect[] = []
+  ): boolean => {
+    // Direct customer properties
+    if (
+      (customer as any).assignedUserId === staffId ||
+      (customer as any).assignedStaffId === staffId ||
+      (customer as any).createdByUserId === staffId ||
+      (customer as any).creatorId === staffId
+    ) {
+      return true;
+    }
+
+    // Linked prospect by prospectId
+    if (customer.prospectId) {
+      const linked = prospectsList.find((p) => p.id === customer.prospectId);
+      if (linked) {
+        if (
+          linked.assignedUserId === staffId ||
+          (linked as any).assignedStaffId === staffId ||
+          linked.createdByUserId === staffId ||
+          (linked as any).creatorId === staffId
+        ) {
+          return true;
+        }
+        if (
+          staffName &&
+          linked.createdByName &&
+          linked.createdByName.trim().toLowerCase() === staffName.trim().toLowerCase()
+        ) {
+          return true;
+        }
+      }
+    }
+
+    // Fallback: match by phone number in prospects created or assigned to this staff
+    const normCustomerPhone = (customer.phoneNumber || '').replace(/\D/g, '');
+    if (normCustomerPhone.length >= 7) {
+      const matchedProspect = prospectsList.find((p) => {
+        const pPhone = (p.phoneNumber || '').replace(/\D/g, '');
+        return (
+          pPhone.length >= 7 &&
+          (pPhone === normCustomerPhone || pPhone.endsWith(normCustomerPhone) || normCustomerPhone.endsWith(pPhone))
+        );
+      });
+      if (matchedProspect) {
+        if (
+          matchedProspect.assignedUserId === staffId ||
+          (matchedProspect as any).assignedStaffId === staffId ||
+          matchedProspect.createdByUserId === staffId ||
+          (matchedProspect as any).creatorId === staffId
+        ) {
+          return true;
+        }
+        if (
+          staffName &&
+          matchedProspect.createdByName &&
+          matchedProspect.createdByName.trim().toLowerCase() === staffName.trim().toLowerCase()
+        ) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  };
+
+  const branchFilteredCustomers = filterEntitiesByBranch(rawCustomers, user, branches);
+  const branchFilteredPaymentPlans = filterEntitiesByBranch(rawPaymentPlans, user, branches);
+
+  const customers: Customer[] = React.useMemo(() => {
+    if (isMarketingStaff && user?.id) {
+      return branchFilteredCustomers.filter((c) =>
+        isCustomerAssignedOrAddedByStaff(c, user.id, staffFullName, rawProspects)
+      );
+    }
+    return branchFilteredCustomers;
+  }, [branchFilteredCustomers, isMarketingStaff, user?.id, staffFullName, rawProspects]);
+
+  const paymentPlans: PaymentPlan[] = React.useMemo(() => {
+    if (isMarketingStaff && user?.id) {
+      const myCustomerIds = new Set(customers.map((c) => c.id));
+      return branchFilteredPaymentPlans.filter((p) => myCustomerIds.has(p.customerId));
+    }
+    return branchFilteredPaymentPlans;
+  }, [branchFilteredPaymentPlans, isMarketingStaff, user?.id, customers]);
 
   const customersMeta = React.useMemo(() => ({
     total: customers.length,
@@ -1208,7 +1299,8 @@ const handleAddCustomer = async (values: any) => {
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
       <PageHeader
-        title="Customers"
+        title={isMarketingStaff ? 'My Customers' : 'Customers'}
+        subtitle={isMarketingStaff ? 'Viewing customers added by or assigned to you' : undefined}
         actions={[
           {
             label: 'Add Customer',

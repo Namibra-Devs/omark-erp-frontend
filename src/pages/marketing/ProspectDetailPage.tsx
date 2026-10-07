@@ -1,5 +1,4 @@
-// src/pages/marketing/ProspectDetailPage.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Card, Row, Col, Typography, Tag, Button, Space, Timeline, Modal, Form, Input, Select, message, Descriptions, Badge, Spin, Empty, Alert, Popconfirm } from 'antd';
 import {
@@ -32,6 +31,7 @@ import {
   useUpdateProspectMutation,
   useDeleteProspectMutation
 } from '@/api/prospects';
+import { markSeen } from '@/utils/seenTracker';
 
 dayjs.extend(relativeTime);
 
@@ -41,7 +41,13 @@ const { Option } = Select;
 export const ProspectDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { hasRole } = useAuth();
+  const { user, hasRole } = useAuth();
+
+  useEffect(() => {
+    if (user?.id) {
+      markSeen('prospects', user.id);
+    }
+  }, [user?.id, id]);
 
   // Modal state
   const [editModal, setEditModal] = useState(false);

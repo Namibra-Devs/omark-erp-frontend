@@ -63,6 +63,8 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
         address: values.address,
         type: values.type,
         propertyId: values.propertyId,
+        assignedUserId: user?.id,
+        createdByUserId: user?.id,
       };
 
       if (values.type === 'payment_plan' && values.totalAmount > 0) {

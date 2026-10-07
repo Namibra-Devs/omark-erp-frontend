@@ -110,15 +110,41 @@ export const NavMenu: React.FC = () => {
     };
   }, [queryClient]);
 
+  const isMarketingStaff = hasRole(['marketing_staff']);
   const canSeeMyProspects = hasRole(['marketing_staff', 'marketing_director', 'admin']);
-  const { data: myProspectsData } = useProspectsQuery(
-    { assignedUserId: user?.id, pageSize: 100 },
-    canSeeMyProspects && !apiUnseenCounts && !!user?.id
+
+  // Fetch prospects to evaluate unseen records for this staff member
+  const { data: staffProspectsData } = useProspectsQuery(
+    { pageSize: 1000 },
+    canSeeMyProspects && !!user?.id
   );
+
+  const staffProspectTimestamps = useMemo(() => {
+    if (!user?.id || !canSeeMyProspects) return [];
+    const items = staffProspectsData?.items ?? [];
+    const staffName = `${user.firstName || ''} ${user.lastName || ''}`.trim().toLowerCase();
+
+    const myProspects = isMarketingStaff
+      ? items.filter((p) => {
+          if (p.source && p.source !== 'marketing') return false;
+          if (p.assignedUserId === user.id || (p as any).assignedStaffId === user.id) return true;
+          if (p.createdByUserId === user.id || (p as any).creatorId === user.id) return true;
+          if (staffName && p.createdByName && p.createdByName.trim().toLowerCase() === staffName) return true;
+          return false;
+        })
+      : items.filter((p) => {
+          if (p.assignedUserId === user.id || (p as any).assignedStaffId === user.id) return true;
+          if (p.createdByUserId === user.id) return true;
+          return false;
+        });
+
+    return myProspects.map((p) => p.createdAt || p.updatedAt).filter(Boolean) as string[];
+  }, [staffProspectsData, user, canSeeMyProspects, isMarketingStaff]);
+
   const { count: fallbackProspectsCount } = useUnseenCount(
     'prospects',
     canSeeMyProspects ? user?.id : undefined,
-    (myProspectsData?.items ?? []).map((p) => p.createdAt)
+    staffProspectTimestamps
   );
 
   const canSeeAppointmentsBadge = hasRole(['customer_service', 'admin']);
@@ -152,7 +178,13 @@ export const NavMenu: React.FC = () => {
   // Total pending items requiring Head Office action (Approvals + Escalated Payroll)
   const headOfficeBadgeCount = pendingApprovalsCount + pendingPayrollCount;
 
-  const newProspectsCount = apiUnseenCounts?.prospects ?? (canSeeMyProspects ? fallbackProspectsCount : 0);
+  // Clear badge when on the page or when prospects have been checked
+  const isOnProspectsPage = location.pathname.startsWith('/marketing/prospects');
+  const newProspectsCount = isOnProspectsPage
+    ? 0
+    : isMarketingStaff
+    ? fallbackProspectsCount
+    : (fallbackProspectsCount > 0 ? fallbackProspectsCount : 0);
   const newAppointmentsCount = apiUnseenCounts?.appointments ?? (canSeeAppointmentsBadge ? fallbackAppointmentsCount : 0);
   const newCheckInsCount = apiUnseenCounts?.checkIns ?? (canSeeCheckIns ? fallbackCheckInsCount : 0);
 

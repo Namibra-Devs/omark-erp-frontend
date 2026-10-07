@@ -7,6 +7,7 @@ const { Title } = Typography;
 
 interface PageHeaderProps {
   title: string;
+  subtitle?: React.ReactNode;
   actions?: Array<{
     label: string;
     onClick: () => void;
@@ -19,12 +20,19 @@ interface PageHeaderProps {
   }>;
 }
 
-export const PageHeader: React.FC<PageHeaderProps> = ({ title, actions }) => {
+export const PageHeader: React.FC<PageHeaderProps> = ({ title, subtitle, actions }) => {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
-      <Title level={2} style={{ margin: 0, fontSize: 'clamp(20px, 4vw, 28px)' }}>
-        {title}
-      </Title>
+      <div>
+        <Title level={2} style={{ margin: 0, fontSize: 'clamp(20px, 4vw, 28px)' }}>
+          {title}
+        </Title>
+        {subtitle && (
+          <Typography.Text type="secondary" style={{ fontSize: 13, display: 'block', marginTop: 2 }}>
+            {subtitle}
+          </Typography.Text>
+        )}
+      </div>
       {actions && actions.length > 0 && (
         <Space wrap size={[8, 8]}>
           {actions.map((action, index) => (

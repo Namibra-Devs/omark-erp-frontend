@@ -118,19 +118,22 @@ export const ProspectsPage: React.FC = () => {
   const allExistingCustomers = customersData?.items ?? [];
 
   // Source breakdown counts
-  const marketingProspectCount = useMemo(() => {
-    const fromList = allExistingProspects.filter((p) => p.source === 'marketing' || !p.source).length;
-    return Math.max(fromList, mktProspectsData?.total ?? 0);
-  }, [allExistingProspects, mktProspectsData?.total]);
+  const isMarketingStaff = user?.role === 'marketing_staff';
+  const isMarketingRole = user?.role === 'marketing_director' || isMarketingStaff;
+  const effectiveSource = isMarketingRole ? 'marketing' : sourceFilter;
+
+  // Helper to determine if a prospect belongs to a marketing staff member (assigned or created)
+  const isProspectAssignedOrAddedByStaff = (p: Prospect, staffId: string, staffName?: string): boolean => {
+    if (p.assignedUserId === staffId || (p as any).assignedStaffId === staffId) return true;
+    if (p.createdByUserId === staffId || (p as any).creatorId === staffId) return true;
+    if (staffName && p.createdByName && p.createdByName.trim().toLowerCase() === staffName.trim().toLowerCase()) return true;
+    return false;
+  };
 
   const csProspectCount = useMemo(() => {
     const fromList = allExistingProspects.filter((p) => p.source === 'customer_service').length;
     return Math.max(fromList, csProspectsData?.total ?? 0);
   }, [allExistingProspects, csProspectsData?.total]);
-
-  const totalProspectCount = useMemo(() => {
-    return marketingProspectCount + csProspectCount;
-  }, [marketingProspectCount, csProspectCount]);
 
   // Reset to page 1 whenever a filter changes, so a new, smaller result set
   // doesn't strand the user on a page that no longer exists.
@@ -140,8 +143,10 @@ export const ProspectsPage: React.FC = () => {
 
   // Opening this page clears the "new prospects" nav badge (see NavMenu.tsx).
   useEffect(() => {
-    if (user?.id) markSeen('prospects', user.id);
-  }, [user?.id, allExistingProspects]);
+    if (user?.id) {
+      markSeen('prospects', user.id);
+    }
+  }, [user?.id, allExistingProspects.length]);
 
   const createProspectMutation = useCreateProspectMutation();
   const updateProspectMutation = useUpdateProspectMutation();
@@ -199,9 +204,6 @@ export const ProspectsPage: React.FC = () => {
   }, [appointments]);
 
   // Full marketing prospects list across all pages for status breakdown calculation
-  const isMarketingRole = user?.role === 'marketing_director' || user?.role === 'marketing_staff';
-  const effectiveSource = isMarketingRole ? 'marketing' : sourceFilter;
-
   const allMarketingProspects = useMemo(() => {
     let list = allExistingProspects;
     if (effectiveSource === 'marketing') {
@@ -211,7 +213,11 @@ export const ProspectsPage: React.FC = () => {
     }
     // If 'all', keep full combined dataset
 
-    if (assignedUserIdFilter) {
+    // For marketing staff: ONLY show prospects that were added by or assigned to that respective staff
+    if (isMarketingStaff && user?.id) {
+      const myName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
+      list = list.filter((p) => isProspectAssignedOrAddedByStaff(p, user.id, myName));
+    } else if (assignedUserIdFilter) {
       list = list.filter(
         (p) =>
           p.assignedUserId === assignedUserIdFilter ||
@@ -221,7 +227,19 @@ export const ProspectsPage: React.FC = () => {
       );
     }
     return filterEntitiesByBranch(list, user, branches);
-  }, [allExistingProspects, sourceFilter, assignedUserIdFilter, user, branches]);
+  }, [allExistingProspects, effectiveSource, isMarketingStaff, user, branches, assignedUserIdFilter]);
+
+  const marketingProspectCount = useMemo(() => {
+    if (isMarketingStaff) {
+      return allMarketingProspects.length;
+    }
+    const fromList = allExistingProspects.filter((p) => p.source === 'marketing' || !p.source).length;
+    return Math.max(fromList, mktProspectsData?.total ?? 0);
+  }, [allExistingProspects, mktProspectsData?.total, isMarketingStaff, allMarketingProspects.length]);
+
+  const totalProspectCount = useMemo(() => {
+    return isMarketingStaff ? allMarketingProspects.length : (marketingProspectCount + csProspectCount);
+  }, [isMarketingStaff, allMarketingProspects.length, marketingProspectCount, csProspectCount]);
 
   const statusBreakdown = useMemo(() => {
     return {
@@ -790,7 +808,8 @@ export const ProspectsPage: React.FC = () => {
   return (
     <div style={{ maxWidth: '100%', padding: '0 4px' }}>
       <PageHeader
-        title="Marketing Prospects"
+        title={isMarketingStaff ? 'My Marketing Prospects' : 'Marketing Prospects'}
+        subtitle={isMarketingStaff ? 'Viewing prospects added by or assigned to you' : undefined}
         actions={[
           ...(hasRole(['admin'])
             ? [{
