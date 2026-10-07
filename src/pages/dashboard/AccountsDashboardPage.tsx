@@ -35,6 +35,8 @@ import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { AccountsAnalyticsSection } from './accounts/AccountsAnalyticsSection';
 import { BankReconciliationSection } from './accounts/BankReconciliationSection';
+import { AccountsReceivableAgingCard } from './accounts/AccountsReceivableAgingCard';
+import { DepartmentalBudgetVarianceCard } from './accounts/DepartmentalBudgetVarianceCard';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import dayjs from 'dayjs';
@@ -452,11 +454,22 @@ export const AccountsDashboardPage: React.FC = () => {
         </Col>
       </Row>
 
+      {/* ── 1. Accounts Receivable (AR) Aging Buckets ── */}
+      <AccountsReceivableAgingCard
+        onRecordPayment={(customerRecord) => {
+          setSelectedCustomer(customerRecord);
+          setAddPaymentModal(true);
+        }}
+      />
+
       {/* ── Revenue Analytics & Marketer Performance ── */}
       <Title level={4} style={{ marginBottom: 16 }}>Revenue Analytics & Marketer Performance</Title>
       <div style={{ marginBottom: 24 }}>
         <AccountsAnalyticsSection branchId={user?.branchId} />
       </div>
+
+      {/* ── 4. Departmental Budget vs. Actual Variance ── */}
+      <DepartmentalBudgetVarianceCard />
 
       {/* ── Finance Tools ── */}
       <Title level={4} style={{ marginBottom: 16 }}>
