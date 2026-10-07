@@ -37,6 +37,7 @@ export interface RecordPaymentParams {
   reference?: string;
   sequence?: number;
   installmentOrdinal?: string;
+  notes?: string;
 }
 
 /**
@@ -156,6 +157,43 @@ export async function recordPlanPaymentWithBackend(
   const reference = payment.reference || `REC-${Date.now().toString().slice(-6)}`;
   const paidOnDate = payment.paidOn || new Date().toISOString();
 
+  const preTargetRow = currentSchedule.rows.find((r: any) => r.sequence === sequence);
+  const expectedMinor = preTargetRow
+    ? (preTargetRow.isPartiallyPaid && preTargetRow.deficitMinor > 0
+        ? preTargetRow.deficitMinor
+        : preTargetRow.installmentMinor)
+    : Math.floor(currentSchedule.totalScheduledMinor / currentSchedule.numMonths);
+
+  const isOver = payment.amountMinor > expectedMinor;
+  const isUnder = payment.amountMinor < expectedMinor;
+  const surplusMinor = isOver ? payment.amountMinor - expectedMinor : 0;
+  const deficitMinor = isUnder ? expectedMinor - payment.amountMinor : 0;
+  const effect: 'exact' | 'overpayment' | 'underpayment' | 'advance' = isOver
+    ? 'overpayment'
+    : isUnder
+    ? 'underpayment'
+    : 'exact';
+
+  const dynamicNote =
+    payment.notes ||
+    (isOver
+      ? `Overpayment of ₵${(payment.amountMinor / 100).toFixed(2)}: ₵${(surplusMinor / 100).toFixed(2)} surplus advance dynamically applied to future installments`
+      : isUnder
+      ? `Underpayment of ₵${(payment.amountMinor / 100).toFixed(2)}: ₵${(deficitMinor / 100).toFixed(2)} deficit rolled forward into subsequent installment`
+      : `Full ${ordinal} installment of ₵${(payment.amountMinor / 100).toFixed(2)} settled`);
+
+  const ledgerMeta: {
+    deficitMinor?: number;
+    surplusAppliedMinor?: number;
+    balanceAfterMinor?: number;
+    effect?: 'exact' | 'overpayment' | 'underpayment' | 'advance';
+  } = {
+    deficitMinor,
+    surplusAppliedMinor: surplusMinor,
+    balanceAfterMinor: Math.max(0, currentSchedule.currentBalanceMinor - payment.amountMinor),
+    effect,
+  };
+
   // 1. Save locally for instant UI update and dynamic amortization
   recordLocalInstallmentPayment(
     plan.id,
@@ -163,7 +201,10 @@ export async function recordPlanPaymentWithBackend(
     payment.amountMinor,
     method,
     reference,
-    paidOnDate
+    paidOnDate,
+    dynamicNote,
+    customerInfo?.recordedBy,
+    ledgerMeta
   );
 
   // 2. Resolve real backend plan ID and persist to backend
@@ -190,7 +231,10 @@ export async function recordPlanPaymentWithBackend(
           payment.amountMinor,
           method,
           reference,
-          paidOnDate
+          paidOnDate,
+          dynamicNote,
+          customerInfo?.recordedBy,
+          ledgerMeta
         );
       }
     }
@@ -202,10 +246,10 @@ export async function recordPlanPaymentWithBackend(
   const updatedSchedule = buildPaymentPlanSchedule(plan);
   const targetRow = updatedSchedule.rows.find((r: any) => r.sequence === sequence);
 
-  const isPartialPayment = Boolean(targetRow?.isPartiallyPaid);
-  const deficitRolledOverMinor = targetRow?.deficitMinor || 0;
-  const surplusAppliedMinor = (targetRow?.surplusAppliedMinor || 0) + (payment.amountMinor > (targetRow?.installmentMinor || 0) ? payment.amountMinor - (targetRow?.installmentMinor || 0) : 0);
-  const isOverpayment = surplusAppliedMinor > 0;
+  const isPartialPayment = Boolean(targetRow?.isPartiallyPaid) || isUnder;
+  const deficitRolledOverMinor = targetRow?.deficitMinor || deficitMinor;
+  const surplusAppliedMinor = surplusMinor;
+  const isOverpayment = surplusMinor > 0;
   const newBalanceMinor = updatedSchedule.currentBalanceMinor;
 
   // 4. Dispatch automated SMS receipt to customer

@@ -61,6 +61,11 @@ export interface PaymentPlanScheduleInfo {
   pendingCount: number;
   partiallyPaidCount: number;
   paidCount: number;
+  overpaymentCreditMinor: number;
+  overpaymentCreditGHS: number;
+  carriedDeficitMinor: number;
+  carriedDeficitGHS: number;
+  transactions: PlanPaymentTransaction[];
 }
 
 export interface PlanPaymentTransaction {
@@ -72,6 +77,10 @@ export interface PlanPaymentTransaction {
   reference?: string;
   notes?: string;
   recordedBy?: string;
+  deficitMinor?: number;
+  surplusAppliedMinor?: number;
+  balanceAfterMinor?: number;
+  effect?: 'overpayment' | 'underpayment' | 'exact' | 'advance';
 }
 
 export interface LocalPlanOverride {
@@ -152,7 +161,14 @@ export const recordLocalInstallmentPayment = (
   method?: PaymentMethod | string,
   reference?: string,
   paidOn?: string,
-  notes?: string
+  notes?: string,
+  recordedBy?: string,
+  meta?: {
+    deficitMinor?: number;
+    surplusAppliedMinor?: number;
+    balanceAfterMinor?: number;
+    effect?: 'overpayment' | 'underpayment' | 'exact' | 'advance';
+  }
 ): void => {
   const map = loadOverrides();
   const existing = map[planId] || { paidInstallments: {}, transactions: [], updatedAt: new Date().toISOString() };
@@ -181,6 +197,11 @@ export const recordLocalInstallmentPayment = (
     method: method || 'bank_transfer',
     reference: reference || `REC-${Date.now().toString().slice(-6)}`,
     notes,
+    recordedBy,
+    deficitMinor: meta?.deficitMinor,
+    surplusAppliedMinor: meta?.surplusAppliedMinor,
+    balanceAfterMinor: meta?.balanceAfterMinor,
+    effect: meta?.effect,
   });
 
   existing.updatedAt = new Date().toISOString();
@@ -431,6 +452,37 @@ export function buildPaymentPlanSchedule(
   // Find next upcoming / unpaid / partially paid installment
   const nextDueRow = rows.find((r) => !r.isPaid);
 
+  // Real-time ledger compilation
+  const rawTransactions = overrides?.transactions || [];
+  const transactions: PlanPaymentTransaction[] = [...rawTransactions];
+
+  // Synthesize ledger records from confirmed/paid rows if not already represented in raw transactions
+  rows.forEach((row) => {
+    if (row.isPaid || row.paidAmountMinor > 0) {
+      const exists = transactions.some((t) => t.sequence === row.sequence);
+      if (!exists) {
+        transactions.push({
+          id: `seed-tx-${plan.id}-${row.sequence}`,
+          sequence: row.sequence,
+          amountMinor: row.paidAmountMinor || row.baseInstallmentMinor,
+          paidOn: row.paidAt || row.dueDate,
+          method: row.paymentMethod || 'bank_transfer',
+          reference: row.reference || `REC-INST-${row.sequence}`,
+          notes: `${row.ordinal} installment settled`,
+          deficitMinor: row.deficitMinor,
+          surplusAppliedMinor: row.surplusAppliedMinor,
+          balanceAfterMinor: row.remainingBalanceMinor,
+          effect: row.surplusAppliedMinor > 0 ? 'overpayment' : row.deficitMinor > 0 ? 'underpayment' : 'exact',
+        });
+      }
+    }
+  });
+
+  // Sort transactions latest first
+  transactions.sort((a, b) => dayjs(b.paidOn).valueOf() - dayjs(a.paidOn).valueOf());
+
+  const overpaymentCreditMinor = Math.max(0, carriedSurplusMinor);
+
   return {
     planId: plan.id,
     numMonths,
@@ -457,5 +509,10 @@ export function buildPaymentPlanSchedule(
     pendingCount,
     partiallyPaidCount,
     paidCount,
+    overpaymentCreditMinor,
+    overpaymentCreditGHS: overpaymentCreditMinor / 100,
+    carriedDeficitMinor,
+    carriedDeficitGHS: carriedDeficitMinor / 100,
+    transactions,
   };
 }

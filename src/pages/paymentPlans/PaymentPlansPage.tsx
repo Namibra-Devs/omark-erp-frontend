@@ -686,13 +686,19 @@ export const PaymentPlansPage: React.FC = () => {
       dataIndex: 'balanceMinor',
       key: 'balanceMinor',
       width: 140,
-      render: (value: number, record: PaymentPlan) => {
-        if (record.status === 'completed' || value === 0) {
+      render: (_: number, record: PaymentPlan) => {
+        const schedule = buildPaymentPlanSchedule(record);
+        const dynamicBal = schedule.currentBalanceMinor;
+        if (record.status === 'completed' || dynamicBal === 0) {
           return <Tag color="green">GHS 0.00</Tag>;
         }
-        return <MoneyText minor={value} />;
+        return <MoneyText minor={dynamicBal} />;
       },
-      sorter: (a: PaymentPlan, b: PaymentPlan) => a.balanceMinor - b.balanceMinor,
+      sorter: (a: PaymentPlan, b: PaymentPlan) => {
+        const balA = buildPaymentPlanSchedule(a).currentBalanceMinor;
+        const balB = buildPaymentPlanSchedule(b).currentBalanceMinor;
+        return balA - balB;
+      },
     },
     {
       title: 'Progress',
@@ -788,7 +794,9 @@ export const PaymentPlansPage: React.FC = () => {
     const customerName = getCustomerName(selectedPlan.customerId);
     const customerPhone = getCustomerPhone(selectedPlan.customerId);
     const property = getCustomerProperty(selectedPlan.customerId);
-    const isFullyPaid = selectedPlan.balanceMinor === 0;
+    const dynamicSchedule = buildPaymentPlanSchedule(selectedPlan);
+    const dynamicBalanceMinor = dynamicSchedule.currentBalanceMinor;
+    const isFullyPaid = dynamicBalanceMinor === 0;
 
     return (
       <div style={{ height: '100%' }}>
@@ -894,7 +902,7 @@ export const PaymentPlansPage: React.FC = () => {
                   {isFullyPaid ? (
                     <Tag color="green">Fully Paid</Tag>
                   ) : (
-                    <MoneyText minor={selectedPlan.balanceMinor} />
+                    <MoneyText minor={dynamicBalanceMinor} />
                   )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Monthly Amount">
@@ -1232,14 +1240,6 @@ export const PaymentPlansPage: React.FC = () => {
           layout="vertical"
           onFinish={handleAddPlan}
         >
-          <Alert
-            message="Only customers without an existing payment plan are shown"
-            description="The API only supports creating a plan for a customer who doesn't already have one — plans cannot be edited or replaced afterwards."
-            type="info"
-            showIcon
-            style={{ marginBottom: 16 }}
-          />
-
           <Form.Item
             name="customerId"
             label="Customer"
