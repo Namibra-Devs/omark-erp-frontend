@@ -4,7 +4,7 @@ import {
   Card, Row, Col, Typography, Statistic, Table, Tag, Space, Button,
   Progress, Tabs, Tooltip,
   Empty, Alert, List, Descriptions, Drawer, Spin,
-  message, Modal, Form, Input, Select, DatePicker, Avatar, Badge, Divider, InputNumber,
+  message, Modal, Form, Input, Select, DatePicker, Avatar, Badge, Divider, InputNumber, Segmented,
 } from 'antd';
 import {
   TeamOutlined,
@@ -14,6 +14,7 @@ import {
   ReloadOutlined,
   TrophyOutlined,
   CrownOutlined,
+  CustomerServiceOutlined,
   FireOutlined,
   InfoCircleOutlined,
   MailOutlined,
@@ -45,7 +46,7 @@ import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPerformance } from '@/api/dashboard';
 import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
-import { useProspectsQuery, useUpdateProspectMutation } from '@/api/prospects';
+import { useProspectsQuery, useUpdateProspectMutation, getStoredProspects } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
 import { useAppointmentsQuery, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
 import { useCreateExpenseMutation } from '@/api/expenses';
@@ -76,6 +77,7 @@ import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
+import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import {
   type MarketingCampaign,
   type MarketingTask,
@@ -119,8 +121,51 @@ export const DirectorOverviewPage: React.FC = () => {
   const { data: usersData, refetch: refetchUsers } = useUsersQuery({ pageSize: 500 });
   const allUsers = usersData?.items ?? [];
 
-  const { data: allProspectsData, refetch: refetchProspects } = useProspectsQuery({ pageSize: 10000 });
-  const allProspects = allProspectsData?.items ?? [];
+  // Multi-source live queries: All prospects, Marketing-specific, and Customer Service (CS) prospects
+  const { data: allProspectsData, refetch: refetchAllProspects } = useProspectsQuery({ pageSize: 10000 });
+  const { data: mktProspectsData, refetch: refetchMktProspects } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: csProspectsData, refetch: refetchCsProspects } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+
+  // Consolidate full live prospects pool from all endpoints & storage without omitting records
+  const allProspects = useMemo(() => {
+    const prospectMap = new Map<string, any>();
+    (allProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    (mktProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    (csProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    getStoredProspects().forEach((p) => {
+      if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
+    });
+    return Array.from(prospectMap.values());
+  }, [allProspectsData, mktProspectsData, csProspectsData]);
+
+  const allMarketingProspects = useMemo(() => {
+    return allProspects.filter((p) => p.source === 'marketing' || !p.source);
+  }, [allProspects]);
+
+  const allCSProspects = useMemo(() => {
+    return allProspects.filter((p) => p.source === 'customer_service');
+  }, [allProspects]);
+
+  // Exact live figures comparing local dataset with server-side totals
+  const liveMarketingProspectsCount = useMemo(() => {
+    return Math.max(allMarketingProspects.length, mktProspectsData?.total ?? 0);
+  }, [allMarketingProspects.length, mktProspectsData?.total]);
+
+  const liveCSProspectsCount = useMemo(() => {
+    return Math.max(allCSProspects.length, csProspectsData?.total ?? 0);
+  }, [allCSProspects.length, csProspectsData?.total]);
+
+  const liveTotalProspectsCount = useMemo(() => {
+    return Math.max(
+      allProspects.length,
+      liveMarketingProspectsCount + liveCSProspectsCount,
+      allProspectsData?.total ?? 0
+    );
+  }, [allProspects.length, liveMarketingProspectsCount, liveCSProspectsCount, allProspectsData?.total]);
+
+  const refetchProspects = React.useCallback(() => {
+    return Promise.all([refetchAllProspects(), refetchMktProspects(), refetchCsProspects()]);
+  }, [refetchAllProspects, refetchMktProspects, refetchCsProspects]);
 
   const { data: allCustomersData, refetch: refetchCustomers } = useCustomersQuery({ pageSize: 10000 });
   const allCustomers = allCustomersData?.items ?? [];
@@ -195,6 +240,9 @@ export const DirectorOverviewPage: React.FC = () => {
   const [prospectsSearch, setProspectsSearch] = useState('');
   const [prospectsStatusFilter, setProspectsStatusFilter] = useState<string>('all');
   const [prospectsStaffFilter, setProspectsStaffFilter] = useState<string>('all');
+  const [prospectsSourceFilter, setProspectsSourceFilter] = useState<'all' | 'marketing' | 'customer_service'>('marketing');
+  const [csProspectsSearch, setCsProspectsSearch] = useState('');
+  const [csProspectsStatusFilter, setCsProspectsStatusFilter] = useState<string>('all');
   const [customersSearch, setCustomersSearch] = useState('');
 
   // Drill-down Modal State for Marketer's Added Records
@@ -246,6 +294,8 @@ export const DirectorOverviewPage: React.FC = () => {
         (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || staffProspects.some((p) => p.id === c.prospectId)
       );
 
+      const apiMarketer = dashboardMarketers.find((m: any) => (m.userId || m.id) === id);
+
       const statusNew = staffProspects.filter((p) => p.status === 'new').length;
       const statusScheduled = staffProspects.filter((p) => p.status === 'meeting_scheduled').length;
       const statusCompleted = staffProspects.filter((p) => p.status === 'meeting_completed').length;
@@ -256,45 +306,53 @@ export const DirectorOverviewPage: React.FC = () => {
         return s === 'canceled' || s === 'cancelled';
       }).length;
       const statusPurchased = staffProspects.filter((p) => p.status === 'purchased').length;
-      const converted = staffCustomers.length > 0 ? staffCustomers.length : statusPurchased;
+      const localConverted = staffCustomers.length > 0 ? staffCustomers.length : statusPurchased;
 
-      const totalProspects = staffProspects.length;
-      const conversionRate = totalProspects > 0 ? (converted / totalProspects) * 100 : 0;
+      const totalProspects = Math.max(staffProspects.length, apiMarketer?.totalProspects ?? 0);
+      const converted = Math.max(localConverted, apiMarketer?.converted ?? 0);
+      const conversionRate = totalProspects > 0 ? (converted / totalProspects) * 100 : (apiMarketer?.conversionRate ?? 0);
+
+      const resolvedNew = Math.max(statusNew, apiMarketer?.new ?? apiMarketer?.byStatus?.new ?? 0);
+      const resolvedScheduled = Math.max(statusScheduled, apiMarketer?.meetingScheduled ?? apiMarketer?.byStatus?.meeting_scheduled ?? 0);
+      const resolvedCompleted = Math.max(statusCompleted, apiMarketer?.meetingCompleted ?? apiMarketer?.byStatus?.meeting_completed ?? 0);
+      const resolvedPostponed = Math.max(statusPostponed, apiMarketer?.postponed ?? apiMarketer?.byStatus?.postponed ?? 0);
+      const resolvedSuspended = Math.max(statusSuspended, apiMarketer?.suspended ?? apiMarketer?.byStatus?.suspended ?? 0);
+      const resolvedCanceled = Math.max(statusCanceled, apiMarketer?.canceled ?? apiMarketer?.byStatus?.canceled ?? 0);
 
       staffMap.set(id, {
         id,
         userId: id,
         assignedUserId: id,
         name: fullName,
-        avatar: u.avatarUrl || u.photoUrl || u.profilePictureUrl,
-        email: u.email,
-        phone: u.phoneNumber || (typeof u.phone === 'string' ? u.phone : u.phone?.number) || '',
+        avatar: u.avatarUrl || u.photoUrl || u.profilePictureUrl || apiMarketer?.avatar,
+        email: u.email || apiMarketer?.email,
+        phone: u.phoneNumber || (typeof u.phone === 'string' ? u.phone : u.phone?.number) || apiMarketer?.phone || '',
         role: u.role,
         userObj: u,
         branchId: u.branchId,
         totalProspects,
-        new: statusNew,
-        meetingScheduled: statusScheduled,
-        meetingCompleted: statusCompleted,
-        postponed: statusPostponed,
-        suspended: statusSuspended,
-        canceled: statusCanceled,
+        new: resolvedNew,
+        meetingScheduled: resolvedScheduled,
+        meetingCompleted: resolvedCompleted,
+        postponed: resolvedPostponed,
+        suspended: resolvedSuspended,
+        canceled: resolvedCanceled,
         converted,
         conversionRate,
-        satisfaction: 9.4,
-        responseTime: 16,
-        targetMinor: 5000000,
-        revenueMinor: converted * 6500000,
-        thisMonthProspects: staffProspects.length,
-        lastMonthProspects: Math.max(0, staffProspects.length - 2),
-        growthPercent: 15,
+        satisfaction: apiMarketer?.satisfaction ?? 9.4,
+        responseTime: apiMarketer?.responseTime ?? 16,
+        targetMinor: apiMarketer?.targetMinor ?? 5000000,
+        revenueMinor: apiMarketer?.revenueMinor ?? (converted * 6500000),
+        thisMonthProspects: totalProspects,
+        lastMonthProspects: Math.max(0, totalProspects - 2),
+        growthPercent: apiMarketer?.growthPercent ?? 15,
         byStatus: {
-          new: statusNew,
-          meeting_scheduled: statusScheduled,
-          meeting_completed: statusCompleted,
-          postponed: statusPostponed,
-          suspended: statusSuspended,
-          canceled: statusCanceled,
+          new: resolvedNew,
+          meeting_scheduled: resolvedScheduled,
+          meeting_completed: resolvedCompleted,
+          postponed: resolvedPostponed,
+          suspended: resolvedSuspended,
+          canceled: resolvedCanceled,
         },
       });
     });
@@ -312,8 +370,8 @@ export const DirectorOverviewPage: React.FC = () => {
         const staffCustomers = allCustomers.filter(
           (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || staffProspects.some((p) => p.id === c.prospectId)
         );
-        const totalProspects = allProspects.length > 0 ? staffProspects.length : (m.totalProspects ?? 0);
-        const converted = allCustomers.length > 0 ? staffCustomers.length : (m.converted ?? 0);
+        const totalProspects = Math.max(staffProspects.length, m.totalProspects ?? 0);
+        const converted = Math.max(staffCustomers.length, m.converted ?? 0);
 
         staffMap.set(id, {
           id,
@@ -325,15 +383,15 @@ export const DirectorOverviewPage: React.FC = () => {
           phone: m.phone,
           role: 'marketing_staff',
           totalProspects,
-          new: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'new').length : (m.byStatus?.new ?? m.new ?? 0),
-          meetingScheduled: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'meeting_scheduled').length : (m.byStatus?.meeting_scheduled ?? m.meetingScheduled ?? 0),
-          meetingCompleted: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'meeting_completed').length : (m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0),
-          postponed: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'postponed').length : (m.postponed ?? 0),
-          suspended: allProspects.length > 0 ? staffProspects.filter((p) => p.status === 'suspended').length : (m.suspended ?? 0),
-          canceled: allProspects.length > 0 ? staffProspects.filter((p) => {
+          new: Math.max(staffProspects.filter((p) => p.status === 'new').length, m.byStatus?.new ?? m.new ?? 0),
+          meetingScheduled: Math.max(staffProspects.filter((p) => p.status === 'meeting_scheduled').length, m.byStatus?.meeting_scheduled ?? m.meetingScheduled ?? 0),
+          meetingCompleted: Math.max(staffProspects.filter((p) => p.status === 'meeting_completed').length, m.byStatus?.meeting_completed ?? m.meetingCompleted ?? 0),
+          postponed: Math.max(staffProspects.filter((p) => p.status === 'postponed').length, m.postponed ?? 0),
+          suspended: Math.max(staffProspects.filter((p) => p.status === 'suspended').length, m.suspended ?? 0),
+          canceled: Math.max(staffProspects.filter((p) => {
             const s = String(p.status || '').toLowerCase();
             return s === 'canceled' || s === 'cancelled';
-          }).length : (m.canceled ?? (m.byStatus?.canceled ?? (m.byStatus?.cancelled ?? 0))),
+          }).length, m.canceled ?? (m.byStatus?.canceled ?? (m.byStatus?.cancelled ?? 0))),
           converted,
           conversionRate: m.conversionRate ?? (totalProspects > 0 ? (converted / totalProspects) * 100 : 0),
           satisfaction: m.satisfaction,
@@ -347,6 +405,22 @@ export const DirectorOverviewPage: React.FC = () => {
         });
       } else {
         const existing = staffMap.get(id);
+        if (m.totalProspects && m.totalProspects > existing.totalProspects) {
+          existing.totalProspects = m.totalProspects;
+          if (m.new !== undefined) existing.new = m.new;
+          if (m.meetingScheduled !== undefined) existing.meetingScheduled = m.meetingScheduled;
+          if (m.meetingCompleted !== undefined) existing.meetingCompleted = m.meetingCompleted;
+          if (m.postponed !== undefined) existing.postponed = m.postponed;
+          if (m.suspended !== undefined) existing.suspended = m.suspended;
+          if (m.converted !== undefined && m.converted > existing.converted) {
+            existing.converted = m.converted;
+          }
+          if (m.conversionRate !== undefined) {
+            existing.conversionRate = m.conversionRate;
+          } else if (existing.totalProspects > 0) {
+            existing.conversionRate = (existing.converted / existing.totalProspects) * 100;
+          }
+        }
         if (m.satisfaction) existing.satisfaction = m.satisfaction;
         if (m.responseTime) existing.responseTime = m.responseTime;
         if (m.revenueMinor) existing.revenueMinor = m.revenueMinor;
@@ -363,12 +437,8 @@ export const DirectorOverviewPage: React.FC = () => {
 
   const marketerCountForAvg = Math.max(marketers.length, 1);
 
-  const allMarketingProspects = useMemo(() => {
-    return allProspects.filter((p) => p.source === 'marketing' || !p.source);
-  }, [allProspects]);
-
   const summary = {
-    totalActive: Math.max(allMarketingProspects.length, marketers.reduce((sum, m) => sum + m.totalProspects, 0)),
+    totalActive: Math.max(liveMarketingProspectsCount, marketers.reduce((sum, m) => sum + m.totalProspects, 0)),
     totalMeetingsScheduled: marketers.reduce((sum, m) => sum + m.meetingScheduled, 0),
     totalMeetingsCompleted: marketers.reduce((sum, m) => sum + m.meetingCompleted, 0),
     totalConverted: marketers.reduce((sum, m) => sum + m.converted, 0),
@@ -503,8 +573,13 @@ export const DirectorOverviewPage: React.FC = () => {
   };
 
   const marketingMetrics = useMemo(() => {
-    return calculateMarketingMetrics(campaigns, tasks, allProspects, user?.id, user?.firstName);
-  }, [campaigns, tasks, allProspects, user]);
+    return calculateMarketingMetrics(campaigns, tasks, allProspects, user?.id, user?.firstName, {
+      totalProspects: liveTotalProspectsCount,
+      marketingProspects: liveMarketingProspectsCount,
+      csProspects: liveCSProspectsCount,
+      totalConverted: summary.totalConverted,
+    });
+  }, [campaigns, tasks, allProspects, user, liveTotalProspectsCount, liveMarketingProspectsCount, liveCSProspectsCount, summary.totalConverted]);
 
   const handleRefresh = () => {
     handleRefreshMarketing();
@@ -568,7 +643,12 @@ export const DirectorOverviewPage: React.FC = () => {
 
   // Filtered datasets for dedicated dashboard tabs
   const filteredDashboardProspects = useMemo(() => {
-    let list = allProspects.filter((p) => p.source === 'marketing' || !p.source);
+    let list = allProspects;
+    if (prospectsSourceFilter === 'marketing') {
+      list = list.filter((p) => p.source === 'marketing' || !p.source);
+    } else if (prospectsSourceFilter === 'customer_service') {
+      list = list.filter((p) => p.source === 'customer_service');
+    }
     if (prospectsStatusFilter && prospectsStatusFilter !== 'all') {
       list = list.filter((p) => {
         const s = String(p.status || '').toLowerCase();
@@ -602,7 +682,33 @@ export const DirectorOverviewPage: React.FC = () => {
       );
     }
     return list;
-  }, [allProspects, prospectsSearch, prospectsStatusFilter, prospectsStaffFilter]);
+  }, [allProspects, prospectsSourceFilter, prospectsSearch, prospectsStatusFilter, prospectsStaffFilter]);
+
+  // Dedicated filtered dataset for Customer Service prospects
+  const filteredDashboardCSProspects = useMemo(() => {
+    let list = allCSProspects;
+    if (csProspectsStatusFilter && csProspectsStatusFilter !== 'all') {
+      list = list.filter((p) => {
+        const s = String(p.status || '').toLowerCase();
+        if (csProspectsStatusFilter === 'canceled') {
+          return s === 'canceled' || s === 'cancelled';
+        }
+        return s === csProspectsStatusFilter.toLowerCase();
+      });
+    }
+    if (csProspectsSearch.trim()) {
+      const q = csProspectsSearch.trim().toLowerCase();
+      list = list.filter(
+        (p) =>
+          `${p.firstName} ${p.lastName}`.toLowerCase().includes(q) ||
+          p.phoneNumber?.toLowerCase().includes(q) ||
+          p.address?.toLowerCase().includes(q) ||
+          p.status?.toLowerCase().includes(q) ||
+          p.reasonForContact?.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [allCSProspects, csProspectsSearch, csProspectsStatusFilter]);
 
   const filteredDashboardCustomers = useMemo(() => {
     let list = allCustomers;
@@ -849,6 +955,20 @@ export const DirectorOverviewPage: React.FC = () => {
       key: 'status',
       width: 140,
       render: (status: string) => <StatusTag status={status} type="prospect" />,
+    },
+    {
+      title: 'Source',
+      dataIndex: 'source',
+      key: 'source',
+      width: 150,
+      render: (source: string) => {
+        const isMkt = source === 'marketing' || !source;
+        return (
+          <Tag color={isMkt ? 'blue' : 'green'} style={{ fontWeight: 600, borderRadius: 4, padding: '2px 8px' }}>
+            {isMkt ? '📣 Marketing' : '🎧 Customer Service'}
+          </Tag>
+        );
+      },
     },
     {
       title: 'Reason / Interest',
@@ -1207,12 +1327,12 @@ export const DirectorOverviewPage: React.FC = () => {
           <Card>
             <Statistic
               title="Total Prospects Acquired"
-              value={marketingMetrics.totalProspectsAcquired}
+              value={liveTotalProspectsCount}
               prefix={<TeamOutlined />}
               valueStyle={{ color: '#1890ff', fontSize: 24 }}
             />
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              {summary.totalActive} active in pipeline
+            <Text type="secondary" style={{ fontSize: 11, display: 'block', lineHeight: 1.3 }}>
+              📣 {liveMarketingProspectsCount} Mkt | 🎧 {liveCSProspectsCount} CS ({summary.totalActive} active)
             </Text>
           </Card>
         </Col>
@@ -1284,9 +1404,19 @@ export const DirectorOverviewPage: React.FC = () => {
                 <MarketingConversionFunnel
                   funnelData={marketingMetrics.conversionFunnel}
                   overallConversionRate={marketingMetrics.overallLeadConversionRate}
-                  totalAcquired={marketingMetrics.totalProspectsAcquired}
+                  totalAcquired={liveTotalProspectsCount}
                   totalConverted={summary.totalConverted}
                 />
+
+                {/* Real-time Marketing vs CS Prospects Distribution */}
+                <div style={{ marginBottom: 24 }}>
+                  <ProspectsSourcePieChart
+                    prospects={allProspects}
+                    marketingCount={liveMarketingProspectsCount}
+                    csCount={liveCSProspectsCount}
+                    totalCount={liveTotalProspectsCount}
+                  />
+                </div>
 
                 {/* Active Campaigns Command Section */}
                 <MarketingCampaignsSection
@@ -1347,13 +1477,13 @@ export const DirectorOverviewPage: React.FC = () => {
           },
           {
             key: 'prospects',
-            label: <span><TeamOutlined /> All Marketing Prospects ({allMarketingProspects.length})</span>,
+            label: <span><TeamOutlined /> Marketing Prospects ({liveMarketingProspectsCount})</span>,
             children: (
               <Card
                 title={
                   <Space>
                     <TeamOutlined style={{ color: '#1890ff' }} />
-                    <span>All Marketing Prospects ({allMarketingProspects.length})</span>
+                    <span>Marketing Prospects ({liveMarketingProspectsCount})</span>
                   </Space>
                 }
                 extra={
@@ -1404,8 +1534,75 @@ export const DirectorOverviewPage: React.FC = () => {
                   </Space>
                 }
               >
+                <div style={{ marginBottom: 16 }}>
+                  <Segmented
+                    value={prospectsSourceFilter}
+                    onChange={(val: any) => setProspectsSourceFilter(val)}
+                    options={[
+                      { label: `📣 Marketing Leads (${liveMarketingProspectsCount})`, value: 'marketing' },
+                      { label: `🎧 Customer Service (${liveCSProspectsCount})`, value: 'customer_service' },
+                      { label: `👥 All Sources (${liveTotalProspectsCount})`, value: 'all' },
+                    ]}
+                  />
+                </div>
                 <Table
                   dataSource={filteredDashboardProspects}
+                  rowKey="id"
+                  pagination={{ pageSize: 10 }}
+                  scroll={{ x: 1000 }}
+                  columns={dashboardProspectColumns}
+                />
+              </Card>
+            ),
+          },
+          {
+            key: 'cs-prospects',
+            label: <span><CustomerServiceOutlined /> CS Prospects ({liveCSProspectsCount})</span>,
+            children: (
+              <Card
+                title={
+                  <Space>
+                    <CustomerServiceOutlined style={{ color: '#52c41a' }} />
+                    <span>Customer Service & Front Desk Prospects ({liveCSProspectsCount})</span>
+                  </Space>
+                }
+                extra={
+                  <Space wrap>
+                    <Input
+                      prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
+                      placeholder="Search CS prospects by name, phone, address..."
+                      value={csProspectsSearch}
+                      onChange={(e) => setCsProspectsSearch(e.target.value)}
+                      allowClear
+                      style={{ width: 280 }}
+                    />
+                    <Select
+                      value={csProspectsStatusFilter}
+                      onChange={setCsProspectsStatusFilter}
+                      style={{ width: 160 }}
+                      options={[
+                        { value: 'all', label: 'All Statuses' },
+                        { value: 'new', label: 'New' },
+                        { value: 'meeting_scheduled', label: 'Meeting Scheduled' },
+                        { value: 'meeting_completed', label: 'Meeting Completed' },
+                        { value: 'suspended', label: 'Suspended' },
+                        { value: 'postponed', label: 'Postponed' },
+                        { value: 'canceled', label: 'Canceled' },
+                        { value: 'purchased', label: 'Purchased' },
+                      ]}
+                    />
+                    <Button
+                      type="primary"
+                      icon={<CalendarOutlined />}
+                      onClick={() => handleOpenAppointmentModal()}
+                    >
+                      Book Appointment
+                    </Button>
+                  </Space>
+                }
+              >
+                <Table
+                  dataSource={filteredDashboardCSProspects}
                   rowKey="id"
                   pagination={{ pageSize: 10 }}
                   scroll={{ x: 1000 }}
@@ -2099,7 +2296,7 @@ export const DirectorOverviewPage: React.FC = () => {
                   label: '── MARKETING PROSPECTS ──',
                   options: allProspects.map((p) => ({
                     value: `prospect:${p.id}`,
-                    label: `👤 ${p.firstName} ${p.lastName} · 📞 ${p.phoneNumber || 'No phone'} · [${prospectStatusLabels[p.status] || p.status}]`,
+                    label: `👤 ${p.firstName} ${p.lastName} · 📞 ${p.phoneNumber || 'No phone'} · [${(prospectStatusLabels as any)[p.status] || p.status}]`,
                   })),
                 },
                 {

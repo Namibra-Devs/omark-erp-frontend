@@ -65,6 +65,7 @@ export interface MarketerPerformance {
   meetingCompleted: number;
   postponed: number;
   suspended: number;
+  canceled?: number;
   converted: number;
   conversionRate: number;
   satisfaction?: number;

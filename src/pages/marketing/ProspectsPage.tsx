@@ -31,7 +31,7 @@ import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { prospectStatusLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
-import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation } from '@/api/prospects';
+import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation, getStoredProspects } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import { useAppointmentsQuery, useCreateAppointmentMutation, useUpdateAppointmentMutation } from '@/api/appointments';
 import { useUsersQuery, getUserFullName } from '@/api/users';
@@ -92,22 +92,45 @@ export const ProspectsPage: React.FC = () => {
     setSearchParams(next);
   };
 
-  // Fetch all prospects (pageSize: 10000) for complete, robust marketing dataset
-  const { data: allProspectsData, isLoading, refetch } = useProspectsQuery({ pageSize: 10000 });
-  const allExistingProspects = allProspectsData?.items ?? [];
+  // Multi-source live queries: All prospects, Marketing-specific, and Customer Service (CS) prospects
+  const { data: allProspectsData, isLoading: allLoading, refetch: refetchAll } = useProspectsQuery({ pageSize: 10000 });
+  const { data: mktProspectsData, isLoading: mktLoading, refetch: refetchMkt } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: csProspectsData, isLoading: csLoading, refetch: refetchCs } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  const isLoading = allLoading || mktLoading || csLoading;
+
+  const refetch = React.useCallback(() => {
+    return Promise.all([refetchAll(), refetchMkt(), refetchCs()]);
+  }, [refetchAll, refetchMkt, refetchCs]);
+
+  // Consolidate full live prospects pool from all endpoints & storage without omitting records
+  const allExistingProspects = useMemo(() => {
+    const prospectMap = new Map<string, Prospect>();
+    (allProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    (mktProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    (csProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
+    getStoredProspects().forEach((p) => {
+      if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
+    });
+    return Array.from(prospectMap.values());
+  }, [allProspectsData, mktProspectsData, csProspectsData]);
+
   const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
   const allExistingCustomers = customersData?.items ?? [];
 
   // Source breakdown counts
   const marketingProspectCount = useMemo(() => {
-    return allExistingProspects.filter((p) => p.source === 'marketing' || !p.source).length;
-  }, [allExistingProspects]);
+    const fromList = allExistingProspects.filter((p) => p.source === 'marketing' || !p.source).length;
+    return Math.max(fromList, mktProspectsData?.total ?? 0);
+  }, [allExistingProspects, mktProspectsData?.total]);
 
   const csProspectCount = useMemo(() => {
-    return allExistingProspects.filter((p) => p.source === 'customer_service').length;
-  }, [allExistingProspects]);
+    const fromList = allExistingProspects.filter((p) => p.source === 'customer_service').length;
+    return Math.max(fromList, csProspectsData?.total ?? 0);
+  }, [allExistingProspects, csProspectsData?.total]);
 
-  const totalProspectCount = allExistingProspects.length;
+  const totalProspectCount = useMemo(() => {
+    return Math.max(allExistingProspects.length, marketingProspectCount + csProspectCount, allProspectsData?.total ?? 0);
+  }, [allExistingProspects.length, marketingProspectCount, csProspectCount, allProspectsData?.total]);
 
   // Reset to page 1 whenever a filter changes, so a new, smaller result set
   // doesn't strand the user on a page that no longer exists.

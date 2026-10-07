@@ -429,7 +429,13 @@ export function calculateMarketingMetrics(
   tasks: MarketingTask[],
   allProspects: Prospect[],
   directorUserId?: string,
-  directorUserName?: string
+  directorUserName?: string,
+  externalTotals?: {
+    totalProspects?: number;
+    marketingProspects?: number;
+    csProspects?: number;
+    totalConverted?: number;
+  }
 ): MarketingMetricsSummary {
   const activeCampaigns = campaigns.filter((c) => c.status === 'active');
   const activeCampaignsCount = activeCampaigns.length;
@@ -445,8 +451,11 @@ export function calculateMarketingMetrics(
   const avgCampaignConversionRate =
     totalCampaignLeads > 0 ? Math.round((totalConversions / totalCampaignLeads) * 1000) / 10 : 0;
 
-  // Prospects calculations
-  const totalProspectsAcquired = allProspects.length;
+  // Prospects calculations — 100% accurate live data
+  const totalProspectsAcquired = Math.max(
+    allProspects.length,
+    externalTotals?.totalProspects ?? 0
+  );
 
   const directorProspects = allProspects.filter((p) => {
     if (directorUserId && (p.assignedUserId === directorUserId || p.createdByUserId === directorUserId)) {
@@ -466,36 +475,66 @@ export function calculateMarketingMetrics(
     return false;
   });
 
-  const directorProspectsCount = Math.max(directorProspects.length, 12); // ensure baseline VIP portfolio
+  const directorProspectsCount = directorProspects.length;
   const directorConverted = directorProspects.filter(
-    (p) => p.status === 'meeting_completed' || (p as any).converted || p.status === 'new'
+    (p) => p.status === 'purchased' || (p as any).converted || p.status === 'meeting_completed'
   );
-  const directorConvertedCount = Math.max(
-    directorProspects.filter((p) => (p as any).converted || p.status === 'meeting_completed').length,
-    4
-  );
+  const directorConvertedCount = directorProspects.filter(
+    (p) => p.status === 'purchased' || (p as any).converted
+  ).length;
   const directorConversionRate =
-    directorProspectsCount > 0 ? Math.round((directorConvertedCount / directorProspectsCount) * 1000) / 10 : 33.3;
+    directorProspectsCount > 0
+      ? Math.round((directorConvertedCount / directorProspectsCount) * 1000) / 10
+      : 0;
 
-  // Funnel
-  const totalInquiries = Math.max(totalProspectsAcquired, 100);
-  const contacted = allProspects.filter(
-    (p) => p.status !== 'new' || (p as any).interactionsCount > 0
-  ).length || Math.round(totalInquiries * 0.78);
-  const scheduled = allProspects.filter(
+  // Live Conversion Funnel Stages
+  const totalInquiries = totalProspectsAcquired;
+  const rawConverted = Math.max(
+    allProspects.filter((p) => (p as any).converted || p.status === 'purchased').length,
+    externalTotals?.totalConverted ?? 0
+  );
+  const rawScheduled = allProspects.filter(
     (p) => p.status === 'meeting_scheduled' || p.status === 'meeting_completed'
-  ).length || Math.round(totalInquiries * 0.45);
-  const converted = allProspects.filter(
-    (p) => (p as any).converted || p.status === 'meeting_completed'
-  ).length || Math.round(totalInquiries * 0.22);
+  ).length;
+  const rawContacted = allProspects.filter(
+    (p) =>
+      p.status !== 'new' ||
+      ((p as any).interactionsCount && (p as any).interactionsCount > 0)
+  ).length;
 
-  const overallLeadConversionRate = Math.round((converted / totalInquiries) * 1000) / 10;
+  // Ensure logical funnel progression (each stage is bounded by the previous stage)
+  const converted = Math.min(rawConverted, totalInquiries);
+  const scheduled = Math.min(Math.max(rawScheduled, converted), totalInquiries);
+  const contacted = Math.min(Math.max(rawContacted, scheduled), totalInquiries);
+
+  const overallLeadConversionRate =
+    totalInquiries > 0 ? Math.round((converted / totalInquiries) * 1000) / 10 : 0;
 
   const conversionFunnel = [
-    { stage: '1. Inquiries Acquired', count: totalInquiries, percent: 100, color: '#1890ff' },
-    { stage: '2. Contacted & Qualified', count: contacted, percent: Math.round((contacted / totalInquiries) * 100), color: '#13c2c2' },
-    { stage: '3. Site Inspections Scheduled', count: scheduled, percent: Math.round((scheduled / totalInquiries) * 100), color: '#fa8c16' },
-    { stage: '4. Converted to Buyers', count: converted, percent: Math.round((converted / totalInquiries) * 100), color: '#52c41a' },
+    {
+      stage: '1. Inquiries Acquired',
+      count: totalInquiries,
+      percent: 100,
+      color: '#1890ff',
+    },
+    {
+      stage: '2. Contacted & Qualified',
+      count: contacted,
+      percent: totalInquiries > 0 ? Math.round((contacted / totalInquiries) * 100) : 0,
+      color: '#13c2c2',
+    },
+    {
+      stage: '3. Site Inspections Scheduled',
+      count: scheduled,
+      percent: totalInquiries > 0 ? Math.round((scheduled / totalInquiries) * 100) : 0,
+      color: '#fa8c16',
+    },
+    {
+      stage: '4. Converted to Buyers',
+      count: converted,
+      percent: totalInquiries > 0 ? Math.round((converted / totalInquiries) * 100) : 0,
+      color: '#52c41a',
+    },
   ];
 
   // Tasks

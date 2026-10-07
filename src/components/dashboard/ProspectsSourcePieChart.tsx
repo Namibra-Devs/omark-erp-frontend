@@ -35,6 +35,9 @@ const COLORS = {
 
 interface ProspectsSourcePieChartProps {
   prospects?: Prospect[];
+  marketingCount?: number;
+  csCount?: number;
+  totalCount?: number;
   style?: React.CSSProperties;
   className?: string;
   showNavigationButtons?: boolean;
@@ -42,38 +45,38 @@ interface ProspectsSourcePieChartProps {
 
 export const ProspectsSourcePieChart: React.FC<ProspectsSourcePieChartProps> = ({
   prospects: propProspects,
+  marketingCount: propMarketingCount,
+  csCount: propCsCount,
+  totalCount: propTotalCount,
   style,
   className,
   showNavigationButtons = true,
 }) => {
   const navigate = useNavigate();
 
-  // If propProspects is provided by parent (e.g. AdminDashboard), avoid redundant network queries
-  const shouldFetchProspects = !propProspects || propProspects.length === 0;
-
-  // 1. Query full prospects dataset with safe pageSize (backend provides exact total on page 1)
+  // Query full prospects dataset with safe pageSize (backend provides exact total on page 1)
   const {
     data: allProspectsData,
     isLoading: allLoading,
     refetch: refetchAll,
-  } = useProspectsQuery({ pageSize: 100 }, shouldFetchProspects);
+  } = useProspectsQuery({ pageSize: 100 }, true);
 
-  // 2. Query Marketing-specific and CS-specific prospects for server-side exact counts
+  // Query Marketing-specific and CS-specific prospects for server-side exact counts
   const {
     data: mktProspectsData,
     isLoading: mktLoading,
     refetch: refetchMkt,
-  } = useProspectsQuery({ source: 'marketing', pageSize: 100 }, shouldFetchProspects);
+  } = useProspectsQuery({ source: 'marketing', pageSize: 100 }, true);
 
   const {
     data: csProspectsData,
     isLoading: csLoading,
     refetch: refetchCs,
-  } = useProspectsQuery({ source: 'customer_service', pageSize: 100 }, shouldFetchProspects);
+  } = useProspectsQuery({ source: 'customer_service', pageSize: 100 }, true);
 
-  const isLoading = shouldFetchProspects && (allLoading || mktLoading || csLoading);
+  const isLoading = allLoading || mktLoading || csLoading;
 
-  // 3. Exact Figure Breakdown Calculation (Marketing vs CS)
+  // Exact Figure Breakdown Calculation (Marketing vs CS)
   const { marketingCount, csCount, overallTotal, marketingPercent, csPercent } = useMemo(() => {
     // Collect all unique prospects from all available sources
     const prospectMap = new Map<string, Prospect>();
@@ -93,8 +96,8 @@ export const ProspectsSourcePieChart: React.FC<ProspectsSourcePieChartProps> = (
     const csServerTotal = csProspectsData?.total ?? 0;
     const allServerTotal = allProspectsData?.total ?? 0;
 
-    let mkt = Math.max(mktFromList, mktServerTotal);
-    let cs = Math.max(csFromList, csServerTotal);
+    let mkt = Math.max(mktFromList, mktServerTotal, propMarketingCount ?? 0);
+    let cs = Math.max(csFromList, csServerTotal, propCsCount ?? 0);
 
     // If server has more total prospects than classified mkt + cs, ensure no undercounting
     if (mkt + cs < allServerTotal && cs === 0) {
@@ -102,7 +105,7 @@ export const ProspectsSourcePieChart: React.FC<ProspectsSourcePieChartProps> = (
     }
 
     // Exact figure of adding the CS and Marketing prospects
-    const total = mkt + cs;
+    const total = propTotalCount ? Math.max(propTotalCount, mkt + cs) : mkt + cs;
     const mktPct = total > 0 ? Math.round((mkt / total) * 100) : 0;
     const csPct = total > 0 ? 100 - mktPct : 0;
 
@@ -113,7 +116,7 @@ export const ProspectsSourcePieChart: React.FC<ProspectsSourcePieChartProps> = (
       marketingPercent: mktPct,
       csPercent: csPct,
     };
-  }, [propProspects, allProspectsData, mktProspectsData, csProspectsData]);
+  }, [propProspects, propMarketingCount, propCsCount, propTotalCount, allProspectsData, mktProspectsData, csProspectsData]);
 
   const chartData = useMemo(() => {
     if (overallTotal === 0) {
