@@ -33,9 +33,9 @@ import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
-import { AnalyticsSection } from './admin/components/AnalyticsSection';
+import { AccountsAnalyticsSection } from './accounts/AccountsAnalyticsSection';
+import { BankReconciliationSection } from './accounts/BankReconciliationSection';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { useUnmatchedBankEntriesQuery, useImportBankStatementMutation, type BankReconciliationSummary } from '@/api/bankReconciliation';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import dayjs from 'dayjs';
 
@@ -81,10 +81,6 @@ export const AccountsDashboardPage: React.FC = () => {
   const createExpenseMutation = useCreateExpenseMutation();
   const decisionMutation = useExpenseDecisionMutation();
 
-  // ── Bank Reconciliation API ────────────────────────────────────────────────
-  const { data: unmatchedBankEntries = [], refetch: refetchUnmatchedBank } = useUnmatchedBankEntriesQuery();
-  const importBankMutation = useImportBankStatementMutation();
-
   // ── UI State ─────────────────────────────────────────────────────────────
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
@@ -94,9 +90,6 @@ export const AccountsDashboardPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [addExpenseModal, setAddExpenseModal] = useState(false);
   const [expenseForm] = Form.useForm();
-  const [importBankModal, setImportBankModal] = useState(false);
-  const [bankForm] = Form.useForm();
-  const [reconciliationResult, setReconciliationResult] = useState<BankReconciliationSummary | null>(null);
 
   const { branches } = useBranchContext();
   const rawExpenses = expensesData?.items ?? [];
@@ -313,42 +306,7 @@ export const AccountsDashboardPage: React.FC = () => {
     },
   ];
 
-  const dueSoonColumns = [
-    {
-      title: 'Customer Name',
-      dataIndex: 'name',
-      key: 'name',
-      render: (name: string, record: any) => (
-        <a onClick={() => navigate(`/customers/${record.customerId}`)}>
-          <Space><UserOutlined />{name}</Space>
-        </a>
-      ),
-    },
-    {
-      title: 'Amount Due',
-      dataIndex: 'amountMinor',
-      key: 'amountMinor',
-      render: (value: number) => <MoneyText minor={value} />,
-    },
-    {
-      title: 'Due Date',
-      dataIndex: 'dueDate',
-      key: 'dueDate',
-      render: (date: string) => {
-        const daysUntil = Math.ceil((new Date(date).getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-        return <Tag color={daysUntil <= 2 ? 'red' : daysUntil <= 5 ? 'orange' : 'blue'}>{daysUntil <= 0 ? 'Overdue' : `${daysUntil} days`}</Tag>;
-      },
-    },
-    {
-      title: 'Action',
-      key: 'action',
-      render: (_: any, record: any) => (
-        <Button type="link" size="small" onClick={() => { setSelectedCustomer(record); setAddPaymentModal(true); }}>
-          Record Payment
-        </Button>
-      ),
-    },
-  ];
+
 
   if (dashboardLoading || paymentPlansLoading) {
     return (
@@ -419,7 +377,7 @@ export const AccountsDashboardPage: React.FC = () => {
 
       {/* ── Stats Cards ──────────────────────────────────────────────────── */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={8}>
           <Card>
             <Statistic
               title="Active Payment Plans"
@@ -429,7 +387,7 @@ export const AccountsDashboardPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={8}>
           <Card>
             <Statistic
               title="Outstanding Balance"
@@ -440,7 +398,7 @@ export const AccountsDashboardPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} sm={12} lg={6}>
+        <Col xs={24} sm={8}>
           <Card>
             <Statistic
               title="Monthly Revenue"
@@ -448,18 +406,6 @@ export const AccountsDashboardPage: React.FC = () => {
               prefix="GHS"
               precision={2}
               valueStyle={{ color: '#722ed1' }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card loading={analyticsLoading}>
-            <Statistic
-              title="Conversion Rate (12mo)"
-              value={analyticsData?.conversionRate ?? 0}
-              suffix="%"
-              precision={1}
-              prefix={<RiseOutlined />}
-              valueStyle={{ color: tokens.primary }}
             />
           </Card>
         </Col>
@@ -491,11 +437,11 @@ export const AccountsDashboardPage: React.FC = () => {
         ))}
       </Row>
 
-      {/* ── Defaulters / Due Soon ───────────────────────────────────────── */}
+      {/* ── Defaulters / Delinquent Accounts ────────────────────────────── */}
       <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col xs={24} lg={12}>
+        <Col xs={24}>
           <Card
-            title={<span><WarningOutlined style={{ color: '#ff4d4f', marginRight: 8 }} />Defaulters<Badge count={dashboard.defaulters.length} style={{ marginLeft: 8 }} /></span>}
+            title={<span><WarningOutlined style={{ color: '#ff4d4f', marginRight: 8 }} />Defaulters & Delinquent Accounts<Badge count={dashboard.defaulters.length} style={{ marginLeft: 8 }} /></span>}
           >
             {dashboard.defaulters.length > 0 ? (
               <Table columns={defaulterColumns} dataSource={dashboard.defaulters} rowKey="customerId" pagination={{ pageSize: 5 }} size="small" />
@@ -504,31 +450,20 @@ export const AccountsDashboardPage: React.FC = () => {
             )}
           </Card>
         </Col>
-        <Col xs={24} lg={12}>
-          <Card
-            title={<span><ClockCircleOutlined style={{ color: '#faad14', marginRight: 8 }} />Due Soon<Badge count={dashboard.dueSoon.length} style={{ marginLeft: 8 }} /></span>}
-          >
-            {dashboard.dueSoon.length > 0 ? (
-              <Table columns={dueSoonColumns} dataSource={dashboard.dueSoon} rowKey="customerId" pagination={{ pageSize: 5 }} size="small" />
-            ) : (
-              <Empty description="No payments due soon" />
-            )}
-          </Card>
-        </Col>
       </Row>
 
-      {/* ── Analytics ── */}
-      <Title level={4} style={{ marginBottom: 16 }}>Revenue Analytics</Title>
+      {/* ── Revenue Analytics & Marketer Performance ── */}
+      <Title level={4} style={{ marginBottom: 16 }}>Revenue Analytics & Marketer Performance</Title>
       <div style={{ marginBottom: 24 }}>
-        <AnalyticsSection />
+        <AccountsAnalyticsSection branchId={user?.branchId} />
       </div>
 
-      {/* ── Finance tools ── */}
+      {/* ── Finance Tools ── */}
       <Title level={4} style={{ marginBottom: 16 }}>
         Finance Tools
       </Title>
       <Row gutter={16} style={{ marginBottom: 24 }}>
-        <Col xs={24} lg={8}>
+        <Col xs={24} lg={12}>
           <Card
             title={
               <Space>
@@ -602,7 +537,7 @@ export const AccountsDashboardPage: React.FC = () => {
             />
           </Card>
         </Col>
-        <Col xs={24} lg={8}>
+        <Col xs={24} lg={12}>
           <Card
             title={<span><IdcardOutlined style={{ marginRight: 8 }} />Bonuses & Salaries</span>}
             extra={<Button size="small" onClick={() => navigate('/accounts/payroll')}>Manage</Button>}
@@ -616,38 +551,15 @@ export const AccountsDashboardPage: React.FC = () => {
             </Text>
           </Card>
         </Col>
-        <Col xs={24} lg={8}>
-          <Card
-            title={<span><BankOutlined style={{ marginRight: 8 }} />Bank Reconciliation</span>}
-            extra={<Button size="small" type="primary" onClick={() => { setReconciliationResult(null); bankForm.resetFields(); setImportBankModal(true); }}>Import Statement</Button>}
-          >
-            <Statistic
-              title="Unmatched Statement Entries"
-              value={unmatchedBankEntries.length}
-              valueStyle={{ color: unmatchedBankEntries.length > 0 ? '#faad14' : '#52c41a' }}
-            />
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 8 }}>
-              Entries imported from bank statements requiring payment reconciliation.
-            </Text>
-            {unmatchedBankEntries.length > 0 && (
-              <List
-                size="small"
-                style={{ marginTop: 12 }}
-                dataSource={unmatchedBankEntries.slice(0, 3)}
-                renderItem={(item: any) => (
-                  <List.Item>
-                    <Space direction="vertical" size={0}>
-                      <Text style={{ fontSize: 12 }}>{item.description || item.reference || 'Bank Entry'}</Text>
-                      <Text type="secondary" style={{ fontSize: 10 }}>{item.date?.split('T')[0]}</Text>
-                    </Space>
-                    <Text strong style={{ fontSize: 12 }}>GHS {(item.amountMinor / 100).toLocaleString()}</Text>
-                  </List.Item>
-                )}
-              />
-            )}
-          </Card>
-        </Col>
       </Row>
+
+      {/* ── Bank Reconciliation & Statement Verification ── */}
+      <Title level={4} style={{ marginBottom: 16 }}>
+        Bank Reconciliation & Statement Verification
+      </Title>
+      <div style={{ marginBottom: 24 }}>
+        <BankReconciliationSection />
+      </div>
 
       {/* ── Record Payment Modal ─────────────────────────────────────────── */}
       <Modal
@@ -918,114 +830,7 @@ export const AccountsDashboardPage: React.FC = () => {
         </Form>
       </Modal>
 
-      {/* ── Import Bank Statement Modal ───────────────────────────────────── */}
-      <Modal
-        title="Import & Reconcile Bank Statement"
-        open={importBankModal}
-        onCancel={() => { setImportBankModal(false); bankForm.resetFields(); setReconciliationResult(null); }}
-        footer={null}
-        width={640}
-      >
-        {reconciliationResult ? (
-          <div>
-            <Alert
-              type="success"
-              showIcon
-              message="Bank Statement Reconciliation Complete"
-              description={`Total Imported: ${reconciliationResult.totalImported} | Matched: ${reconciliationResult.matchedCount} | Unmatched: ${reconciliationResult.unmatchedCount}`}
-              style={{ marginBottom: 16 }}
-            />
-            {reconciliationResult.matched.length > 0 && (
-              <div style={{ marginBottom: 16 }}>
-                <Text strong>Matched Payments ({reconciliationResult.matched.length}):</Text>
-                <List
-                  size="small"
-                  bordered
-                  dataSource={reconciliationResult.matched}
-                  renderItem={(m) => (
-                    <List.Item>
-                      <Space direction="vertical" size={0}>
-                        <Text strong>Ref: {m.transaction.reference || m.payment.reference || 'N/A'}</Text>
-                        <Text type="secondary" style={{ fontSize: 11 }}>Date: {m.payment.paidOn?.split('T')[0]}</Text>
-                      </Space>
-                      <Tag color="green">GHS {(m.payment.amountMinor / 100).toLocaleString()}</Tag>
-                    </List.Item>
-                  )}
-                />
-              </div>
-            )}
-            <Button
-              type="primary"
-              onClick={() => {
-                setReconciliationResult(null);
-                bankForm.resetFields();
-              }}
-            >
-              Import Another
-            </Button>
-          </div>
-        ) : (
-          <Form
-            form={bankForm}
-            layout="vertical"
-            onFinish={async (values) => {
-              try {
-                let transactions: any[] = [];
-                if (values.jsonText) {
-                  transactions = JSON.parse(values.jsonText);
-                } else {
-                  transactions = [
-                    {
-                      date: values.date ? values.date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-                      amountMinor: Math.round((values.amountGHS || 0) * 100),
-                      reference: values.reference || undefined,
-                      description: values.description || undefined,
-                    },
-                  ];
-                }
-                const summary = await importBankMutation.mutateAsync({ transactions });
-                setReconciliationResult(summary);
-                message.success(`Processed statement! ${summary.matchedCount} matched, ${summary.unmatchedCount} unmatched.`);
-                refetchUnmatchedBank();
-              } catch (error: any) {
-                message.error(error?.error?.message || error?.message || 'Failed to import bank statement');
-              }
-            }}
-            initialValues={{ date: dayjs() }}
-          >
-            <Form.Item name="date" label="Transaction Date">
-              <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-            </Form.Item>
-            <Form.Item name="amountGHS" label="Amount (GHS)" rules={[{ required: true, message: 'Please enter amount' }]}>
-              <InputNumber style={{ width: '100%' }} prefix="GHS" precision={2} min={0.01} placeholder="1200.00" />
-            </Form.Item>
-            <Form.Item name="reference" label="Reference Code">
-              <Input placeholder="e.g. MOM-88321" />
-            </Form.Item>
-            <Form.Item name="description" label="Description">
-              <Input placeholder="e.g. MTN Mobile Money Cashin" />
-            </Form.Item>
 
-            <Divider>OR Paste JSON Array of Transactions</Divider>
-
-            <Form.Item name="jsonText" label="JSON Transactions">
-              <Input.TextArea
-                rows={4}
-                placeholder={`[{"date": "2026-08-20T00:00:00.000Z", "amountMinor": 120000, "reference": "MOM-88321", "description": "MTN Cashin GHS 1200"}]`}
-              />
-            </Form.Item>
-
-            <Form.Item>
-              <Space>
-                <Button type="primary" htmlType="submit" loading={importBankMutation.isPending}>
-                  Import & Reconcile
-                </Button>
-                <Button onClick={() => setImportBankModal(false)}>Cancel</Button>
-              </Space>
-            </Form.Item>
-          </Form>
-        )}
-      </Modal>
 
       <AddProspectModal
         open={addProspectModal}
