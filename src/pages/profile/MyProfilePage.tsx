@@ -52,6 +52,8 @@ import { useDeedsQuery } from '@/api/deeds';
 import { usePayrollQuery, type PayrollRecord } from '@/api/payroll';
 import { useBranchesQuery } from '@/api/branches';
 import { getUserBranchRoleTitle } from '@/utils/branchIsolation';
+import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import type { Role } from '@/types';
 import { useBonusesQuery, type StaffBonusRecord } from '@/api/bonuses';
 import { useAttendanceQuery } from '@/api/attendance';
 import { useStaffLeaveRequestsQuery } from '@/api/leaves';
@@ -73,7 +75,21 @@ export const MyProfilePage: React.FC = () => {
   const { user, hasRole, refreshUser } = useAuth();
   const isAdmin = hasRole(['admin']);
   const { data: branches = [] } = useBranchesQuery();
-  const branchRoleTitle = getUserBranchRoleTitle(user, branches);
+  const storedAssignment = user?.id ? getStoredUserAssignment(user.id) : undefined;
+  const isMarketingDirector = user?.role === 'marketing_director' || storedAssignment?.role === 'marketing_director';
+
+  const effectiveUser = useMemo(() => {
+    if (!user) return null;
+    if (isMarketingDirector) {
+      return { ...user, role: 'marketing_director' as Role };
+    }
+    return user;
+  }, [user, isMarketingDirector]);
+
+  const rawBranchRoleTitle = getUserBranchRoleTitle(effectiveUser, branches);
+  const branchRoleTitle = isMarketingDirector
+    ? rawBranchRoleTitle.replace(/marketing\s+staff/gi, 'Marketing Director')
+    : rawBranchRoleTitle;
 
   // Modals
   const [editModal, setEditModal] = useState(false);
@@ -91,7 +107,6 @@ export const MyProfilePage: React.FC = () => {
   // Queries enabled for all staff
   const canSeeDeeds = hasRole(['admin', 'secretary', 'customer_service']);
 
-  const isMarketingDirector = user?.role === 'marketing_director';
   const { data: usersData } = useUsersQuery();
   const allUsers = usersData?.items ?? [];
 
@@ -456,7 +471,7 @@ export const MyProfilePage: React.FC = () => {
           <Col flex="auto">
             <Title level={3} style={{ margin: 0 }}>{user.firstName} {user.lastName}</Title>
             <Space size={12} style={{ marginTop: 4, flexWrap: 'wrap' }}>
-              <Tag color="blue" style={{ fontSize: 13, padding: '4px 12px', borderRadius: 12 }}>{branchRoleTitle}</Tag>
+              <Tag color={isMarketingDirector ? 'purple' : 'blue'} style={{ fontSize: 13, padding: '4px 12px', borderRadius: 12 }}>{branchRoleTitle}</Tag>
               <Text type="secondary" style={{ fontSize: 12 }}>Staff since {dayjs(user.createdAt).format('MMM YYYY')}</Text>
               <Tag color="default" style={{ borderRadius: 6, fontSize: 11, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
                 <IdcardOutlined style={{ marginRight: 4, color: '#64748b' }} />

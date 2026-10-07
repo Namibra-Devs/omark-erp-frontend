@@ -1,6 +1,5 @@
-// src/components/layout/TopHeader.tsx
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { Layout, Space, Typography, Tag, Dropdown, Badge, Button, message, List, Spin, Empty, Drawer, Tabs, Tooltip } from 'antd';
 import {
   UserOutlined,
@@ -22,6 +21,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { useBranchesQuery } from '@/api/branches';
 import { getUserBranchRoleTitle } from '@/utils/branchIsolation';
+import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import type { Role } from '@/types';
 import { useUserQuery } from '@/api/users';
 import { useNotificationsQuery, type NotificationLog } from '@/api/notifications';
 import { StaffClockWidget } from '@/components/attendance/StaffClockWidget';
@@ -41,6 +42,7 @@ const { Text } = Typography;
 
 export const TopHeader: React.FC = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user, logout, hasRole } = useAuth();
   const [notificationDrawer, setNotificationDrawer] = useState(false);
   const [activeCategory, setActiveCategory] = useState<string>('all');
@@ -49,8 +51,49 @@ export const TopHeader: React.FC = () => {
   const { data: userData, isLoading: userLoading } = useUserQuery(user?.id || '');
   const { data: branches = [] } = useBranchesQuery();
 
-  const currentUser = userData || user;
-  const branchRoleTitle = getUserBranchRoleTitle(currentUser, branches);
+  const isMarketingDirectorDashboard = location.pathname.startsWith('/marketing/overview');
+  const storedAssignment = user?.id ? getStoredUserAssignment(user.id) : undefined;
+
+  // Detect if current session or viewing context represents Marketing Director
+  const userRole = (user?.role || '') as string;
+  const isMarketingDirector = Boolean(
+    userRole === 'marketing_director' ||
+    (userData?.role as string) === 'marketing_director' ||
+    (storedAssignment?.role as string) === 'marketing_director' ||
+    (isMarketingDirectorDashboard && (!userRole || userRole === 'marketing_staff'))
+  );
+
+  const currentUser = useMemo(() => {
+    if (!user && !userData) return null;
+    const base = userData ? { ...(user || {}), ...userData } : user;
+    if (!base) return null;
+
+    const storedRole = storedAssignment?.role as Role | undefined;
+    let resolvedRole: Role = storedRole || base.role;
+
+    if (isMarketingDirector) {
+      resolvedRole = 'marketing_director';
+    }
+
+    return {
+      ...base,
+      role: resolvedRole,
+    };
+  }, [user, userData, storedAssignment?.role, isMarketingDirector]);
+
+  const rawBranchRoleTitle = getUserBranchRoleTitle(currentUser, branches);
+
+  const branchRoleTitle = useMemo(() => {
+    if (isMarketingDirector || isMarketingDirectorDashboard) {
+      if (rawBranchRoleTitle && rawBranchRoleTitle.toLowerCase().includes('marketing staff')) {
+        return rawBranchRoleTitle.replace(/marketing\s+staff/gi, 'Marketing Director');
+      }
+      if (!rawBranchRoleTitle || rawBranchRoleTitle.toLowerCase() === 'staff') {
+        return 'Marketing Director';
+      }
+    }
+    return rawBranchRoleTitle;
+  }, [rawBranchRoleTitle, isMarketingDirector, isMarketingDirectorDashboard]);
 
   const [systemNotifications, setSystemNotifications] = useState<SystemNotification[]>(() =>
     getStoredNotifications(user?.id, user?.role)
@@ -347,7 +390,10 @@ export const TopHeader: React.FC = () => {
             </Badge>
 
             {/* Role Tag */}
-            <Tag color="blue" style={{ margin: 0, padding: '4px 12px', borderRadius: 12, fontWeight: 500 }}>
+            <Tag
+              color={isMarketingDirector || isMarketingDirectorDashboard ? 'purple' : 'blue'}
+              style={{ margin: 0, padding: '4px 12px', borderRadius: 12, fontWeight: 500 }}
+            >
               {branchRoleTitle}
             </Tag>
             
