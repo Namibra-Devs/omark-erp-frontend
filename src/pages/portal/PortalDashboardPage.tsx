@@ -27,6 +27,20 @@ export const PortalDashboardPage: React.FC = () => {
     (d) => d.category === 'sales_agreement' || Boolean(d.metadata?.agreementData)
   );
 
+  const [holidayAnnouncement, setHolidayAnnouncement] = React.useState<{
+    title: string;
+    message: string;
+    date: string;
+    broadcastBy: string;
+  } | null>(() => {
+    try {
+      const stored = localStorage.getItem('omark_portal_holiday_announcement');
+      return stored ? JSON.parse(stored) : null;
+    } catch {
+      return null;
+    }
+  });
+
   if (isLoading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '60vh' }}>
@@ -40,6 +54,40 @@ export const PortalDashboardPage: React.FC = () => {
       <Title level={3} style={{ fontSize: 'clamp(18px, 4vw, 24px)', marginBottom: 16 }}>
         Welcome back, {customer?.firstName || 'Valued Customer'}
       </Title>
+
+      {holidayAnnouncement && (
+        <Alert
+          message={
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 16 }}>🎉</span>
+              <strong>{holidayAnnouncement.title}</strong>
+            </div>
+          }
+          description={
+            <div style={{ marginTop: 4 }}>
+              <p style={{ margin: '4px 0', whiteSpace: 'pre-wrap', color: '#1e293b' }}>
+                {holidayAnnouncement.message.replace(/{CustomerName}/g, customer?.firstName || 'Valued Client')}
+              </p>
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 4 }}>
+                Issued by {holidayAnnouncement.broadcastBy} • Omark Real Estate & Construction
+              </div>
+            </div>
+          }
+          type="success"
+          showIcon={false}
+          closable
+          onClose={() => {
+            setHolidayAnnouncement(null);
+            // keep stored or let user dismiss for current session
+          }}
+          style={{
+            marginBottom: 16,
+            borderRadius: 8,
+            border: '1px solid #bbf7d0',
+            background: '#f0fdf4',
+          }}
+        />
+      )}
 
       {activeAgreement && (
         <Alert

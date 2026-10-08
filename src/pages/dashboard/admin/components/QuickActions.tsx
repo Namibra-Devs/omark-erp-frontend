@@ -11,6 +11,7 @@ import {
   PlusOutlined,
   BellOutlined,
   IdcardOutlined,
+  NotificationOutlined,
 } from '@ant-design/icons';
 
 const { Text } = Typography;
@@ -23,6 +24,7 @@ interface QuickActionsProps {
   onAddCustomer?: () => void;
   onRoleExpenses?: () => void;
   onClientCheckIns?: () => void;
+  onBroadcastOutreach?: () => void;
   activeCheckInsCount?: number;
   onRefresh?: () => void;
   onSettings?: () => void;
@@ -39,6 +41,7 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
   onAddCustomer,
   onRoleExpenses,
   onClientCheckIns,
+  onBroadcastOutreach,
   activeCheckInsCount,
   onRefresh,
   onSettings,
@@ -73,6 +76,15 @@ export const QuickActions: React.FC<QuickActionsProps> = ({
       color: '#13c2c2',
       bg: '#e6fffb',
       onClick: onAddCustomer,
+    }] : []),
+    ...(onBroadcastOutreach ? [{
+      key: 'broadcast-outreach',
+      icon: <NotificationOutlined style={{ fontSize: 20 }} />,
+      label: 'Holiday Outreach',
+      description: 'SMS & in-app broadcasts',
+      color: '#0284c7',
+      bg: '#e0f2fe',
+      onClick: onBroadcastOutreach,
     }] : []),
     ...(onClientCheckIns ? [{
       key: 'client-check-ins',

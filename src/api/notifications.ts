@@ -48,9 +48,15 @@ export interface SendTestSMSResult {
   providerMessageId?: string;
 }
 
+export type BroadcastAudience = 'customers' | 'prospects' | 'staff' | 'custom';
+
 export interface SendBroadcastSMSPayload {
-  recipientPhoneNumbers: string[];
-  messageText: string;
+  audience?: BroadcastAudience;
+  message?: string;
+  recipientPhoneNumbers?: string[];
+  phoneNumbers?: string[];
+  recipients?: string[];
+  messageText?: string;
   senderId?: string;
 }
 
@@ -141,7 +147,21 @@ export function useSendBroadcastSMSMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (payload: SendBroadcastSMSPayload) => {
-      const res = await apiClient.post<ApiResponse<any>>('/notifications/send-sms', payload);
+      const audience: BroadcastAudience = payload.audience || 'custom';
+      const msg = (payload.message || payload.messageText || '').trim().slice(0, 480);
+      const recipientPhones = payload.recipientPhoneNumbers || payload.phoneNumbers || payload.recipients || [];
+
+      const body = {
+        audience,
+        message: msg,
+        messageText: msg,
+        recipientPhoneNumbers: recipientPhones,
+        phoneNumbers: recipientPhones,
+        recipients: recipientPhones,
+        senderId: payload.senderId || 'OMARK',
+      };
+
+      const res = await apiClient.post<ApiResponse<any>>('/notifications/send-sms', body);
       return unwrapData(res);
     },
     onSuccess: () => {

@@ -17,12 +17,14 @@ import {
   DollarOutlined,
   CalendarOutlined,
   IdcardOutlined,
+  NotificationOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAdminDashboard } from './admin/hooks/useAdminDashboard';
 import { StatsCards } from './admin/components/StatsCards';
 import { QuickActions } from './admin/components/QuickActions';
 import { RecentActivity } from './admin/components/RecentActivity';
+import { UnifiedBroadcastCenter } from './admin/components/UnifiedBroadcastCenter';
 import { UserManagement } from './admin/components/UserManagement';
 import { AddUserModal } from './admin/components/AddUserModal';
 import { EditUserDrawer } from './admin/components/EditUserDrawer';
@@ -311,6 +313,16 @@ export const AdminDashboardPage: React.FC = () => {
         />
       ),
     },
+    {
+      key: 'broadcast-outreach',
+      label: (
+        <span className="adp-tab-label">
+          <NotificationOutlined />
+          Holiday & Outreach Broadcasts
+        </span>
+      ),
+      children: <UnifiedBroadcastCenter />,
+    },
     ...(canViewAnalytics
       ? [
           {
@@ -417,6 +429,14 @@ export const AdminDashboardPage: React.FC = () => {
             </Tooltip>
 
             <Button
+              icon={<NotificationOutlined style={{ color: '#0284c7' }} />}
+              onClick={() => setActiveTab('broadcast-outreach')}
+              style={{ borderRadius: 8, borderColor: '#0284c7', color: '#0284c7', fontWeight: 600 }}
+            >
+              Holiday Broadcast
+            </Button>
+
+            <Button
               icon={<UserAddOutlined />}
               onClick={() => setAddProspectModal(true)}
               style={{ borderRadius: 8 }}
@@ -468,6 +488,7 @@ export const AdminDashboardPage: React.FC = () => {
           onExport={() => setExportModal(true)}
           onAddProspect={() => setAddProspectModal(true)}
           onAddCustomer={() => setAddCustomerModal(true)}
+          onBroadcastOutreach={() => setActiveTab('broadcast-outreach')}
           onRoleExpenses={() => setActiveTab('role-expenses')}
           onClientCheckIns={() => setActiveTab('client-check-ins')}
           activeCheckInsCount={activeVisitorsCount}

@@ -153,7 +153,7 @@ const DEFAULT_BROADCASTS: BroadcastRecord[] = [
     segment: 'All Active Prospects',
     recipientCount: 68,
     messageText:
-      'Namibra Properties: Join our complimentary executive bus this Saturday 9AM for site inspection at East Legon Hills. Refreshments provided. Call 0244123456 to confirm seat.',
+      'Omark Real Estate: Join our complimentary executive bus this Saturday 9AM for site inspection at East Legon Hills. Refreshments provided. Call 0244123456 to confirm seat.',
     sentAt: dayjs().subtract(3, 'day').format('YYYY-MM-DD HH:mm'),
     status: 'delivered',
     senderName: 'Marketing Director',
@@ -165,7 +165,7 @@ const DEFAULT_BROADCASTS: BroadcastRecord[] = [
     segment: 'Inspected Leads (Pending Deposit)',
     recipientCount: 24,
     messageText:
-      'Exclusive Q4 Offer: Reserve your serviced plot before month-end and receive free title deed processing + indenture (worth GHS 8,500). Contact your Namibra advisor today!',
+      'Exclusive Q4 Offer: Reserve your serviced plot before month-end and receive free title deed processing + indenture (worth GHS 8,500). Contact your Omark Real Estate advisor today!',
     sentAt: dayjs().subtract(7, 'day').format('YYYY-MM-DD HH:mm'),
     status: 'delivered',
     senderName: 'Marketing Director',
@@ -196,7 +196,16 @@ export const MarketingDashboardPage: React.FC = () => {
   const [broadcasts, setBroadcasts] = useState<BroadcastRecord[]>(() => {
     try {
       const stored = localStorage.getItem('omark_marketing_broadcasts');
-      return stored ? JSON.parse(stored) : DEFAULT_BROADCASTS;
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed.map((b: BroadcastRecord) => ({
+            ...b,
+            messageText: b.messageText ? b.messageText.replace(/namibra(\s+properties)?/gi, 'Omark Real Estate') : b.messageText,
+          }));
+        }
+      }
+      return DEFAULT_BROADCASTS;
     } catch {
       return DEFAULT_BROADCASTS;
     }
@@ -570,10 +579,15 @@ export const MarketingDashboardPage: React.FC = () => {
         .filter((ph): ph is string => Boolean(ph && ph.length > 5));
 
       if (values.channel === 'sms' && recipientPhones.length > 0) {
+        const msg = values.messageText.trim().slice(0, 480);
         await sendBroadcastSMSMutation.mutateAsync({
+          audience: 'prospects',
+          message: msg,
+          messageText: msg,
           recipientPhoneNumbers: recipientPhones,
-          messageText: values.messageText,
-          senderId: 'NAMIBRA',
+          phoneNumbers: recipientPhones,
+          recipients: recipientPhones,
+          senderId: 'OMARK',
         });
       }
 
@@ -2602,7 +2616,7 @@ export const MarketingDashboardPage: React.FC = () => {
             segment: 'all',
             title: 'Weekend Site Visit & Q4 Promotion',
             messageText:
-              'Namibra Properties: Complimentary executive bus departs this Saturday 9AM for site inspection at East Legon Hills. Special discount on plot registration. Call 0244123456 to reserve your seat!',
+              'Omark Real Estate: Complimentary executive bus departs this Saturday 9AM for site inspection at East Legon Hills. Special discount on plot registration. Call 0244123456 to reserve your seat!',
           }}
         >
           <Form.Item name="title" label="Campaign Title / Subject" rules={[{ required: true }]}>
@@ -2675,7 +2689,7 @@ export const MarketingDashboardPage: React.FC = () => {
             <Row justify="space-between" align="middle">
               <Col>
                 <Title level={3} style={{ margin: 0, textTransform: 'uppercase', letterSpacing: 1 }}>
-                  NAMIBRA PROPERTIES & DEVELOPMENT
+                  OMARK REAL ESTATE & CONSTRUCTION
                 </Title>
                 <Text type="secondary" style={{ fontSize: 13 }}>
                   OMARK ERP • Marketing Directorate Executive Performance Dossier
