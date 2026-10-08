@@ -51,7 +51,9 @@ export const TopHeader: React.FC = () => {
   const { data: userData, isLoading: userLoading } = useUserQuery(user?.id || '');
   const { data: branches = [] } = useBranchesQuery();
 
-  const isMarketingDirectorDashboard = location.pathname.startsWith('/marketing/overview');
+  const isMarketingDirectorDashboard =
+    location.pathname.startsWith('/marketing/overview') ||
+    location.pathname.startsWith('/marketing/dashboard');
   const storedAssignment = user?.id ? getStoredUserAssignment(user.id) : undefined;
 
   // Detect if current session or viewing context represents Marketing Director

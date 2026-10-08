@@ -191,6 +191,7 @@ export const NavMenu: React.FC = () => {
   // Get the current selected key based on path
   const getSelectedKey = () => {
     const path = location.pathname;
+    if (path.startsWith('/marketing/dashboard')) return '/marketing/dashboard';
     if (path.startsWith('/marketing/overview')) return '/marketing/overview';
     if (path.startsWith('/marketing/prospects')) return '/marketing/prospects';
     if (path.startsWith('/cs/check-ins')) return '/cs/check-ins';
@@ -236,6 +237,12 @@ export const NavMenu: React.FC = () => {
         icon: <DollarOutlined />,
         label: 'Accounts Dashboard',
       });
+      // Admin access to Marketing Dashboard
+      items.push({
+        key: '/marketing/dashboard',
+        icon: <BarChartOutlined />,
+        label: 'Marketing Dashboard',
+      });
     } else if (hasRole(['secretary'])) {
       items.push({
         key: '/dashboard',
@@ -254,6 +261,12 @@ export const NavMenu: React.FC = () => {
         key: branchRoute,
         icon: <DashboardOutlined />,
         label: 'Branch Dashboard',
+      });
+    } else if (hasRole(['marketing_director'])) {
+      items.push({
+        key: '/marketing/dashboard',
+        icon: <DashboardOutlined />,
+        label: 'Dashboard',
       });
     }
 
@@ -285,9 +298,9 @@ export const NavMenu: React.FC = () => {
     // Marketing section
     if (hasRole(['marketing_director', 'admin', 'branch_manager'])) {
       items.push({
-        key: '/marketing/overview',
+        key: '/marketing/dashboard',
         icon: <BarChartOutlined />,
-        label: 'Director Overview',
+        label: 'Director Dashboard',
       });
     }
 

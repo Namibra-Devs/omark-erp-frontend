@@ -40,6 +40,7 @@ const AdminDashboardPage = React.lazy(() => import('@/pages/dashboard/AdminDashb
 // Prospect Pages (Lazy)
 const ProspectsPage = React.lazy(() => import('@/pages/marketing/ProspectsPage').then(m => ({ default: m.ProspectsPage })));
 const ProspectDetailPage = React.lazy(() => import('@/pages/marketing/ProspectDetailPage').then(m => ({ default: m.ProspectDetailPage })));
+const MarketingDashboardPage = React.lazy(() => import('@/pages/marketing/MarketingDashboardPage').then(m => ({ default: m.MarketingDashboardPage })));
 const DirectorOverviewPage = React.lazy(() => import('@/pages/marketing/DirectorOverviewPage').then(m => ({ default: m.DirectorOverviewPage })));
 const CSProspectsPage = React.lazy(() => import('@/pages/cs/CSProspectsPage').then(m => ({ default: m.CSProspectsPage })));
 
@@ -119,7 +120,7 @@ const RoleRedirect: React.FC = () => {
     admin: '/admin/dashboard',
     branch_manager: user.branchId ? `/branches/${user.branchId}` : '/branches',
     marketing_staff: '/marketing/prospects',
-    marketing_director: '/marketing/overview',
+    marketing_director: '/marketing/dashboard',
     customer_service: '/cs/prospects',
     secretary: '/dashboard',
     accounts: '/accounts/dashboard',
@@ -200,12 +201,22 @@ const AppRoutes: React.FC = () => {
         
         {/* ===== PROSPECT ROUTES ===== */}
         
+        {/* Marketing Director Standalone Dashboard - /marketing/dashboard */}
+        <Route 
+          path="/marketing/dashboard" 
+          element={
+            <ProtectedRoute allowedRoles={['marketing_director', 'admin', 'secretary', 'branch_manager']}>
+              <MarketingDashboardPage />
+            </ProtectedRoute>
+          } 
+        />
+
         {/* Marketing Director Overview - /marketing/overview */}
         <Route 
           path="/marketing/overview" 
           element={
             <ProtectedRoute allowedRoles={['marketing_director', 'admin', 'secretary', 'branch_manager']}>
-              <DirectorOverviewPage />
+              <MarketingDashboardPage />
             </ProtectedRoute>
           } 
         />

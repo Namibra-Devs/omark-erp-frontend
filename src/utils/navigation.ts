@@ -4,6 +4,7 @@ export const prospectRoutes = {
   list: '/marketing/prospects',
   detail: (id: string) => `/marketing/prospects/${id}`,
   overview: '/marketing/overview',
+  dashboard: '/marketing/dashboard',
   
   // CS prospects
   csList: '/cs/prospects',

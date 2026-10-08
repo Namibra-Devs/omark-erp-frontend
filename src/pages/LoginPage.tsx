@@ -32,7 +32,7 @@ export const LoginPage: React.FC = () => {
       const defaultRoutes: Record<string, string> = {
         admin: '/admin/dashboard',
         marketing_staff: '/marketing/prospects',
-        marketing_director: '/marketing/overview',
+        marketing_director: '/marketing/dashboard',
         customer_service: '/cs/prospects',
         secretary: '/dashboard',
         accounts: '/accounts/dashboard',
