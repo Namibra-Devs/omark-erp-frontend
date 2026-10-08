@@ -381,13 +381,14 @@ export function consolidateAllAppointments(
 export function getStaffAssignedAppointments(
   allAppointments: any[],
   staffUser: any,
-  allProspects?: Prospect[]
+  allProspects?: Prospect[],
+  branches: BranchInfo[] = []
 ): any[] {
   if (!Array.isArray(allAppointments) || allAppointments.length === 0 || !staffUser) return [];
 
   let staffProspectIds: Set<string> | undefined;
   if (Array.isArray(allProspects) && allProspects.length > 0) {
-    const staffProspects = getStaffAssignedProspects(allProspects, staffUser);
+    const staffProspects = getStaffAssignedProspects(allProspects, staffUser, branches);
     staffProspectIds = new Set(staffProspects.map((p) => String(p.id).trim()));
   }
 
@@ -400,8 +401,9 @@ export function getStaffAssignedAppointments(
 export function getStaffAssignedAppointmentCount(
   allAppointments: any[],
   staffUser: any,
-  allProspects?: Prospect[]
+  allProspects?: Prospect[],
+  branches: BranchInfo[] = []
 ): { count: number } {
-  const list = getStaffAssignedAppointments(allAppointments, staffUser, allProspects);
+  const list = getStaffAssignedAppointments(allAppointments, staffUser, allProspects, branches);
   return { count: list.length };
 }

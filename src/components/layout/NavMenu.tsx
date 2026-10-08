@@ -262,6 +262,11 @@ export const NavMenu: React.FC = () => {
         icon: <DashboardOutlined />,
         label: 'Branch Dashboard',
       });
+      items.push({
+        key: '/marketing/dashboard',
+        icon: <BarChartOutlined />,
+        label: 'Marketing Dashboard',
+      });
     } else if (hasRole(['marketing_director'])) {
       items.push({
         key: '/marketing/dashboard',
@@ -296,14 +301,6 @@ export const NavMenu: React.FC = () => {
     });
 
     // Marketing section
-    if (hasRole(['marketing_director', 'admin', 'branch_manager'])) {
-      items.push({
-        key: '/marketing/dashboard',
-        icon: <BarChartOutlined />,
-        label: 'Director Dashboard',
-      });
-    }
-
     if (hasRole(['marketing_staff', 'marketing_director', 'admin', 'branch_manager', 'secretary', 'customer_service', 'accounts'])) {
       items.push({
         key: '/marketing/prospects',

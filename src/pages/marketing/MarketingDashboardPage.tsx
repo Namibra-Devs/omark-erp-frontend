@@ -909,139 +909,71 @@ export const MarketingDashboardPage: React.FC = () => {
       {/* ── Operational Command Bar ────────────────────────────────────────── */}
       <div
         style={{
-          background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #0f2b48 100%)',
-          borderRadius: 16,
+          background: '#ffffff',
+          borderRadius: 14,
+          border: '1px solid #e2e8f0',
           padding: '24px 28px',
-          color: '#fff',
           marginBottom: 24,
-          boxShadow: '0 8px 30px rgba(15, 23, 42, 0.25)',
-          position: 'relative',
-          overflow: 'hidden',
+          boxShadow: '0 2px 12px rgba(15, 23, 42, 0.04)',
         }}
       >
-        <div
-          style={{
-            position: 'absolute',
-            right: -40,
-            top: -40,
-            width: 200,
-            height: 200,
-            borderRadius: '50%',
-            background: 'radial-gradient(circle, rgba(56, 189, 248, 0.15) 0%, transparent 70%)',
-            pointerEvents: 'none',
-          }}
-        />
-
-        <Row justify="space-between" align="middle" gutter={[16, 16]}>
+        <Row justify="space-between" align="middle" gutter={[20, 16]}>
           <Col xs={24} md={12}>
-            <Space direction="vertical" size={4}>
-              <Space wrap size={8}>
-                <Tag
-                  color="#38bdf8"
-                  style={{
-                    color: '#0f172a',
-                    fontWeight: 700,
-                    borderRadius: 6,
-                    padding: '2px 10px',
-                    border: 'none',
-                    fontSize: 12,
-                  }}
-                >
-                  <RocketOutlined /> MARKETING DIRECTOR COMMAND
-                </Tag>
-                <Tag
-                  style={{
-                    background: 'rgba(255,255,255,0.12)',
-                    color: '#e2e8f0',
-                    border: '1px solid rgba(255,255,255,0.15)',
-                    borderRadius: 6,
-                  }}
-                >
-                  <EnvironmentOutlined /> Head Office • Accra
-                </Tag>
-                <Tag
-                  style={{
-                    background: 'rgba(52, 211, 153, 0.15)',
-                    color: '#34d399',
-                    border: '1px solid rgba(52, 211, 153, 0.3)',
-                    borderRadius: 6,
-                  }}
-                >
-                  <Badge status="processing" color="#34d399" /> Live Sync Active
-                </Tag>
-              </Space>
-
-              <Title level={2} style={{ color: '#fff', margin: '8px 0 2px', fontWeight: 700 }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Text type="secondary" style={{ fontSize: 13, fontWeight: 500, marginBottom: 2 }}>
                 {getTimeGreeting()},{' '}
-                {user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Marketing Director'}!
+                <span style={{ color: '#0f172a', fontWeight: 600 }}>
+                  {user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Marketing Director'}
+                </span>
+              </Text>
+              <Title level={2} style={{ margin: '0 0 4px', fontWeight: 700, color: '#0f172a', letterSpacing: '-0.5px' }}>
+                Marketing Director Dashboard
               </Title>
-              <Paragraph style={{ color: '#94a3b8', margin: 0, fontSize: 14 }}>
-                Executive command of multi-channel campaigns, pipeline cash forecast, speed-to-lead SLAs, and broadcast outreach.
-              </Paragraph>
-            </Space>
+              <Text type="secondary" style={{ fontSize: 14, color: '#64748b' }}>
+                Executive overview of multi-channel campaigns, pipeline revenue forecast, speed-to-lead SLAs, and outreach.
+              </Text>
+            </div>
           </Col>
 
           <Col xs={24} md={12} style={{ textAlign: 'right' }}>
-            <Space wrap size={8} style={{ justifyContent: 'flex-end', width: '100%' }}>
+            <Space wrap size={10} style={{ justifyContent: 'flex-end', width: '100%' }}>
               <Segmented
                 value={timeframe}
                 onChange={(val) => setTimeframe(val as any)}
                 options={[
-                  { label: 'Month', value: 'month' },
+                  { label: 'This Month', value: 'month' },
                   { label: 'Q4', value: 'quarter' },
                   { label: 'YTD', value: 'year' },
-                  { label: 'All', value: 'all' },
+                  { label: 'All Time', value: 'all' },
                 ]}
-                style={{
-                  background: 'rgba(255,255,255,0.1)',
-                  padding: 3,
-                  borderRadius: 8,
-                  color: '#fff',
-                }}
+                style={{ padding: 3, borderRadius: 8 }}
               />
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
                 onClick={handleOpenAddCampaign}
-                style={{ background: '#0284c7', borderColor: '#0284c7', fontWeight: 600, borderRadius: 8 }}
+                style={{ borderRadius: 8, fontWeight: 600 }}
               >
                 New Campaign
               </Button>
               <Button
                 icon={<NotificationOutlined />}
                 onClick={() => setBroadcastModalOpen(true)}
-                style={{
-                  background: 'rgba(245, 158, 11, 0.2)',
-                  color: '#fbbf24',
-                  border: '1px solid rgba(245, 158, 11, 0.4)',
-                  fontWeight: 600,
-                  borderRadius: 8,
-                }}
+                style={{ borderRadius: 8, fontWeight: 500 }}
               >
                 Outreach Broadcast
               </Button>
               <Button
                 icon={<PrinterOutlined />}
                 onClick={() => setBoardReportModalOpen(true)}
-                style={{
-                  background: 'rgba(255,255,255,0.15)',
-                  color: '#fff',
-                  border: '1px solid rgba(255,255,255,0.25)',
-                  fontWeight: 600,
-                  borderRadius: 8,
-                }}
+                style={{ borderRadius: 8, fontWeight: 500 }}
               >
                 Board Report
               </Button>
               <Button
                 icon={<UserAddOutlined />}
                 onClick={() => setAddProspectOpen(true)}
-                style={{
-                  background: 'rgba(255,255,255,0.15)',
-                  color: '#fff',
-                  border: '1px solid rgba(255,255,255,0.25)',
-                  borderRadius: 8,
-                }}
+                style={{ borderRadius: 8, fontWeight: 500 }}
               >
                 Add Prospect
               </Button>
@@ -1049,12 +981,7 @@ export const MarketingDashboardPage: React.FC = () => {
                 <Button
                   icon={<ReloadOutlined spin={mktFetching} />}
                   onClick={handleFullRefresh}
-                  style={{
-                    background: 'rgba(255,255,255,0.1)',
-                    color: '#fff',
-                    border: '1px solid rgba(255,255,255,0.2)',
-                    borderRadius: 8,
-                  }}
+                  style={{ borderRadius: 8 }}
                 />
               </Tooltip>
             </Space>

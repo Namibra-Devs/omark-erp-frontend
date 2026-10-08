@@ -197,7 +197,7 @@ export const UsersPage: React.FC = () => {
   const getStaffAppointmentCount = (userItem: User) => {
     const stored = getStoredUserAssignment(userItem.id);
     const effectiveUser = { ...stored, ...userItem, role: userItem.role || stored?.role };
-    return getStaffAssignedAppointmentCount(allConsolidatedAppointments, effectiveUser, allConsolidatedProspects).count;
+    return getStaffAssignedAppointmentCount(allConsolidatedAppointments, effectiveUser, allConsolidatedProspects, allBranches).count;
   };
 
   const allDepartments = useMemo(() => {

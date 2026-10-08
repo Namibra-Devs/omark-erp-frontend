@@ -174,8 +174,8 @@ export const StaffProfilePage: React.FC = () => {
   }, [allConsolidatedProspects, targetStaffMember, branches]);
 
   const staffAppointments = useMemo(() => {
-    return getStaffAssignedAppointments(allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects);
-  }, [allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects]);
+    return getStaffAssignedAppointments(allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects, branches);
+  }, [allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects, branches]);
 
   const staffDeeds = useMemo(() => {
     return (deedsData?.items ?? []).filter((d) => d.generatedByUserId === id);

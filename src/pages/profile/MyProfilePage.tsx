@@ -47,7 +47,12 @@ import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useUsersQuery, useUpdateUserMutation, useUserActivityQuery, toE164Phone, type UpdateUserPayload } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
-import { consolidateAllProspects, getStaffAssignedProspects, getStaffAssignedAppointments } from '@/utils/prospectAssignment';
+import {
+  consolidateAllProspects,
+  consolidateAllAppointments,
+  getStaffAssignedProspects,
+  getStaffAssignedAppointments,
+} from '@/utils/prospectAssignment';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
 import { usePayrollQuery, type PayrollRecord } from '@/api/payroll';
@@ -79,19 +84,6 @@ export const MyProfilePage: React.FC = () => {
   const storedAssignment = user?.id ? getStoredUserAssignment(user.id) : undefined;
   const isMarketingDirector = user?.role === 'marketing_director' || storedAssignment?.role === 'marketing_director';
 
-  const effectiveUser = useMemo(() => {
-    if (!user) return null;
-    if (isMarketingDirector) {
-      return { ...user, role: 'marketing_director' as Role };
-    }
-    return user;
-  }, [user, isMarketingDirector]);
-
-  const rawBranchRoleTitle = getUserBranchRoleTitle(effectiveUser, branches);
-  const branchRoleTitle = isMarketingDirector
-    ? rawBranchRoleTitle.replace(/marketing\s+staff/gi, 'Marketing Director')
-    : rawBranchRoleTitle;
-
   // Modals
   const [editModal, setEditModal] = useState(false);
   const [passwordModal, setPasswordModal] = useState(false);
@@ -111,7 +103,26 @@ export const MyProfilePage: React.FC = () => {
   const { data: usersData } = useUsersQuery();
   const allUsers = usersData?.items ?? [];
 
-  const { data: allProspectsData, isLoading: prospectsLoading } = useProspectsQuery(
+  const dbUser = useMemo(() => {
+    return (user?.id ? allUsers.find((u) => u.id === user.id) : null) || user;
+  }, [allUsers, user]);
+
+  const effectiveUser = useMemo(() => {
+    if (!dbUser) return null;
+    return {
+      ...storedAssignment,
+      ...dbUser,
+      role: (isMarketingDirector ? 'marketing_director' : (dbUser.role || storedAssignment?.role || 'marketing_staff')) as Role,
+      branchId: storedAssignment?.branchId || (dbUser as any).branchId,
+    };
+  }, [dbUser, isMarketingDirector, storedAssignment]);
+
+  const rawBranchRoleTitle = getUserBranchRoleTitle(effectiveUser, branches);
+  const branchRoleTitle = isMarketingDirector
+    ? rawBranchRoleTitle.replace(/marketing\s+staff/gi, 'Marketing Director')
+    : rawBranchRoleTitle;
+
+  const { data: allProspectsData, isLoading: allProspectsLoading } = useProspectsQuery(
     { pageSize: 10000 },
     Boolean(user?.id)
   );
@@ -123,10 +134,21 @@ export const MyProfilePage: React.FC = () => {
     { source: 'customer_service', pageSize: 10000 },
     Boolean(user?.id)
   );
-  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery(
-    { pageSize: 500 },
+  const { data: staffSpecificProspects, isLoading: staffProspectsLoading } = useProspectsQuery(
+    { assignedUserId: user?.id, pageSize: 10000 },
     Boolean(user?.id)
   );
+  const prospectsLoading = allProspectsLoading || staffProspectsLoading;
+
+  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery(
+    { pageSize: 1000 },
+    Boolean(user?.id)
+  );
+  const { data: staffSpecificAppointments, isLoading: staffAppointmentsLoading } = useAppointmentsQuery(
+    { assignedUserId: user?.id, pageSize: 1000 },
+    Boolean(user?.id)
+  );
+
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery(
     {},
     canSeeDeeds && Boolean(user?.id)
@@ -153,9 +175,17 @@ export const MyProfilePage: React.FC = () => {
     return consolidateAllProspects(
       allProspectsData?.items,
       mktProspectsData?.items,
-      csProspectsData?.items
+      csProspectsData?.items,
+      staffSpecificProspects?.items
     );
-  }, [allProspectsData, mktProspectsData, csProspectsData]);
+  }, [allProspectsData, mktProspectsData, csProspectsData, staffSpecificProspects]);
+
+  const allConsolidatedAppointments = useMemo(() => {
+    return consolidateAllAppointments(
+      appointmentsData?.items,
+      staffSpecificAppointments?.items
+    );
+  }, [appointmentsData, staffSpecificAppointments]);
 
   const myProspects = useMemo(() => {
     if (!effectiveUser) return [];
@@ -164,8 +194,13 @@ export const MyProfilePage: React.FC = () => {
 
   const myAppointments = useMemo(() => {
     if (!effectiveUser) return [];
-    return getStaffAssignedAppointments(appointmentsData?.items ?? [], effectiveUser);
-  }, [appointmentsData, effectiveUser]);
+    return getStaffAssignedAppointments(
+      allConsolidatedAppointments,
+      effectiveUser,
+      allConsolidatedProspects,
+      branches
+    );
+  }, [allConsolidatedAppointments, effectiveUser, allConsolidatedProspects, branches]);
   const myAttendance = Array.isArray(attendanceData) ? attendanceData : [];
   const myLeaves = Array.isArray(leaveData) ? leaveData : [];
 
@@ -359,10 +394,13 @@ export const MyProfilePage: React.FC = () => {
       case 'appointments':
         return myAppointments.filter((a) => {
           if (!q) return true;
+          const p = allConsolidatedProspects.find((item) => item.id === a.prospectId);
+          const pName = p ? `${p.firstName} ${p.lastName}`.toLowerCase() : '';
           return (
             a.reason?.toLowerCase().includes(q) ||
             a.status?.toLowerCase().includes(q) ||
             a.source?.toLowerCase().includes(q) ||
+            pName.includes(q) ||
             dayjs(a.scheduledFor).format('DD MMM YYYY').toLowerCase().includes(q)
           );
         });
@@ -401,7 +439,7 @@ export const MyProfilePage: React.FC = () => {
       default:
         return [];
     }
-  }, [summaryModalType, modalSearch, myProspects, myAppointments, myAttendance, myLeaves, earnedBonuses, myPayroll]);
+  }, [summaryModalType, modalSearch, myProspects, myAppointments, myAttendance, myLeaves, earnedBonuses, myPayroll, allConsolidatedProspects]);
 
   if (!user) return null;
 
@@ -1119,6 +1157,26 @@ export const MyProfilePage: React.FC = () => {
                     {(v || 'SCHEDULED').toUpperCase()}
                   </Tag>
                 ),
+              },
+              {
+                title: 'Prospect / Client',
+                key: 'prospect',
+                render: (_: any, r: any) => {
+                  const p = allConsolidatedProspects.find((item) => item.id === r.prospectId);
+                  if (p) {
+                    return (
+                      <div>
+                        <strong style={{ color: '#1d4ed8' }}>{p.firstName} {p.lastName}</strong>
+                        {p.phoneNumber && <div style={{ fontSize: 11, color: '#64748b' }}>{p.phoneNumber}</div>}
+                      </div>
+                    );
+                  }
+                  return r.prospectId ? (
+                    <Tag color="cyan" style={{ fontSize: 11 }}>Linked Prospect</Tag>
+                  ) : (
+                    <Text type="secondary" style={{ fontSize: 11 }}>Direct Booking</Text>
+                  );
+                },
               },
               {
                 title: 'Source',
