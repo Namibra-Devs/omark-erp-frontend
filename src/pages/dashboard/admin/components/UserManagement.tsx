@@ -1,5 +1,5 @@
 // src/pages/dashboard/admin/components/UserManagement.tsx
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Card, Table, Input, Select, Button, Space, Tag,
   Typography, Tooltip, Popconfirm, Badge, Empty, message, Modal
@@ -27,8 +27,15 @@ import { useNavigate } from 'react-router-dom';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { useUserAssignmentQuery, useUpdateUserMutation } from '@/api/users';
+import { useUserAssignmentQuery, useUpdateUserMutation, getUserFullName } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
+import { useAppointmentsQuery } from '@/api/appointments';
+import {
+  consolidateAllProspects,
+  consolidateAllAppointments,
+  getStaffAssignedProspectCount,
+  getStaffAssignedAppointmentCount,
+} from '@/utils/prospectAssignment';
 import { useDepartmentsQuery, mockBranchDepartments } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { getStoredUserAssignment, resolveDefaultDepartment, useAssignmentListener, isUserInBranch } from '@/utils/userAssignmentStorage';
@@ -165,26 +172,33 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   const { branches } = useBranchContext();
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  const { data: appointmentsData } = useAppointmentsQuery({ pageSize: 1000 });
 
-  const getStaffProspectCount = (staffId: string, role: string) => {
-    const allP = allProspectsData?.items ?? [];
-    if (role === 'marketing_director') {
-      const mktCount = allP.filter((p) => p.source === 'marketing' || !p.source).length;
-      const directCount = allP.filter(
-        (p) =>
-          p.assignedUserId === staffId ||
-          (p as any).assignedStaffId === staffId ||
-          (p as any).createdByUserId === staffId
-      ).length;
-      return { count: Math.max(mktCount, mktProspectsData?.total ?? 0), directCount, isDirector: true };
-    }
-    const count = allP.filter(
-      (p) =>
-        p.assignedUserId === staffId ||
-        (p as any).assignedStaffId === staffId ||
-        (p as any).createdByUserId === staffId
-    ).length;
-    return { count, directCount: count, isDirector: false };
+  const allConsolidatedProspects = useMemo(() => {
+    return consolidateAllProspects(
+      allProspectsData?.items,
+      mktProspectsData?.items,
+      csProspectsData?.items
+    );
+  }, [allProspectsData, mktProspectsData, csProspectsData]);
+
+  const allConsolidatedAppointments = useMemo(() => {
+    return consolidateAllAppointments(appointmentsData?.items);
+  }, [appointmentsData]);
+
+  const getStaffProspectCount = (staffId: string, role: string, userRecord?: User) => {
+    const userObj = userRecord || users.find((u) => u.id === staffId) || { id: staffId, role };
+    const stored = getStoredUserAssignment(staffId);
+    const effectiveUser = { ...stored, ...userObj, role: userObj.role || stored?.role || role };
+    return getStaffAssignedProspectCount(allConsolidatedProspects, effectiveUser, branches);
+  };
+
+  const getStaffAppointmentCount = (staffId: string, role: string, userRecord?: User) => {
+    const userObj = userRecord || users.find((u) => u.id === staffId) || { id: staffId, role };
+    const stored = getStoredUserAssignment(staffId);
+    const effectiveUser = { ...stored, ...userObj, role: userObj.role || stored?.role || role };
+    return getStaffAssignedAppointmentCount(allConsolidatedAppointments, effectiveUser, allConsolidatedProspects);
   };
 
   // Row ids whose password is currently revealed (masked by default).
@@ -475,7 +489,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       width: 180,
       align: 'left' as const,
       render: (_: any, record: User) => {
-        const info = getStaffProspectCount(record.id, record.role);
+        const info = getStaffProspectCount(record.id, record.role, record);
         if (info.isDirector) {
           return (
             <Tooltip title={`Marketing Director Pipeline: ${info.count} Total Marketing Prospects (${info.directCount} direct). Click to view director overview.`}>
@@ -496,7 +510,8 @@ export const UserManagement: React.FC<UserManagementProps> = ({
               style={{ cursor: info.count > 0 ? 'pointer' : 'default', borderRadius: 12, padding: '2px 8px', fontWeight: 600 }}
               onClick={() => {
                 if (info.count > 0) {
-                  navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name || '')}`);
+                  const sName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || getUserFullName(record as any) || '';
+                  navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(sName)}`);
                 }
               }}
             >
@@ -504,6 +519,29 @@ export const UserManagement: React.FC<UserManagementProps> = ({
             </Tag>
           </Tooltip>
         );
+      },
+    },
+    {
+      title: 'Appointments',
+      key: 'appointments',
+      width: 160,
+      align: 'center' as const,
+      render: (_: any, record: User) => {
+        const info = getStaffAppointmentCount(record.id, record.role, record);
+        if (info.count > 0) {
+          return (
+            <Tooltip title={`Scheduled Appointments: ${info.count}. Click to view staff profile schedule.`}>
+              <Tag
+                color="purple"
+                style={{ cursor: 'pointer', borderRadius: 12, padding: '2px 8px', fontWeight: 600 }}
+                onClick={() => navigate(`/admin/users/${record.id}`)}
+              >
+                📅 {info.count} Appointments
+              </Tag>
+            </Tooltip>
+          );
+        }
+        return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>;
       },
     },
     {

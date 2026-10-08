@@ -13,6 +13,9 @@ export interface AppointmentsListParams {
   source?: AppointmentSource;
   from?: string;
   to?: string;
+  assignedUserId?: string;
+  staffId?: string;
+  prospectId?: string;
 }
 
 export interface AppointmentsListResult {
@@ -70,23 +73,38 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
         const result = unwrapList(response) as AppointmentsListResult;
 
         let allItems = result.items || [];
-        const totalPages = result.totalPages || (result.total ? Math.ceil(result.total / safePageSize) : 1);
+        const pageItemsCount = allItems.length;
+        const total = result.total ?? pageItemsCount;
+        const totalPages =
+          result.totalPages && result.totalPages > 1
+            ? result.totalPages
+            : total > pageItemsCount && pageItemsCount > 0
+            ? Math.ceil(total / pageItemsCount)
+            : 1;
 
-        // If caller requested more than 100 items and total exceeds 100, fetch at most 2 pages
-        if (requestedLimit > 100 && result.total > 100 && totalPages > 1) {
-          const maxPagesToFetch = Math.min(totalPages, Math.min(Math.ceil(requestedLimit / 100), 2));
+        // If caller requested more than 100 items and multiple pages exist or page 1 was full, fetch remaining pages
+        if (
+          requestedLimit > 100 &&
+          (totalPages > 1 || total > pageItemsCount || pageItemsCount === safePageSize)
+        ) {
+          const maxPagesToFetch =
+            totalPages > 1
+              ? Math.min(totalPages, Math.min(Math.ceil(requestedLimit / safePageSize), 50))
+              : Math.min(Math.ceil(requestedLimit / safePageSize), 20);
           const pagePromises = [];
           for (let p = 2; p <= maxPagesToFetch; p++) {
             pagePromises.push(
-              apiClient.get<ApiResponse<Appointment[]>>('/appointments', {
-                params: { ...requestParams, page: p },
-              }).catch(() => null)
+              apiClient
+                .get<ApiResponse<Appointment[]>>('/appointments', {
+                  params: { ...requestParams, page: p },
+                })
+                .then((res) => unwrapList(res).items || [])
+                .catch(() => [])
             );
           }
           const pageResponses = await Promise.all(pagePromises);
-          pageResponses.forEach((res) => {
-            if (res) {
-              const extra = unwrapList(res).items || [];
+          pageResponses.forEach((extra) => {
+            if (Array.isArray(extra) && extra.length > 0) {
               allItems.push(...extra);
             }
           });
@@ -94,10 +112,10 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
 
         return {
           items: allItems,
-          total: result.total,
-          page: result.page,
+          total: Math.max(total, allItems.length),
+          page: result.page || 1,
           pageSize: requestedLimit,
-          totalPages,
+          totalPages: Math.max(1, Math.ceil(Math.max(total, allItems.length) / safePageSize)),
         } as AppointmentsListResult;
       } catch (error) {
         if (error instanceof AxiosError) {

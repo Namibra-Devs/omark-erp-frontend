@@ -262,23 +262,34 @@ export const useProspectsQuery = (filter?: ProspectsFilter, enabled = true) => {
             ? Math.ceil(total / pageItemsCount)
             : 1;
 
-        // If caller requested a large page size (e.g. pageSize > 100) and multiple pages exist,
-        // retrieve up to 5 pages so caller gets a representative sample without flooding the rate limiter.
-        if (filter?.pageSize && filter.pageSize > 100 && (totalPages > 1 || total > pageItemsCount)) {
-          const maxPagesToFetch = Math.min(totalPages, Math.min(Math.ceil(filter.pageSize / 100), 5));
+        // If caller requested a large page size (e.g. pageSize > 100) and multiple pages exist or page 1 was full,
+        // retrieve up to 50 pages so caller gets the full dataset.
+        if (
+          filter?.pageSize &&
+          filter.pageSize > 100 &&
+          (totalPages > 1 || total > pageItemsCount || pageItemsCount === safePageSize)
+        ) {
+          const maxPagesToFetch =
+            totalPages > 1
+              ? Math.min(totalPages, Math.min(Math.ceil(filter.pageSize / 100), 50))
+              : Math.min(Math.ceil(filter.pageSize / 100), 20);
           const promises = [];
           for (let p = 2; p <= maxPagesToFetch; p++) {
             promises.push(
               apiClient
                 .get<ApiResponse<Prospect[]>>('/prospects', {
-                  params: { ...filter, page: p, pageSize: 100 },
+                  params: { ...filter, page: p, pageSize: safePageSize },
                 })
-                .then((res) => unwrapList(res).items)
+                .then((res) => unwrapList(res).items || [])
                 .catch(() => [])
             );
           }
           const otherPages = await Promise.all(promises);
-          otherPages.forEach((pageItems) => allItems.push(...pageItems));
+          otherPages.forEach((pageItems) => {
+            if (Array.isArray(pageItems) && pageItems.length > 0) {
+              allItems.push(...pageItems);
+            }
+          });
         }
 
         const stored = getStoredProspects();

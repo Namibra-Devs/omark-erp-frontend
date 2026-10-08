@@ -47,6 +47,7 @@ import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useUsersQuery, useUpdateUserMutation, useUserActivityQuery, toE164Phone, type UpdateUserPayload } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
+import { consolidateAllProspects, getStaffAssignedProspects, getStaffAssignedAppointments } from '@/utils/prospectAssignment';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
 import { usePayrollQuery, type PayrollRecord } from '@/api/payroll';
@@ -116,10 +117,14 @@ export const MyProfilePage: React.FC = () => {
   );
   const { data: mktProspectsData } = useProspectsQuery(
     { source: 'marketing', pageSize: 10000 },
-    Boolean(user?.id && isMarketingDirector)
+    Boolean(user?.id)
+  );
+  const { data: csProspectsData } = useProspectsQuery(
+    { source: 'customer_service', pageSize: 10000 },
+    Boolean(user?.id)
   );
   const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery(
-    {},
+    { pageSize: 500 },
     Boolean(user?.id)
   );
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery(
@@ -143,37 +148,24 @@ export const MyProfilePage: React.FC = () => {
   );
 
   const myPayroll: PayrollRecord[] = payrollData?.items ?? [];
-  const allProspects = allProspectsData?.items ?? [];
-  const myProspects = useMemo(() => {
-    if (!user?.id) return [];
-    const direct = allProspects.filter(
-      (p) => p.assignedUserId === user.id || (p as any).assignedStaffId === user.id || (p as any).createdByUserId === user.id
+
+  const allConsolidatedProspects = useMemo(() => {
+    return consolidateAllProspects(
+      allProspectsData?.items,
+      mktProspectsData?.items,
+      csProspectsData?.items
     );
-    if (isMarketingDirector) {
-      const mktList = mktProspectsData?.items ?? [];
-      const combined = [...mktList, ...allProspects];
-      const seen = new Set<string>();
-      const res: typeof allProspects = [];
-      combined.forEach((p) => {
-        if (!p || !p.id || seen.has(p.id)) return;
-        if (
-          p.source === 'marketing' ||
-          !p.source ||
-          p.assignedUserId === user.id ||
-          (p as any).assignedStaffId === user.id ||
-          (p as any).createdByUserId === user.id
-        ) {
-          seen.add(p.id);
-          res.push(p);
-        }
-      });
-      return res;
-    }
-    return direct;
-  }, [allProspects, mktProspectsData, user?.id, isMarketingDirector]);
-  const myAppointments = (appointmentsData?.items ?? []).filter(
-    (a) => a.createdByUserId === user?.id || (a as any).assignedStaffId === user?.id || isAdmin
-  );
+  }, [allProspectsData, mktProspectsData, csProspectsData]);
+
+  const myProspects = useMemo(() => {
+    if (!effectiveUser) return [];
+    return getStaffAssignedProspects(allConsolidatedProspects, effectiveUser, branches);
+  }, [allConsolidatedProspects, effectiveUser, branches]);
+
+  const myAppointments = useMemo(() => {
+    if (!effectiveUser) return [];
+    return getStaffAssignedAppointments(appointmentsData?.items ?? [], effectiveUser);
+  }, [appointmentsData, effectiveUser]);
   const myAttendance = Array.isArray(attendanceData) ? attendanceData : [];
   const myLeaves = Array.isArray(leaveData) ? leaveData : [];
 

@@ -37,6 +37,7 @@ import { useAppointmentsQuery, useCreateAppointmentMutation, useUpdateAppointmen
 import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
+import { isProspectAssignedOrCreatedByStaff } from '@/utils/prospectAssignment';
 import {
   createDuplicatePhoneRule,
   createDuplicateNameRule,
@@ -124,10 +125,7 @@ export const ProspectsPage: React.FC = () => {
 
   // Helper to determine if a prospect belongs to a marketing staff member (assigned or created)
   const isProspectAssignedOrAddedByStaff = (p: Prospect, staffId: string, staffName?: string): boolean => {
-    if (p.assignedUserId === staffId || (p as any).assignedStaffId === staffId) return true;
-    if (p.createdByUserId === staffId || (p as any).creatorId === staffId) return true;
-    if (staffName && p.createdByName && p.createdByName.trim().toLowerCase() === staffName.trim().toLowerCase()) return true;
-    return false;
+    return isProspectAssignedOrCreatedByStaff(p, { id: staffId, name: staffName });
   };
 
   const csProspectCount = useMemo(() => {
@@ -215,19 +213,19 @@ export const ProspectsPage: React.FC = () => {
 
     // For marketing staff: ONLY show prospects that were added by or assigned to that respective staff
     if (isMarketingStaff && user?.id) {
-      const myName = `${user.firstName || ''} ${user.lastName || ''}`.trim();
-      list = list.filter((p) => isProspectAssignedOrAddedByStaff(p, user.id, myName));
+      list = list.filter((p) => isProspectAssignedOrCreatedByStaff(p, user));
     } else if (assignedUserIdFilter) {
-      list = list.filter(
-        (p) =>
-          p.assignedUserId === assignedUserIdFilter ||
-          (p as any).assignedStaffId === assignedUserIdFilter ||
-          p.createdByUserId === assignedUserIdFilter ||
-          (p as any).creatorId === assignedUserIdFilter
-      );
+      const targetStaff = allStaff.find((u) => u.id === assignedUserIdFilter) || {
+        id: assignedUserIdFilter,
+        name: assignedUserName,
+      };
+      list = list.filter((p) => isProspectAssignedOrCreatedByStaff(p, targetStaff));
     }
-    return filterEntitiesByBranch(list, user, branches);
-  }, [allExistingProspects, effectiveSource, isMarketingStaff, user, branches, assignedUserIdFilter]);
+    const filterUser = assignedUserIdFilter
+      ? (allStaff.find((u) => u.id === assignedUserIdFilter) || user)
+      : user;
+    return filterEntitiesByBranch(list, filterUser, branches);
+  }, [allExistingProspects, effectiveSource, isMarketingStaff, user, branches, assignedUserIdFilter, assignedUserName, allStaff]);
 
   const marketingProspectCount = useMemo(() => {
     if (isMarketingStaff) {

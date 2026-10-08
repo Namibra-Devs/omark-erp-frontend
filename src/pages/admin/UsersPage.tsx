@@ -92,6 +92,14 @@ import type { User, Role } from '@/types';
 import apiClient, { unwrapData } from '@/api/client';
 import { useUsersQuery, useCreateUserMutation, useUpdateUserMutation, useDeleteUserMutation, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, toBackendRole, toE164Phone } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
+import { useAppointmentsQuery } from '@/api/appointments';
+import {
+  consolidateAllProspects,
+  consolidateAllAppointments,
+  getStaffAssignedProspectCount,
+  getStaffAssignedAppointments,
+  getStaffAssignedAppointmentCount,
+} from '@/utils/prospectAssignment';
 import { useBranchesQuery, useDepartmentsQuery, DEFAULT_SYSTEM_BRANCHES, STANDARD_DEPARTMENTS } from '@/api/branches';
 import { useBranchContext } from '@/contexts/BranchContext';
 import {
@@ -152,6 +160,8 @@ export const UsersPage: React.FC = () => {
   const { data: usersResponse, isLoading: usersLoading, refetch: refetchUsers } = useUsersQuery();
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 1000 });
   const { branches: contextBranches = [] } = useBranchContext();
   const { data: apiBranches = [] } = useBranchesQuery();
   const { data: apiDepartments = [] } = useDepartmentsQuery();
@@ -160,25 +170,35 @@ export const UsersPage: React.FC = () => {
   const updateUserAssignment = useUpdateUserAssignmentMutation();
   const deleteUser = useDeleteUserMutation();
 
-  const getStaffProspectCount = (userItem: User) => {
-    const allList = allProspectsData?.items ?? [];
-    const mktList = mktProspectsData?.items ?? [];
-    if (userItem.role === 'marketing_director') {
-      return mktProspectsData?.total ?? (mktList.length > 0 ? mktList.length : allList.filter((p) => p.source === 'marketing' || !p.source).length);
-    }
-    return allList.filter(
-      (p) =>
-        p.assignedUserId === userItem.id ||
-        (p as any).assignedStaffId === userItem.id ||
-        p.createdByUserId === userItem.id
-    ).length;
-  };
-
   const allBranches = useMemo(() => {
     if (contextBranches && contextBranches.length > 0) return contextBranches;
     if (apiBranches && apiBranches.length > 0) return apiBranches;
     return DEFAULT_SYSTEM_BRANCHES;
   }, [contextBranches, apiBranches]);
+
+  const allConsolidatedProspects = useMemo(() => {
+    return consolidateAllProspects(
+      allProspectsData?.items,
+      mktProspectsData?.items,
+      csProspectsData?.items
+    );
+  }, [allProspectsData, mktProspectsData, csProspectsData]);
+
+  const allConsolidatedAppointments = useMemo(() => {
+    return consolidateAllAppointments(appointmentsData?.items);
+  }, [appointmentsData]);
+
+  const getStaffProspectCount = (userItem: User) => {
+    const stored = getStoredUserAssignment(userItem.id);
+    const effectiveUser = { ...stored, ...userItem, role: userItem.role || stored?.role };
+    return getStaffAssignedProspectCount(allConsolidatedProspects, effectiveUser, allBranches).count;
+  };
+
+  const getStaffAppointmentCount = (userItem: User) => {
+    const stored = getStoredUserAssignment(userItem.id);
+    const effectiveUser = { ...stored, ...userItem, role: userItem.role || stored?.role };
+    return getStaffAssignedAppointmentCount(allConsolidatedAppointments, effectiveUser, allConsolidatedProspects).count;
+  };
 
   const allDepartments = useMemo(() => {
     if (apiDepartments && apiDepartments.length > 0) return apiDepartments;
@@ -482,6 +502,8 @@ export const UsersPage: React.FC = () => {
       'Email': user.email,
       'Phone': user.phoneNumber,
       'Role': getRoleDisplay(user.role),
+      'Assigned Prospects': getStaffProspectCount(user),
+      'Appointments': getStaffAppointmentCount(user),
       'Status': user.isActive ? 'Active' : 'Inactive',
       'Joined': dayjs(user.createdAt).format('YYYY-MM-DD'),
       'Last Updated': dayjs(user.updatedAt).format('YYYY-MM-DD'),
@@ -653,8 +675,11 @@ export const UsersPage: React.FC = () => {
       width: 170,
       align: 'center' as const,
       render: (_: any, record: User) => {
+        const stored = getStoredUserAssignment(record.id);
+        const effectiveRole = stored?.role || record.role;
+        const isDirector = effectiveRole === 'marketing_director';
         const count = getStaffProspectCount(record);
-        if (record.role === 'marketing_director') {
+        if (isDirector) {
           return (
             <Tooltip title={`Manages departmental marketing prospects pipeline (${count} prospects)`}>
               <Tag
@@ -667,7 +692,7 @@ export const UsersPage: React.FC = () => {
             </Tooltip>
           );
         }
-        if (record.role === 'marketing_staff' || record.role === 'customer_service') {
+        if (effectiveRole === 'marketing_staff' || effectiveRole === 'customer_service') {
           return (
             <Tag
               color={count > 0 ? 'blue' : 'default'}
@@ -686,6 +711,32 @@ export const UsersPage: React.FC = () => {
           <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
         );
       },
+    },
+    {
+      title: 'Appointments',
+      key: 'appointments',
+      width: 160,
+      align: 'center' as const,
+      render: (_: any, record: User) => {
+        const apptCount = getStaffAppointmentCount(record);
+        if (apptCount > 0) {
+          return (
+            <Tooltip title={`View scheduled client appointments in ${record.firstName}'s operational profile (${apptCount} appointments)`}>
+              <Tag
+                color="purple"
+                style={{ borderRadius: 12, padding: '2px 10px', fontWeight: 600, cursor: 'pointer' }}
+                onClick={() => navigate(`/admin/users/${record.id}`)}
+              >
+                📅 {apptCount} Appointments
+              </Tag>
+            </Tooltip>
+          );
+        }
+        return (
+          <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+        );
+      },
+      sorter: (a: User, b: User) => getStaffAppointmentCount(a) - getStaffAppointmentCount(b),
     },
     {
       title: 'Status',
@@ -934,38 +985,54 @@ export const UsersPage: React.FC = () => {
         {/* Quick Operational Stats Row */}
         <Row gutter={[12, 12]} style={{ marginBottom: 20 }}>
           <Col span={12}>
-            <Card size="small" style={{ borderRadius: 8, border: '1px solid #bfdbfe', background: '#eff6ff' }}>
+            {(() => {
+              const storedSelected = selectedUser ? getStoredUserAssignment(selectedUser.id) : undefined;
+              const isDirectorSelected = (storedSelected?.role || selectedUser.role) === 'marketing_director';
+              return (
+                <Card size="small" style={{ borderRadius: 8, border: '1px solid #bfdbfe', background: '#eff6ff' }}>
+                  <Statistic
+                    title={<Text strong style={{ color: '#1e40af' }}>{isDirectorSelected ? 'Marketing Pipeline' : 'Assigned Prospects'}</Text>}
+                    value={getStaffProspectCount(selectedUser)}
+                    prefix={<TeamOutlined style={{ color: '#2563eb' }} />}
+                    valueStyle={{ color: '#1d4ed8', fontWeight: 700 }}
+                  />
+                  <div style={{ marginTop: 4 }}>
+                    <Button
+                      type="link"
+                      size="small"
+                      style={{ padding: 0, fontSize: 11, fontWeight: 600 }}
+                      onClick={() => {
+                        setViewDrawerOpen(false);
+                        navigate(`/admin/users/${selectedUser.id}`);
+                      }}
+                    >
+                      View Prospects &rarr;
+                    </Button>
+                  </div>
+                </Card>
+              );
+            })()}
+          </Col>
+          <Col span={12}>
+            <Card size="small" style={{ borderRadius: 8, border: '1px solid #ddd6fe', background: '#f5f3ff' }}>
               <Statistic
-                title={<Text strong style={{ color: '#1e40af' }}>{selectedUser.role === 'marketing_director' ? 'Marketing Pipeline' : 'Assigned Prospects'}</Text>}
-                value={getStaffProspectCount(selectedUser)}
-                prefix={<TeamOutlined style={{ color: '#2563eb' }} />}
-                valueStyle={{ color: '#1d4ed8', fontWeight: 700 }}
+                title={<Text strong style={{ color: '#6d28d9' }}>Appointments</Text>}
+                value={getStaffAppointmentCount(selectedUser)}
+                prefix={<CalendarOutlined style={{ color: '#7c3aed' }} />}
+                valueStyle={{ color: '#6d28d9', fontWeight: 700 }}
               />
               <div style={{ marginTop: 4 }}>
                 <Button
                   type="link"
                   size="small"
-                  style={{ padding: 0, fontSize: 11, fontWeight: 600 }}
+                  style={{ padding: 0, fontSize: 11, fontWeight: 600, color: '#6d28d9' }}
                   onClick={() => {
                     setViewDrawerOpen(false);
                     navigate(`/admin/users/${selectedUser.id}`);
                   }}
                 >
-                  View Performance &rarr;
+                  View Schedule &rarr;
                 </Button>
-              </div>
-            </Card>
-          </Col>
-          <Col span={12}>
-            <Card size="small" style={{ borderRadius: 8, border: '1px solid #e2e8f0', background: '#ffffff' }}>
-              <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>Department / Branch</Text>
-              <div style={{ marginTop: 6 }}>
-                <Tag color={getRoleColor(selectedUser.role)} icon={getRoleIcon(selectedUser.role)}>
-                  {getRoleDisplay(selectedUser.role)}
-                </Tag>
-              </div>
-              <div style={{ marginTop: 6, fontSize: 12, color: '#475569' }}>
-                <IdcardOutlined /> ID: {selectedUser.id}
               </div>
             </Card>
           </Col>
@@ -1095,6 +1162,7 @@ export const UsersPage: React.FC = () => {
             label: 'Refresh',
             onClick: () => {
               refetchUsers();
+              refetchAppointments();
               message.success('Refreshed!');
             },
             icon: <ReloadOutlined />,

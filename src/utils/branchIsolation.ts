@@ -245,8 +245,16 @@ export const filterEntitiesByBranch = <T extends Record<string, any>>(
 
   return items.filter((item) => {
     // 0. If current user created or was assigned to this item, it is ALWAYS visible to them!
-    const assignedId = item.assignedUserId || item.recordedByUserId || item.generatedByUserId || item.userId;
-    if (user?.id && assignedId && String(assignedId) === String(user.id)) {
+    const assignedId =
+      item.assignedUserId ||
+      item.assignedStaffId ||
+      item.assignedTo ||
+      item.createdByUserId ||
+      item.creatorId ||
+      item.recordedByUserId ||
+      item.generatedByUserId ||
+      item.userId;
+    if (user?.id && assignedId && String(assignedId).toLowerCase() === String(user.id).toLowerCase()) {
       return true;
     }
 

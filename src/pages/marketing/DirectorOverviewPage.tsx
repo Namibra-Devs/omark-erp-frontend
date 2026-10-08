@@ -43,6 +43,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
+import { isProspectAssignedOrCreatedByStaff, getStaffAssignedProspects } from '@/utils/prospectAssignment';
 import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPerformance } from '@/api/dashboard';
 import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
 import { useProspectsQuery, useUpdateProspectMutation, getStoredProspects } from '@/api/prospects';
@@ -251,7 +252,7 @@ export const DirectorOverviewPage: React.FC = () => {
         allProspects.some(
           (p) =>
             (p.source === 'marketing' || !p.source) &&
-            (p.assignedUserId === u.id || (p as any).createdByUserId === u.id || (p as any).assignedStaffId === u.id)
+            isProspectAssignedOrCreatedByStaff(p, u)
         )
     );
   }, [allUsers, allProspects]);
@@ -265,11 +266,7 @@ export const DirectorOverviewPage: React.FC = () => {
       const id = u.id;
       const fullName = getUserFullName(u);
 
-      const staffProspects = allProspects.filter(
-        (p) =>
-          (p.source === 'marketing' || !p.source) &&
-          (p.assignedUserId === id || (p as any).createdByUserId === id || (p as any).assignedStaffId === id)
-      );
+      const staffProspects = getStaffAssignedProspects(allProspects, u, branches);
 
       const staffCustomers = allCustomers.filter(
         (c) => (c as any).assignedUserId === id || (c as any).createdByUserId === id || staffProspects.some((p) => p.id === c.prospectId)

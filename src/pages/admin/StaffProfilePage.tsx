@@ -62,6 +62,7 @@ import { useAttendanceQuery, useStaffAttendanceStatsQuery, type AttendanceRecord
 import { ATTENDANCE_STATUS_META } from '@/constants/attendance';
 import { useStaffLeaveRequestsQuery } from '@/api/leaves';
 import { useProspectsQuery, useUpdateProspectMutation } from '@/api/prospects';
+import { consolidateAllProspects, consolidateAllAppointments, getStaffAssignedProspects, getStaffAssignedAppointments } from '@/utils/prospectAssignment';
 import { useAppointmentsQuery } from '@/api/appointments';
 import { useDeedsQuery } from '@/api/deeds';
 import { useBranchesQuery, DEFAULT_SYSTEM_BRANCHES } from '@/api/branches';
@@ -134,42 +135,47 @@ export const StaffProfilePage: React.FC = () => {
   const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ assignedUserId: id, pageSize: 10000 });
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
-  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 500 });
+  const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 1000 });
+  const { data: staffSpecificAppointments } = useAppointmentsQuery({ assignedUserId: id, pageSize: 1000 });
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 500 });
 
-  const isMarketingDirector = staffMember?.role === 'marketing_director';
+  const isMarketingDirector = staffMember?.role === 'marketing_director' || storedAssignment?.role === 'marketing_director';
+
+  const allConsolidatedProspects = useMemo(() => {
+    return consolidateAllProspects(
+      allProspectsData?.items,
+      mktProspectsData?.items,
+      csProspectsData?.items,
+      prospectsData?.items
+    );
+  }, [allProspectsData, mktProspectsData, csProspectsData, prospectsData]);
+
+  const allConsolidatedAppointments = useMemo(() => {
+    return consolidateAllAppointments(
+      appointmentsData?.items,
+      staffSpecificAppointments?.items
+    );
+  }, [appointmentsData, staffSpecificAppointments]);
+
+  const targetStaffMember = useMemo(() => {
+    const base = staffMember || { id, role: isMarketingDirector ? 'marketing_director' : 'marketing_staff' };
+    return {
+      ...storedAssignment,
+      ...base,
+      role: base.role || storedAssignment?.role || (isMarketingDirector ? 'marketing_director' : 'marketing_staff'),
+      branchId: effectiveBranchId || (base as any).branchId,
+    };
+  }, [staffMember, id, isMarketingDirector, storedAssignment, effectiveBranchId]);
 
   // Merge and deduplicate prospects assigned to or added by this staff member (strictly verified)
   const staffProspects = useMemo(() => {
-    const direct = prospectsData?.items ?? [];
-    const list = allProspectsData?.items ?? [];
-    const mktList = mktProspectsData?.items ?? [];
-    const combined = isMarketingDirector ? [...mktList, ...list] : [...direct, ...list];
-    const seen = new Set<string>();
-    const result: typeof direct = [];
-    combined.forEach((p) => {
-      if (!p || !p.id || seen.has(p.id)) return;
-      const isDirectlyAssignedOrCreated =
-        p.assignedUserId === id ||
-        (p as any).assignedStaffId === id ||
-        p.createdByUserId === id ||
-        (p as any).creatorId === id;
-      
-      const isMarketingDeptProspect = isMarketingDirector && (p.source === 'marketing' || !p.source);
-
-      if (isDirectlyAssignedOrCreated || isMarketingDeptProspect) {
-        seen.add(p.id);
-        result.push(p);
-      }
-    });
-    return result;
-  }, [allProspectsData, prospectsData, mktProspectsData, id, isMarketingDirector]);
+    return getStaffAssignedProspects(allConsolidatedProspects, targetStaffMember, branches);
+  }, [allConsolidatedProspects, targetStaffMember, branches]);
 
   const staffAppointments = useMemo(() => {
-    return (appointmentsData?.items ?? []).filter(
-      (a) => a.createdByUserId === id || (a as any).assignedStaffId === id || (a as any).userId === id
-    );
-  }, [appointmentsData, id]);
+    return getStaffAssignedAppointments(allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects);
+  }, [allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects]);
 
   const staffDeeds = useMemo(() => {
     return (deedsData?.items ?? []).filter((d) => d.generatedByUserId === id);
@@ -1287,7 +1293,7 @@ export const StaffProfilePage: React.FC = () => {
                       <Button
                         type="primary"
                         icon={<PlusOutlined />}
-                        onClick={() => navigate('/marketing/prospects')}
+                        onClick={() => navigate(`/marketing/prospects?assignedUserId=${id}&name=${encodeURIComponent(fullName || '')}`)}
                       >
                         Add Prospect
                       </Button>
@@ -1981,6 +1987,26 @@ export const StaffProfilePage: React.FC = () => {
                 ),
               },
               {
+                title: 'Prospect / Client',
+                key: 'prospect',
+                render: (_: any, r: any) => {
+                  const p = allConsolidatedProspects.find((item) => item.id === r.prospectId);
+                  if (p) {
+                    return (
+                      <div>
+                        <strong style={{ color: '#1d4ed8' }}>{p.firstName} {p.lastName}</strong>
+                        {p.phoneNumber && <div style={{ fontSize: 11, color: '#64748b' }}>{p.phoneNumber}</div>}
+                      </div>
+                    );
+                  }
+                  return r.prospectId ? (
+                    <Tag color="cyan" style={{ fontSize: 11 }}>Linked Prospect</Tag>
+                  ) : (
+                    <Text type="secondary" style={{ fontSize: 11 }}>Direct Booking</Text>
+                  );
+                },
+              },
+              {
                 title: 'Source',
                 dataIndex: 'source',
                 key: 'source',
@@ -2178,7 +2204,7 @@ export const StaffProfilePage: React.FC = () => {
               icon={<PlusOutlined />}
               onClick={() => {
                 setProspectsDrawerOpen(false);
-                navigate('/marketing/prospects');
+                navigate(`/marketing/prospects?assignedUserId=${id}&name=${encodeURIComponent(fullName || '')}`);
               }}
             >
               Add Prospect
