@@ -1,7 +1,12 @@
 // src/pages/marketing/ProspectsPage.tsx
 import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { Button, Space, Modal, Form, Input, Select, Row, Col, Table, Tag, message, Typography, Card, Spin, Popconfirm, Tooltip, Alert, Statistic, Badge, Dropdown, DatePicker } from 'antd';
+import { 
+  Button, Space, Modal, Form, Input, Select, Row, Col, Table, 
+  Tag, message, Typography, Card, Spin, Popconfirm, Tooltip, 
+  Alert, Statistic, Badge, Dropdown, DatePicker, Drawer, Descriptions, 
+  Timeline, Radio, Divider, Empty, Avatar 
+} from 'antd';
 import {
   PlusOutlined,
   EyeOutlined,
@@ -20,6 +25,21 @@ import {
   CalendarOutlined,
   ClockCircleOutlined,
   UserSwitchOutlined,
+  ExportOutlined,
+  ReloadOutlined,
+  DownloadOutlined,
+  FileExcelOutlined,
+  FileTextOutlined,
+  FilePdfOutlined,
+  CodeOutlined,
+  InfoCircleOutlined,
+  CheckCircleOutlined,
+  WarningOutlined,
+  CloseCircleOutlined,
+  StarFilled,
+  GlobalOutlined,
+  EnvironmentOutlined,
+  IdcardOutlined,
 } from '@ant-design/icons';
 import { tokens } from '@/constants/tokens';
 import dayjs from 'dayjs';
@@ -28,12 +48,27 @@ import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
+import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
-import { prospectStatusLabels } from '@/constants/enums';
+import { prospectStatusLabels, prospectSourceLabels, interactionChannelLabels } from '@/constants/enums';
 import type { Prospect, ProspectStatus } from '@/types';
-import { useProspectsQuery, useCreateProspectMutation, useUpdateProspectMutation, useDeleteProspectMutation, getStoredProspects } from '@/api/prospects';
+import {
+  useProspectsQuery,
+  useCreateProspectMutation,
+  useUpdateProspectMutation,
+  useDeleteProspectMutation,
+  useInteractionsQuery,
+  getStoredProspects,
+  prospectKeys,
+} from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
-import { useAppointmentsQuery, useCreateAppointmentMutation, useUpdateAppointmentMutation } from '@/api/appointments';
+import {
+  appointmentsKeys,
+  useAppointmentsQuery,
+  useCreateAppointmentMutation,
+  useUpdateAppointmentMutation,
+} from '@/api/appointments';
+import { useQueryClient } from '@tanstack/react-query';
 import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
@@ -49,7 +84,7 @@ import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 
 const { Option } = Select;
 const { TextArea } = Input;
-const { Text } = Typography;
+const { Text, Title } = Typography;
 
 
 
@@ -75,6 +110,16 @@ export const ProspectsPage: React.FC = () => {
   const [bookAppointmentModal, setBookAppointmentModal] = useState(false);
   const [appointmentTargetProspect, setAppointmentTargetProspect] = useState<Prospect | null>(null);
   const [appointmentForm] = Form.useForm();
+  const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
+  const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
+  const [logInteractionModal, setLogInteractionModal] = useState(false);
+
+  // Export states
+  const [exportModal, setExportModal] = useState(false);
+  const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
+  const [exportLoading, setExportLoading] = useState(false);
+
+  const queryClient = useQueryClient();
   const createAppointment = useCreateAppointmentMutation();
   const updateAppointmentMutation = useUpdateAppointmentMutation();
   const { data: userBonuses = [] } = useStaffBonusesQuery(user?.id);
@@ -171,6 +216,25 @@ export const ProspectsPage: React.FC = () => {
     window.addEventListener('omark-appointments-changed', handleAptsChanged);
     return () => window.removeEventListener('omark-appointments-changed', handleAptsChanged);
   }, [refetchAppointments]);
+
+  // Drawer Selected Prospect Interactions Query
+  const {
+    data: selectedProspectInteractions,
+    isLoading: interactionsLoading,
+    refetch: refetchInteractions,
+  } = useInteractionsQuery(selectedProspect?.id ?? '');
+
+  // Appointments for the selected prospect in the drawer
+  const selectedProspectAppointments = useMemo(() => {
+    if (!selectedProspect?.id) return [];
+    return appointments.filter((a) => a.prospectId === selectedProspect.id);
+  }, [appointments, selectedProspect?.id]);
+
+  // Real-time selected prospect sync (so changes from edits or status updates immediately reflect in the drawer)
+  const activeDrawerProspect = useMemo(() => {
+    if (!selectedProspect) return null;
+    return allExistingProspects.find((p) => p.id === selectedProspect.id) || selectedProspect;
+  }, [allExistingProspects, selectedProspect]);
 
   useEffect(() => {
     const handleProspectsChanged = () => refetch();
@@ -402,6 +466,115 @@ export const ProspectsPage: React.FC = () => {
     }
   };
 
+  const handleOpenBookAppointment = (target?: Prospect | null) => {
+    if (target) {
+      setAppointmentTargetProspect(target);
+      appointmentForm.resetFields();
+      appointmentForm.setFieldsValue({
+        prospectId: target.id,
+        staffId: target.assignedUserId || user?.id,
+        scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+        reason: 'Site Inspection & Property Viewing',
+        source: 'marketing',
+      });
+    } else {
+      setAppointmentTargetProspect(null);
+      appointmentForm.resetFields();
+      appointmentForm.setFieldsValue({
+        staffId: user?.id,
+        scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+        reason: 'Site Inspection & Property Viewing',
+        source: 'marketing',
+      });
+    }
+    setBookAppointmentModal(true);
+  };
+
+  const handleExport = () => {
+    setExportLoading(true);
+    setTimeout(() => {
+      const dataToExport = filteredMarketingProspects.map((p) => ({
+        'Full Name': `${p.firstName} ${p.lastName}`,
+        'Phone': p.phoneNumber,
+        'Address': p.address || '',
+        'Status': prospectStatusLabels[p.status as keyof typeof prospectStatusLabels] || p.status,
+        'Source': prospectSourceLabels[p.source as keyof typeof prospectSourceLabels] || p.source || 'Marketing',
+        'Reason': p.reasonForContact || '',
+        'Notes': p.notes || '',
+        'Created': dayjs(p.createdAt).format('YYYY-MM-DD HH:mm'),
+        'Updated': dayjs(p.updatedAt).format('YYYY-MM-DD HH:mm'),
+      }));
+
+      let fileName = `marketing-prospects-${dayjs().format('YYYY-MM-DD-HHmmss')}`;
+      let blob: Blob;
+
+      switch (exportFormat) {
+        case 'json':
+          blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
+          fileName += '.json';
+          break;
+        case 'csv': {
+          const headers = Object.keys(dataToExport[0] || {});
+          const csvRows = [
+            headers.join(','),
+            ...dataToExport.map((row) =>
+              headers
+                .map((header) => {
+                  const value = row[header as keyof typeof row] || '';
+                  return typeof value === 'string' ? `"${value.replace(/"/g, '""')}"` : value;
+                })
+                .join(',')
+            ),
+          ];
+          blob = new Blob([csvRows.join('\n')], { type: 'text/csv' });
+          fileName += '.csv';
+          break;
+        }
+        case 'excel': {
+          const headers = Object.keys(dataToExport[0] || {});
+          const excelRows = [
+            headers.join('\t'),
+            ...dataToExport.map((row) =>
+              headers
+                .map((header) => {
+                  const value = row[header as keyof typeof row] || '';
+                  return typeof value === 'string' ? `"${value.replace(/"/g, '""')}"` : value;
+                })
+                .join('\t')
+            ),
+          ];
+          blob = new Blob([excelRows.join('\n')], { type: 'application/vnd.ms-excel' });
+          fileName += '.xls';
+          break;
+        }
+        case 'pdf': {
+          const pdfContent = dataToExport
+            .map((row) => Object.entries(row).map(([key, value]) => `${key}: ${value}`).join('\n'))
+            .join('\n\n---\n\n');
+          blob = new Blob([pdfContent], { type: 'application/pdf' });
+          fileName += '.txt';
+          break;
+        }
+        default:
+          blob = new Blob([JSON.stringify(dataToExport, null, 2)], { type: 'application/json' });
+          fileName += '.json';
+      }
+
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      setExportLoading(false);
+      setExportModal(false);
+      message.success(`Prospects exported as ${exportFormat.toUpperCase()}!`);
+    }, 500);
+  };
+
   const handleEditProspect = async (values: any) => {
     if (!editingProspect) return;
     try {
@@ -430,6 +603,9 @@ export const ProspectsPage: React.FC = () => {
         },
       });
       message.success('Prospect updated successfully!');
+      if (selectedProspect && selectedProspect.id === editingProspect.id) {
+        setSelectedProspect((prev) => (prev ? { ...prev, ...values } : null));
+      }
       setEditModal(false);
       setEditingProspect(null);
       editForm.resetFields();
@@ -442,6 +618,10 @@ export const ProspectsPage: React.FC = () => {
   const handleDeleteProspect = async (id: string) => {
     try {
       await deleteProspectMutation.mutateAsync(id);
+      if (selectedProspect?.id === id) {
+        setViewDrawerOpen(false);
+        setSelectedProspect(null);
+      }
       message.success('Prospect deleted successfully!');
       refetch();
     } catch (err: any) {
@@ -452,6 +632,10 @@ export const ProspectsPage: React.FC = () => {
   const handleStatusChange = async (id: string, newStatus: ProspectStatus) => {
     try {
       await updateProspectMutation.mutateAsync({ id, data: { status: newStatus } });
+
+      if (selectedProspect && selectedProspect.id === id) {
+        setSelectedProspect((prev) => (prev ? { ...prev, status: newStatus } : null));
+      }
 
       // If prospect marked completed or purchased, mark any linked active appointments completed so flags disappear
       if (newStatus === 'meeting_completed' || newStatus === 'purchased') {
@@ -604,6 +788,17 @@ export const ProspectsPage: React.FC = () => {
       ),
     },
     {
+      title: 'Source',
+      dataIndex: 'source',
+      key: 'source',
+      width: 130,
+      render: (source: string) => (
+        <Tag color={source === 'customer_service' ? 'green' : 'blue'}>
+          {prospectSourceLabels[source as keyof typeof prospectSourceLabels] || source || 'Marketing'}
+        </Tag>
+      ),
+    },
+    {
       title: 'Added By',
       key: 'addedBy',
       width: 190,
@@ -720,20 +915,9 @@ export const ProspectsPage: React.FC = () => {
         <Space size={6} onClick={(e) => e.stopPropagation()}>
           <Tooltip title="Book Appointment">
             <Button
-              icon={<CalendarOutlined style={{ color: '#722ed1' }} />}
-              onClick={() => {
-                setAppointmentTargetProspect(record);
-                appointmentForm.resetFields();
-                appointmentForm.setFieldsValue({
-                  staffId: record.assignedUserId || user?.id,
-                  scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
-                  reason: 'Site Inspection & Property Viewing',
-                  source: 'marketing',
-                });
-                setBookAppointmentModal(true);
-              }}
+              icon={<CalendarOutlined style={{ color: '#001529' }} />}
+              onClick={() => handleOpenBookAppointment(record)}
               size="small"
-              style={{ borderColor: '#d3adf7' }}
             />
           </Tooltip>
           <Tooltip title="View Details">
@@ -741,7 +925,10 @@ export const ProspectsPage: React.FC = () => {
               type="primary"
               ghost
               icon={<EyeOutlined />}
-              onClick={() => navigate(`/marketing/prospects/${record.id}`)}
+              onClick={() => {
+                setSelectedProspect(record);
+                setViewDrawerOpen(true);
+              }}
               size="small"
             />
           </Tooltip>
@@ -780,15 +967,13 @@ export const ProspectsPage: React.FC = () => {
               }}
               trigger={['click']}
             >
-              <Button size="small">
-                Status <DownOutlined style={{ fontSize: 10 }} />
-              </Button>
+              <Button icon={<ClockCircleOutlined />} size="small" />
             </Dropdown>
           </Tooltip>
           {hasRole(['admin']) && (
             <Popconfirm
               title="Delete Prospect"
-              description={`Are you sure you want to delete ${record.firstName} ${record.lastName}?`}
+              description={`Are you sure you want to delete ${record.firstName} ${record.lastName}? This also removes its interactions and appointments.`}
               onConfirm={() => handleDeleteProspect(record.id)}
               okText="Yes"
               cancelText="No"
@@ -803,12 +988,398 @@ export const ProspectsPage: React.FC = () => {
     },
   ];
 
+  // ── Drawer Content ──────────────────────────────────────────────────────
+  const renderDrawerContent = () => {
+    if (!activeDrawerProspect) return null;
+
+    const getStatusIcon = (status: string) => {
+      switch (status) {
+        case 'new': return <InfoCircleOutlined style={{ color: '#1890ff' }} />;
+        case 'meeting_scheduled': return <CalendarOutlined style={{ color: '#faad14' }} />;
+        case 'meeting_completed': return <CheckCircleOutlined style={{ color: '#52c41a' }} />;
+        case 'suspended': return <WarningOutlined style={{ color: '#ff4d4f' }} />;
+        case 'postponed': return <ClockCircleOutlined style={{ color: '#faad14' }} />;
+        case 'canceled': return <CloseCircleOutlined style={{ color: '#ff4d4f' }} />;
+        case 'purchased': return <StarFilled style={{ color: '#722ed1' }} />;
+        default: return <UserOutlined />;
+      }
+    };
+
+    const getStatusColor = (status: string) => {
+      switch (status) {
+        case 'new': return '#1890ff';
+        case 'meeting_scheduled': return '#faad14';
+        case 'meeting_completed': return '#52c41a';
+        case 'suspended': return '#ff4d4f';
+        case 'postponed': return '#faad14';
+        case 'canceled': return '#ff4d4f';
+        case 'purchased': return '#722ed1';
+        default: return '#d9d9d9';
+      }
+    };
+
+    const assignedStaffMember = allStaff.find(
+      (u) => u.id === (activeDrawerProspect.assignedUserId || (activeDrawerProspect as any).assignedStaffId)
+    );
+
+    return (
+      <div style={{ height: '100%' }}>
+        {/* Header */}
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          marginBottom: 24,
+          paddingBottom: 16,
+          borderBottom: '1px solid #f0f0f0'
+        }}>
+          <Space>
+            <Avatar 
+              size={48} 
+              icon={<UserOutlined />} 
+              style={{ backgroundColor: tokens.primary }}
+            />
+            <div>
+              <Title level={4} style={{ margin: 0 }}>
+                {activeDrawerProspect.firstName} {activeDrawerProspect.lastName}
+              </Title>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <IdcardOutlined /> ID: {activeDrawerProspect.id}
+              </Text>
+            </div>
+          </Space>
+          <Button 
+            type="text" 
+            icon={<CloseOutlined />} 
+            onClick={() => setViewDrawerOpen(false)}
+            style={{ fontSize: 18 }}
+          />
+        </div>
+
+        {/* Status Banner */}
+        <div style={{
+          background: `${getStatusColor(activeDrawerProspect.status)}10`,
+          border: `1px solid ${getStatusColor(activeDrawerProspect.status)}`,
+          borderRadius: 8,
+          padding: '12px 16px',
+          marginBottom: 24,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between'
+        }}>
+          <Space>
+            {getStatusIcon(activeDrawerProspect.status)}
+            <Text strong>Status: {prospectStatusLabels[activeDrawerProspect.status as keyof typeof prospectStatusLabels] || activeDrawerProspect.status}</Text>
+          </Space>
+          <Badge 
+            status={activeDrawerProspect.status === 'purchased' ? 'success' : 'default'}
+            text={activeDrawerProspect.status === 'purchased' ? 'Active' : 'Inactive'}
+          />
+        </div>
+
+        {/* Quick Actions */}
+        <div style={{ marginBottom: 24 }}>
+          <Space wrap>
+            <Button
+              type="primary"
+              icon={<EditOutlined />}
+              onClick={() => {
+                setViewDrawerOpen(false);
+                handleEditClick(activeDrawerProspect);
+              }}
+            >
+              Edit Prospect
+            </Button>
+            {activeDrawerProspect.status !== 'purchased' && (
+              <Button
+                icon={<DollarOutlined />}
+                style={{ background: '#52c41a', borderColor: '#52c41a', color: '#fff' }}
+                onClick={() => {
+                  setViewDrawerOpen(false);
+                  setProspectToConvert(activeDrawerProspect);
+                  setConvertModal(true);
+                }}
+              >
+                Convert to Customer
+              </Button>
+            )}
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() => setLogInteractionModal(true)}
+            >
+              Log Interaction
+            </Button>
+            <Button
+              icon={<CalendarOutlined />}
+              onClick={() => handleOpenBookAppointment(activeDrawerProspect)}
+              style={{ background: '#001529', borderColor: '#001529', color: '#fff' }}
+              className="btn-blue-black"
+            >
+              Book Appointment
+            </Button>
+          </Space>
+        </div>
+
+        {/* Main Info Cards */}
+        <Row gutter={[16, 16]}>
+          <Col span={24}>
+            <Card size="small" title="Personal Information" bordered={false} style={{ background: '#fafafa' }}>
+              <Descriptions column={1} size="small">
+                <Descriptions.Item label={<Space><UserOutlined /> Full Name</Space>}>
+                  <Text strong>{activeDrawerProspect.firstName} {activeDrawerProspect.lastName}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label={<Space><PhoneOutlined /> Phone</Space>}>
+                  <a href={`tel:${activeDrawerProspect.phoneNumber}`}>
+                    {activeDrawerProspect.phoneNumber}
+                  </a>
+                </Descriptions.Item>
+                <Descriptions.Item label={<Space><EnvironmentOutlined /> Address</Space>}>
+                  {activeDrawerProspect.address || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label={<Space><GlobalOutlined /> Source</Space>}>
+                  <Tag color={activeDrawerProspect.source === 'customer_service' ? 'green' : 'blue'}>
+                    {prospectSourceLabels[activeDrawerProspect.source as keyof typeof prospectSourceLabels] || activeDrawerProspect.source || 'Marketing'}
+                  </Tag>
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Contact Details */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card size="small" title="Contact Details" bordered={false} style={{ background: '#fafafa' }}>
+              <Descriptions column={2} size="small">
+                <Descriptions.Item label="Assigned To">
+                  {assignedStaffMember ? (
+                    <Tag color="blue">{getUserFullName(assignedStaffMember)}</Tag>
+                  ) : (
+                    <Tag color="orange">Unassigned</Tag>
+                  )}
+                </Descriptions.Item>
+                <Descriptions.Item label="Created">
+                  {dayjs(activeDrawerProspect.createdAt).format('MMMM DD, YYYY')}
+                </Descriptions.Item>
+                <Descriptions.Item label="Last Updated" span={2}>
+                  {dayjs(activeDrawerProspect.updatedAt).format('MMMM DD, YYYY')}
+                </Descriptions.Item>
+              </Descriptions>
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Reason & Notes */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card size="small" title="Reason for Contact" bordered={false} style={{ background: '#fafafa' }}>
+              <Text>{activeDrawerProspect.reasonForContact || '—'}</Text>
+            </Card>
+          </Col>
+        </Row>
+
+        {activeDrawerProspect.notes && (
+          <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+            <Col span={24}>
+              <Card size="small" title="Notes" bordered={false} style={{ background: '#fafafa' }}>
+                <Text>{activeDrawerProspect.notes}</Text>
+              </Card>
+            </Col>
+          </Row>
+        )}
+
+        {/* Interactions */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card
+              size="small"
+              title="Conversation Log"
+              bordered={false}
+              style={{ background: '#fafafa' }}
+              extra={
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => setLogInteractionModal(true)}
+                >
+                  Log Interaction
+                </Button>
+              }
+            >
+              {interactionsLoading ? (
+                <div style={{ textAlign: 'center', padding: '20px' }}>
+                  <Spin size="small" />
+                </div>
+              ) : selectedProspectInteractions && selectedProspectInteractions.length > 0 ? (
+                <Timeline>
+                  {selectedProspectInteractions.map((interaction) => (
+                    <Timeline.Item key={interaction.id} color="blue">
+                      <Text strong>
+                        {interactionChannelLabels[interaction.channel as keyof typeof interactionChannelLabels] || interaction.channel}
+                      </Text>
+                      <br />
+                      <Text>{interaction.response}</Text>
+                      <br />
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        {dayjs(interaction.occurredAt).format('MMM DD, YYYY HH:mm')} ({dayjs(interaction.occurredAt).fromNow()})
+                      </Text>
+                    </Timeline.Item>
+                  ))}
+                </Timeline>
+              ) : (
+                <Empty
+                  description="No interactions logged yet"
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                />
+              )}
+            </Card>
+          </Col>
+        </Row>
+
+        {/* ── APPOINTMENTS & MEETINGS SECTION ──────────────────────────────── */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card
+              size="small"
+              title={
+                <Space>
+                  <CalendarOutlined style={{ color: '#1890ff' }} />
+                  <span>Scheduled Appointments & Follow-ups ({selectedProspectAppointments.length})</span>
+                </Space>
+              }
+              bordered={false}
+              style={{ background: '#fafafa' }}
+              extra={
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<CalendarOutlined />}
+                  onClick={() => handleOpenBookAppointment(activeDrawerProspect)}
+                  style={{ background: '#001529', borderColor: '#001529', color: '#fff' }}
+                  className="btn-blue-black"
+                >
+                  Book Appointment
+                </Button>
+              }
+            >
+              {selectedProspectAppointments.length > 0 ? (
+                <Timeline style={{ marginTop: 8 }}>
+                  {selectedProspectAppointments.map((apt) => {
+                    const isDue =
+                      String(apt.status || '').toLowerCase() === 'scheduled' &&
+                      dayjs(apt.scheduledFor).isBefore(dayjs().endOf('day'));
+                    return (
+                      <Timeline.Item
+                        key={apt.id}
+                        color={apt.status === 'completed' ? 'green' : isDue ? 'red' : 'blue'}
+                        dot={isDue ? <FlagFilled style={{ color: '#ff4d4f', fontSize: 14 }} /> : undefined}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                          <div>
+                            <Space size={6} wrap>
+                              <Text strong style={{ fontSize: 13 }}>
+                                {dayjs(apt.scheduledFor).format('ddd, MMM D, YYYY · h:mm A')}
+                              </Text>
+                              {isDue && (
+                                <Tag
+                                  color="red"
+                                  style={{
+                                    fontWeight: 700,
+                                    fontSize: 10,
+                                    padding: '0 5px',
+                                    border: '1px solid #ffa39e',
+                                    background: '#fff1f0',
+                                    color: '#cf1322',
+                                  }}
+                                >
+                                  🚩 DUE TODAY
+                                </Tag>
+                              )}
+                              <Tag color={apt.status === 'completed' ? 'green' : apt.status === 'postponed' ? 'orange' : apt.status === 'canceled' ? 'default' : 'blue'}>
+                                {String(apt.status || 'scheduled').toUpperCase()}
+                              </Tag>
+                            </Space>
+                            <div style={{ marginTop: 4 }}>
+                              <Text style={{ fontSize: 12 }}>{apt.reason || 'Client Consultation / Site Inspection'}</Text>
+                            </div>
+                          </div>
+                        </div>
+                      </Timeline.Item>
+                    );
+                  })}
+                </Timeline>
+              ) : (
+                <div style={{ textAlign: 'center', padding: '16px 0' }}>
+                  <Empty
+                    description="No appointments booked yet for this prospect"
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  >
+                    <Button
+                      type="primary"
+                      ghost
+                      size="small"
+                      icon={<CalendarOutlined />}
+                      onClick={() => handleOpenBookAppointment(activeDrawerProspect)}
+                    >
+                      Schedule Follow-up Meeting
+                    </Button>
+                  </Empty>
+                </div>
+              )}
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Footer */}
+        <div style={{ 
+          marginTop: 24, 
+          paddingTop: 16, 
+          borderTop: '1px solid #f0f0f0',
+          display: 'flex',
+          justifyContent: 'flex-end'
+        }}>
+          <Space>
+            <Button 
+              type="primary" 
+              onClick={() => {
+                setViewDrawerOpen(false);
+                navigate(`/marketing/prospects/${activeDrawerProspect.id}`);
+              }}
+            >
+              View Full Details
+            </Button>
+          </Space>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div style={{ maxWidth: '100%', padding: '0 4px' }}>
+      <style>{`
+        .btn-blue-black {
+          background-color: #001529 !important;
+          border-color: #001529 !important;
+          color: #ffffff !important;
+        }
+        .btn-blue-black:hover, .btn-blue-black:focus {
+          background-color: #0c2742 !important;
+          border-color: #0c2742 !important;
+          color: #ffffff !important;
+        }
+      `}</style>
       <PageHeader
         title={isMarketingStaff ? 'My Marketing Prospects' : 'Marketing Prospects'}
         subtitle={isMarketingStaff ? 'Viewing prospects added by or assigned to you' : undefined}
         actions={[
+          {
+            label: 'Book Appointment',
+            onClick: () => handleOpenBookAppointment(),
+            icon: <CalendarOutlined />,
+            style: { background: '#001529', borderColor: '#001529', color: '#fff' },
+            className: 'btn-blue-black',
+          },
           ...(hasRole(['admin'])
             ? [{
                 label: 'Bonus Rules',
@@ -822,11 +1393,23 @@ export const ProspectsPage: React.FC = () => {
                 icon: <TrophyOutlined style={{ color: '#faad14' }} />,
               }]
             : []),
-          // All staff members are granted permission to add new prospects
           {
             label: 'Add Prospect',
             onClick: () => setIsModalOpen(true),
             icon: <PlusOutlined />,
+          },
+          {
+            label: 'Export',
+            onClick: () => setExportModal(true),
+            icon: <ExportOutlined />,
+          },
+          {
+            label: 'Refresh',
+            onClick: () => {
+              refetch();
+              message.success('Refreshed!');
+            },
+            icon: <ReloadOutlined />,
           },
         ]}
       />
@@ -1072,7 +1655,10 @@ export const ProspectsPage: React.FC = () => {
             },
           }}
           onRow={(record) => ({
-            onClick: () => navigate(`/marketing/prospects/${record.id}`),
+            onClick: () => {
+              setSelectedProspect(record);
+              setViewDrawerOpen(true);
+            },
             style: { cursor: 'pointer' },
           })}
         />
@@ -1377,13 +1963,12 @@ export const ProspectsPage: React.FC = () => {
       <Modal
         title={
           <Space>
-            <CalendarOutlined style={{ color: '#722ed1', fontSize: 20 }} />
-            <span>
-              Book Appointment —{' '}
+            <CalendarOutlined style={{ color: '#001529' }} />
+            <Text strong>
               {appointmentTargetProspect
-                ? `${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}`
-                : 'Prospect'}
-            </span>
+                ? `Book Appointment: ${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}`
+                : 'Book Prospect Appointment'}
+            </Text>
           </Space>
         }
         open={bookAppointmentModal}
@@ -1394,31 +1979,38 @@ export const ProspectsPage: React.FC = () => {
         }}
         footer={null}
         width={560}
+        style={{ top: 24, maxWidth: '95%' }}
         destroyOnClose
       >
         <Form
           form={appointmentForm}
           layout="vertical"
           onFinish={async (values) => {
-            if (!appointmentTargetProspect) return;
+            const targetId = values.prospectId || appointmentTargetProspect?.id;
+            if (!targetId) {
+              message.error('Please select a prospect for this appointment');
+              return;
+            }
             try {
               const reasonText = values.reason?.trim()
                 ? `[${values.source || 'marketing'}] ${values.reason.trim()}`
                 : `[${values.source || 'marketing'}] Site inspection and sales consultation`;
 
               await createAppointment.mutateAsync({
-                prospectId: appointmentTargetProspect.id,
+                prospectId: targetId,
                 scheduledFor: values.scheduledFor.toISOString(),
                 reason: reasonText,
               });
+              queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
+              window.dispatchEvent(new Event('omark-appointments-changed'));
+              const target = allExistingProspects.find((p) => p.id === targetId) || appointmentTargetProspect;
               message.success(
-                `Appointment booked successfully for ${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+                `Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
               );
               setBookAppointmentModal(false);
               setAppointmentTargetProspect(null);
               appointmentForm.resetFields();
               refetchAppointments();
-              window.dispatchEvent(new Event('omark-appointments-changed'));
             } catch (err: any) {
               message.error(err?.message || 'Failed to book appointment');
             }
@@ -1430,6 +2022,31 @@ export const ProspectsPage: React.FC = () => {
             staffId: user?.id,
           }}
         >
+          <Form.Item
+            name="prospectId"
+            label={<span><UserOutlined style={{ marginRight: 6 }} />Select Prospect</span>}
+            rules={[{ required: true, message: 'Please search and select a prospect' }]}
+            extra={<Text type="secondary" style={{ fontSize: 11 }}>Choose from all prospects or type to search by name, phone, or address</Text>}
+          >
+            <Select
+              showSearch
+              placeholder="Type name, phone, or location to filter all prospects..."
+              optionFilterProp="label"
+              filterOption={(input, option) => {
+                const text = String(option?.label ?? '').toLowerCase();
+                return text.includes(input.toLowerCase().trim());
+              }}
+              onChange={(val) => {
+                const chosen = allExistingProspects.find((p) => p.id === val);
+                if (chosen) setAppointmentTargetProspect(chosen);
+              }}
+              options={allExistingProspects.map((p) => ({
+                value: p.id,
+                label: `${p.firstName} ${p.lastName} — ${p.phoneNumber || 'No phone'} (${p.address || 'No location'})`,
+              }))}
+            />
+          </Form.Item>
+
           <Row gutter={12}>
             <Col span={12}>
               <Form.Item
@@ -1456,6 +2073,7 @@ export const ProspectsPage: React.FC = () => {
                   showTime={{ format: 'hh:mm A' }}
                   format="YYYY-MM-DD hh:mm A"
                   style={{ width: '100%' }}
+                  disabledDate={(current) => current && current < dayjs().startOf('day')}
                 />
               </Form.Item>
             </Col>
@@ -1463,7 +2081,7 @@ export const ProspectsPage: React.FC = () => {
 
           <Row gutter={12}>
             <Col span={12}>
-              <Form.Item name="reason" label="Agenda / Purpose" rules={[{ required: true }]}>
+              <Form.Item name="reason" label="Agenda / Purpose" rules={[{ required: true, message: 'Please select agenda' }]}>
                 <Select>
                   <Option value="Site Inspection & Property Viewing">🏡 Site Inspection & Property Viewing</Option>
                   <Option value="Payment Plan & Pricing Discussion">💰 Payment Plan & Pricing Discussion</Option>
@@ -1484,21 +2102,171 @@ export const ProspectsPage: React.FC = () => {
             </Col>
           </Row>
 
-          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right', marginTop: 16 }}>
             <Space>
-              <Button onClick={() => setBookAppointmentModal(false)}>Cancel</Button>
+              <Button onClick={() => {
+                setBookAppointmentModal(false);
+                setAppointmentTargetProspect(null);
+                appointmentForm.resetFields();
+              }}>
+                Cancel
+              </Button>
               <Button
                 type="primary"
                 htmlType="submit"
                 loading={createAppointment.isPending}
-                style={{ background: '#722ed1', borderColor: '#722ed1' }}
+                icon={<CheckCircleOutlined />}
+                style={{ background: '#001529', borderColor: '#001529', color: '#fff' }}
+                className="btn-blue-black"
               >
-                Schedule Appointment
+                Confirm Appointment
               </Button>
             </Space>
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* Premium Slide-in Drawer */}
+      <Drawer
+        title={null}
+        placement="right"
+        closable={false}
+        onClose={() => setViewDrawerOpen(false)}
+        open={viewDrawerOpen}
+        width="50%"
+        style={{ 
+          padding: 0,
+          boxShadow: '-4px 0 20px rgba(0,0,0,0.1)'
+        }}
+        bodyStyle={{ 
+          padding: '24px',
+          background: '#f5f7fa',
+          overflowY: 'auto',
+          height: '100%'
+        }}
+        maskStyle={{ background: 'rgba(0,0,0,0.3)' }}
+        push={false}
+      >
+        {renderDrawerContent()}
+      </Drawer>
+
+      {/* Export Modal */}
+      <Modal
+        title={
+          <Space>
+            <ExportOutlined style={{ color: tokens.primary }} />
+            <Text strong>Export Prospects</Text>
+          </Space>
+        }
+        open={exportModal}
+        onCancel={() => {
+          setExportModal(false);
+          setExportFormat('excel');
+        }}
+        footer={[
+          <Button key="cancel" onClick={() => {
+            setExportModal(false);
+            setExportFormat('excel');
+          }}>
+            Cancel
+          </Button>,
+          <Button 
+            key="export" 
+            type="primary" 
+            icon={<DownloadOutlined />}
+            onClick={handleExport}
+            loading={exportLoading}
+          >
+            Export {exportFormat.toUpperCase()}
+          </Button>,
+        ]}
+        width={500}
+        style={{ maxWidth: '95%', top: 20 }}
+        bodyStyle={{ padding: '16px' }}
+      >
+        <Alert
+          message={`${filteredMarketingProspects.length} prospects will be exported`}
+          description="Select the file format you want to export your data in."
+          type="info"
+          showIcon
+          style={{ marginBottom: 24 }}
+        />
+
+        <div style={{ marginBottom: 16 }}>
+          <Text strong>Select Export Format:</Text>
+        </div>
+
+        <Radio.Group 
+          value={exportFormat} 
+          onChange={(e) => setExportFormat(e.target.value)}
+          style={{ width: '100%' }}
+        >
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Radio value="excel" style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 6 }}>
+              <Space>
+                <FileExcelOutlined style={{ color: '#217346', fontSize: 18 }} />
+                <div>
+                  <Text strong>Excel (.xls)</Text>
+                  <br />
+                  <Text type="secondary" style={{ fontSize: 12 }}>Best for data analysis and editing</Text>
+                </div>
+              </Space>
+            </Radio>
+            
+            <Radio value="csv" style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 6 }}>
+              <Space>
+                <FileTextOutlined style={{ color: '#1890ff', fontSize: 18 }} />
+                <div>
+                  <Text strong>CSV (.csv)</Text>
+                  <br />
+                  <Text type="secondary" style={{ fontSize: 12 }}>Compatible with most spreadsheet apps</Text>
+                </div>
+              </Space>
+            </Radio>
+            
+            <Radio value="pdf" style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 6 }}>
+              <Space>
+                <FilePdfOutlined style={{ color: '#ff4d4f', fontSize: 18 }} />
+                <div>
+                  <Text strong>PDF (.pdf)</Text>
+                  <br />
+                  <Text type="secondary" style={{ fontSize: 12 }}>For printing and sharing</Text>
+                </div>
+              </Space>
+            </Radio>
+            
+            <Radio value="json" style={{ width: '100%', padding: '8px 12px', border: '1px solid #d9d9d9', borderRadius: 6 }}>
+              <Space>
+                <CodeOutlined style={{ color: '#722ed1', fontSize: 18 }} />
+                <div>
+                  <Text strong>JSON (.json)</Text>
+                  <br />
+                  <Text type="secondary" style={{ fontSize: 12 }}>For developers and API integration</Text>
+                </div>
+              </Space>
+            </Radio>
+          </Space>
+        </Radio.Group>
+
+        <Divider />
+        <div style={{ padding: 12, background: '#f5f5f5', borderRadius: 6 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            <InfoCircleOutlined /> The export will include all filtered prospects with their current status and details.
+          </Text>
+        </div>
+      </Modal>
+
+      {/* Log Interaction Modal */}
+      <LogInteractionModal
+        open={logInteractionModal}
+        prospect={activeDrawerProspect}
+        onClose={() => setLogInteractionModal(false)}
+        onLogged={() => {
+          refetchInteractions();
+          refetchAppointments();
+          refetch();
+        }}
+      />
     </div>
   );
 };
