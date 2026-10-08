@@ -61,6 +61,7 @@ import {
   FileProtectOutlined,
 } from '@ant-design/icons';
 import { LandPurchaseAgreementModal } from '@/components/paymentPlan/LandPurchaseAgreementModal';
+import { RecordPaymentModal } from '@/components/paymentPlan/RecordPaymentModal';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
@@ -124,6 +125,8 @@ export const PaymentPlansPage: React.FC = () => {
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
   const [agreementPlan, setAgreementPlan] = useState<PaymentPlan | null>(null);
+  const [recordPaymentPlan, setRecordPaymentPlan] = useState<PaymentPlan | null>(null);
+  const [recordPaymentModalOpen, setRecordPaymentModalOpen] = useState(false);
   const [addModal, setAddModal] = useState(false);
   const [addForm] = Form.useForm();
 
@@ -728,10 +731,21 @@ export const PaymentPlansPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 195,
       fixed: 'right' as const,
       render: (_: any, record: PaymentPlan) => (
         <Space>
+          <Tooltip title="Record Payment">
+            <Button
+              type="primary"
+              icon={<DollarOutlined />}
+              style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
+              onClick={() => {
+                setRecordPaymentPlan(record);
+                setRecordPaymentModalOpen(true);
+              }}
+            />
+          </Tooltip>
           <Tooltip title="View Details">
             <Button
               type="primary"
@@ -867,6 +881,17 @@ export const PaymentPlansPage: React.FC = () => {
         {/* Quick Actions */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
+            <Button
+              type="primary"
+              icon={<DollarOutlined />}
+              style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
+              onClick={() => {
+                setRecordPaymentPlan(selectedPlan);
+                setRecordPaymentModalOpen(true);
+              }}
+            >
+              Record Payment
+            </Button>
             <Button
               type="primary"
               ghost
@@ -1524,6 +1549,22 @@ export const PaymentPlansPage: React.FC = () => {
           property={propertyMap[agreementPlan.propertyId]}
         />
       )}
+
+      {/* Unified Record Payment Modal */}
+      <RecordPaymentModal
+        open={recordPaymentModalOpen}
+        onClose={() => {
+          setRecordPaymentModalOpen(false);
+          setRecordPaymentPlan(null);
+        }}
+        plan={recordPaymentPlan}
+        customerName={recordPaymentPlan ? getCustomerName(recordPaymentPlan.customerId) : undefined}
+        customerPhone={recordPaymentPlan ? getCustomerPhone(recordPaymentPlan.customerId) : undefined}
+        propertyName={recordPaymentPlan ? getCustomerProperty(recordPaymentPlan.customerId) : undefined}
+        onSuccess={() => {
+          refetchPaymentPlans();
+        }}
+      />
     </div>
   );
 };

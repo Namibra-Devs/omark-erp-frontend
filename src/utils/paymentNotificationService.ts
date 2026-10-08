@@ -21,6 +21,16 @@ export interface SendSMSResult {
   recipient?: string;
 }
 
+export function normalizePhoneNumber(phone: string): string {
+  let cleaned = phone.trim().replace(/[\s\-\(\)]/g, '');
+  if (cleaned.startsWith('0') && cleaned.length === 10) {
+    cleaned = '+233' + cleaned.substring(1);
+  } else if (!cleaned.startsWith('+') && cleaned.startsWith('233')) {
+    cleaned = '+' + cleaned;
+  }
+  return cleaned;
+}
+
 /**
  * Automatically dispatches an SMS receipt to a customer whenever a payment is completed or recorded.
  */
@@ -45,7 +55,7 @@ export async function dispatchPaymentReceiptSMS(params: PaymentReceiptSMSParams)
     };
   }
 
-  const cleanPhone = customerPhone.trim().replace(/\s+/g, '');
+  const cleanPhone = normalizePhoneNumber(customerPhone);
   const amountGHS = (amountMinor / 100).toLocaleString(undefined, {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
@@ -62,28 +72,45 @@ export async function dispatchPaymentReceiptSMS(params: PaymentReceiptSMSParams)
   const balanceText = balanceGHS !== undefined ? ` Remaining Balance: GH₵${balanceGHS}.` : '';
   const propertyText = propertyName ? ` for ${propertyName}` : '';
 
-  const smsText = `Dear ${customerName}, your payment of GH₵${amountGHS}${propertyText}${installmentText} has been received successfully.${refText}${balanceText} Thank you for choosing Omark Real Estate!`;
+  const smsText = `Dear ${customerName}, your payment of GH₵${amountGHS}${propertyText}${installmentText} has been received successfully.${refText}${balanceText} Thank you for choosing Omark Real Estate!`.trim();
 
   let sent = false;
+  let deliveryError: string | null = null;
 
-  // 1. Try primary broadcast endpoint
+  // 1. Primary broadcast endpoint /notifications/send-sms
   try {
-    await apiClient.post('/notifications/send-sms', {
+    const res = await apiClient.post('/notifications/send-sms', {
+      audience: 'custom',
+      message: smsText.slice(0, 480),
+      messageText: smsText.slice(0, 480),
+      phoneNumbers: [cleanPhone],
       recipientPhoneNumbers: [cleanPhone],
-      messageText: smsText,
-      senderId: 'OMARK-REAL',
+      recipients: [cleanPhone],
+      senderId: 'OMARK',
     });
-    sent = true;
-  } catch (errPrimary) {
+    const resData = res.data?.data || res.data;
+    if (resData && typeof resData.sent === 'number') {
+      sent = resData.sent > 0;
+      if (!sent && resData.failed > 0) {
+        deliveryError = 'SMS provider could not deliver message to this number.';
+      }
+    } else {
+      sent = true;
+    }
+  } catch (errPrimary: any) {
+    const primaryMsg = errPrimary?.response?.data?.error?.message || errPrimary?.response?.data?.message || errPrimary?.message;
+    console.warn('[PaymentSMS] Primary /notifications/send-sms returned error, attempting test route:', primaryMsg);
+
     // 2. Fallback to direct /notifications/test endpoint
     try {
       await apiClient.post('/notifications/test', {
         phoneNumber: cleanPhone,
-        message: smsText,
+        message: smsText.slice(0, 160),
       });
       sent = true;
-    } catch (errSecondary) {
-      console.warn('[PaymentSMS] Backend SMS gateway returned error, logged event locally:', errSecondary);
+    } catch (errSecondary: any) {
+      deliveryError = primaryMsg || errSecondary?.response?.data?.message || errSecondary?.message || 'Gateway error';
+      console.warn('[PaymentSMS] Backend SMS gateway returned error:', deliveryError);
     }
   }
 
@@ -104,11 +131,13 @@ export async function dispatchPaymentReceiptSMS(params: PaymentReceiptSMSParams)
   });
 
   if (sent) {
-    message.success(`Automated SMS payment prompt dispatched to ${cleanPhone}`);
+    message.success(`Automated SMS payment receipt dispatched to ${cleanPhone}`);
+  } else if (deliveryError) {
+    message.warning(`Payment recorded, but SMS could not be sent to ${cleanPhone} (${deliveryError})`);
   }
 
   return {
-    success: true,
+    success: sent,
     message: smsText,
     recipient: cleanPhone,
   };

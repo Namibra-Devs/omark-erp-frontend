@@ -120,6 +120,10 @@ export const CrossSystemActivity: React.FC<CrossSystemActivityProps> = ({ stats,
             Scoped to {branchName}
           </Tag>
         )}
+        <Tag color="cyan" style={{ fontWeight: 500, borderRadius: 4 }}>
+          <IdcardOutlined style={{ marginRight: 4 }} />
+          {stats.activeCheckInsCount || 0} Visitors On Premises
+        </Tag>
       </Title>
 
       <Row gutter={[16, 16]}>

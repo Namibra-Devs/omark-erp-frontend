@@ -199,12 +199,16 @@ const addResponseInterceptor = (instance: AxiosInstance) => {
           timestamp: Date.now(),
         });
       } else if (['post', 'put', 'patch', 'delete'].includes(response.config?.method?.toLowerCase() || '')) {
-        // Invalidate matching keys instead of clearing the entire cache
+        // Invalidate matching keys and related queries
         const url = response.config?.url || '';
         const basePath = url.split('?')[0];
         if (basePath) {
+          const isPaymentPlanMutation = basePath.includes('/payment-plans') || basePath.includes('/payments');
           for (const [key] of memoryGetCache.entries()) {
-            if (key.includes(basePath)) {
+            if (
+              key.includes(basePath) ||
+              (isPaymentPlanMutation && (key.includes('/payment-plans') || key.includes('/customers') || key.includes('/dashboard')))
+            ) {
               memoryGetCache.delete(key);
               try {
                 sessionStorage.removeItem(`${SESSION_CACHE_PREFIX}${key}`);

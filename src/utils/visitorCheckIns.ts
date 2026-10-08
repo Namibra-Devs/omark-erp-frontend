@@ -3,6 +3,12 @@
 // Front-Desk Client & Visitor Check-Ins System
 import { useState, useEffect, useMemo } from 'react';
 import { getBranchCanonicalKey } from '@/utils/branchIsolation';
+import { recordSystemEvent } from '@/utils/activityNotificationEngine';
+
+const syncChannel =
+  typeof window !== 'undefined' && 'BroadcastChannel' in window
+    ? new BroadcastChannel('omark-checkins-sync')
+    : null;
 
 export type CheckInStatus = 'waiting' | 'in_premises' | 'completed' | 'canceled';
 export type VisitorCategory = 'customer' | 'prospect' | 'contractor' | 'legal_survey' | 'inquiry' | 'vip' | 'other';
@@ -221,6 +227,10 @@ export function saveCheckIns(records: CheckInRecord[]): void {
   if (typeof window !== 'undefined') {
     window.__omark_checkins_cache__ = records;
     window.dispatchEvent(new CustomEvent('omark-checkins-changed', { detail: records }));
+    window.dispatchEvent(new CustomEvent('omark-activity-changed'));
+    try {
+      syncChannel?.postMessage({ type: 'checkins-updated', count: records.length });
+    } catch (e) {}
   }
 }
 
@@ -261,6 +271,26 @@ export function addCheckIn(
   };
 
   saveCheckIns([newRecord, ...all]);
+
+  // Dispatch persistent system notification & activity log so Admin Dashboard instantly captures check-in
+  try {
+    const catLabel = visitorCategoryLabels[newRecord.category]?.label || newRecord.category;
+    recordSystemEvent({
+      title: `Visitor Check-In: ${newRecord.visitorName}`,
+      details: `${catLabel} checked in at ${branchPrefix} desk — ${newRecord.purpose}${newRecord.hostStaffName ? ` (Host: ${newRecord.hostStaffName})` : ''}`,
+      category: 'attendance',
+      type: 'info',
+      actorName: newRecord.handledByName || 'Front Desk Reception',
+      actorRole: 'secretary',
+      branchName: branchPrefix,
+      targetRole: ['admin', 'super_admin', 'branch_manager', 'secretary'],
+      link: '/admin/dashboard',
+      refId: newRecord.id,
+    });
+  } catch (e) {
+    console.warn('Notice recording visitor checkin system event:', e);
+  }
+
   return newRecord;
 }
 
@@ -281,11 +311,29 @@ export function updateCheckIn(id: string, updates: Partial<CheckInRecord>): Chec
 }
 
 export function checkOutVisitor(id: string, notes?: string): CheckInRecord {
-  return updateCheckIn(id, {
+  const updated = updateCheckIn(id, {
     status: 'completed',
     checkOutTime: new Date().toISOString(),
     ...(notes ? { notes } : {}),
   });
+
+  try {
+    recordSystemEvent({
+      title: `Visitor Checked Out: ${updated.visitorName}`,
+      details: `Pass #${updated.code} checked out after visit with ${updated.hostStaffName || 'host staff'}.`,
+      category: 'attendance',
+      type: 'success',
+      actorName: updated.handledByName || 'Front Desk Reception',
+      actorRole: 'secretary',
+      targetRole: ['admin', 'super_admin', 'branch_manager', 'secretary'],
+      link: '/admin/dashboard',
+      refId: updated.id,
+    });
+  } catch (e) {
+    console.warn('Notice recording visitor checkout event:', e);
+  }
+
+  return updated;
 }
 
 export function deleteCheckIn(id: string): void {
@@ -301,6 +349,11 @@ export function useCheckIns(branchId?: string, branchesList?: any[]) {
     const refresh = () => setRecords(getCheckIns());
     window.addEventListener('omark-checkins-changed', refresh);
     window.addEventListener('storage', refresh);
+    if (syncChannel) {
+      syncChannel.onmessage = (e) => {
+        if (e.data?.type === 'checkins-updated') refresh();
+      };
+    }
     return () => {
       window.removeEventListener('omark-checkins-changed', refresh);
       window.removeEventListener('storage', refresh);

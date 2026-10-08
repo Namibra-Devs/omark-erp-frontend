@@ -170,6 +170,9 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['secretary-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['payments'] });
 
       // 2. Call parent callback if provided
       if (onRecordPayment) {
@@ -233,6 +236,9 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['secretary-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['accounts-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['payments'] });
 
       // 2. Call parent callback if provided
       if (onRecordPayment) {

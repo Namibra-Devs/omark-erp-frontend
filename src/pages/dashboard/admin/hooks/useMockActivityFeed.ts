@@ -9,6 +9,7 @@ import { getStoredStaffBonuses } from '@/api/bonuses';
 import { getStoredComplaints } from '@/api/complaints';
 import { getStoredPayrollRecords } from '@/api/payroll';
 import { getStoredInteractions } from '@/utils/interactionStorage';
+import { getCheckIns, visitorCategoryLabels } from '@/utils/visitorCheckIns';
 import type { ActivityLog } from '../types';
 
 export interface MockActivityStats {
@@ -19,6 +20,8 @@ export interface MockActivityStats {
   pendingPayrollCount: number;
   openComplaintsCount: number;
   pendingApprovalsCount: number;
+  activeCheckInsCount: number;
+  totalCheckInsCount: number;
 }
 
 export const buildActivityLogs = (branchId?: string): ActivityLog[] => {
@@ -90,6 +93,23 @@ export const buildActivityLogs = (branchId?: string): ActivityLog[] => {
     type: 'info',
   }));
 
+  // 7. Live Front-Desk Visitor Check-Ins & Check-Outs
+  const checkIns = getCheckIns()
+    .filter((c) => !branchId || !c.branchId || c.branchId === branchId)
+    .map((c): ActivityLog => ({
+      id: `chk-${c.id}`,
+      user: c.handledByName || 'Front Desk',
+      action:
+        c.status === 'completed'
+          ? 'Visitor Checked Out'
+          : c.status === 'in_premises'
+          ? 'Visitor On Premises'
+          : 'Visitor Checked In',
+      details: `${c.visitorName} (${visitorCategoryLabels[c.category]?.label || c.category}) — ${c.purpose}${c.hostStaffName ? ` (Host: ${c.hostStaffName})` : ''}`,
+      timestamp: formatTs(c.checkOutTime || c.checkInTime || c.createdAt),
+      type: c.status === 'completed' ? 'success' : c.status === 'in_premises' ? 'info' : 'warning',
+    }));
+
   return [
     ...systemActivities,
     ...expenses,
@@ -97,6 +117,7 @@ export const buildActivityLogs = (branchId?: string): ActivityLog[] => {
     ...complaints,
     ...approvals,
     ...interactions,
+    ...checkIns,
   ]
     .filter((log) => Boolean(log.timestamp))
     .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
@@ -146,6 +167,13 @@ export const buildStats = (branchId?: string): MockActivityStats => {
   );
   const pendingPayrollCount = payroll.filter((p) => p.status === 'pending').length;
 
+  // 6. Live Visitor Check-Ins
+  const checkIns = getCheckIns().filter(
+    (c) => !branchId || !c.branchId || c.branchId === branchId
+  );
+  const activeCheckInsCount = checkIns.filter((c) => c.status === 'in_premises').length;
+  const totalCheckInsCount = checkIns.length;
+
   return {
     totalExpensesMinor,
     internalExpensesMinor,
@@ -154,6 +182,8 @@ export const buildStats = (branchId?: string): MockActivityStats => {
     pendingPayrollCount,
     openComplaintsCount,
     pendingApprovalsCount: pendingApprovals.length,
+    activeCheckInsCount,
+    totalCheckInsCount,
   };
 };
 
@@ -175,6 +205,7 @@ export const useMockActivityFeed = (branchId?: string) => {
     window.addEventListener('omark-complaints-changed', refresh);
     window.addEventListener('omark-interactions-changed', refresh);
     window.addEventListener('omark-payroll-changed', refresh);
+    window.addEventListener('omark-checkins-changed', refresh);
     window.addEventListener('storage', refresh);
 
     return () => {
@@ -185,6 +216,7 @@ export const useMockActivityFeed = (branchId?: string) => {
       window.removeEventListener('omark-complaints-changed', refresh);
       window.removeEventListener('omark-interactions-changed', refresh);
       window.removeEventListener('omark-payroll-changed', refresh);
+      window.removeEventListener('omark-checkins-changed', refresh);
       window.removeEventListener('storage', refresh);
     };
   }, [branchId]);

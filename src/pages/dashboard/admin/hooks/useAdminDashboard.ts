@@ -289,6 +289,20 @@ export const useAdminDashboard = () => {
   const [lastSeenActivityAt, setLastSeenActivityAt] = useState(() => new Date().toISOString().replace('T', ' ').slice(0, 19));
   const markActivitySeen = () => setLastSeenActivityAt(new Date().toISOString().replace('T', ' ').slice(0, 19));
 
+  // Listen for real-time check-in creation / updates across branches and tabs
+  const [checkInsRevision, setCheckInsRevision] = useState(0);
+  useEffect(() => {
+    const handleCheckInsChanged = () => {
+      setCheckInsRevision((prev) => prev + 1);
+    };
+    window.addEventListener('omark-checkins-changed', handleCheckInsChanged);
+    window.addEventListener('storage', handleCheckInsChanged);
+    return () => {
+      window.removeEventListener('omark-checkins-changed', handleCheckInsChanged);
+      window.removeEventListener('storage', handleCheckInsChanged);
+    };
+  }, []);
+
   const loading =
     statsLoading ||
     usersLoading ||
@@ -387,7 +401,7 @@ export const useAdminDashboard = () => {
     return [...localActivityLogs, ...mappedApiFeed, ...live, ...mockActivityLogs]
       .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
       .slice(0, 30);
-  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs, mockActivityLogs, apiActivityFeed]);
+  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs, mockActivityLogs, apiActivityFeed, checkInsRevision]);
 
   const newActivityCount = useMemo(
     () => activityLogs.filter((a) => a.timestamp > lastSeenActivityAt).length,

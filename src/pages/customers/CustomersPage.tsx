@@ -20,7 +20,13 @@ import { usePropertiesQuery } from '@/api/properties';
 import { useBranchesQuery } from '@/api/branches';
 import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
-import { getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
+import {
+  useCreateAppointmentMutation,
+  useAppointmentsQuery,
+  appointmentsKeys,
+} from '@/api/appointments';
+import { saveStoredInteraction } from '@/utils/interactionStorage';
+import { recordSystemEvent, getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
 import { cacheCustomerSummaries, clearCustomerCache } from '@/utils/customerPortalCache';
 import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
 import { setPhoto } from '@/utils/userPhotoStorage';
@@ -153,6 +159,9 @@ export const CustomersPage: React.FC = () => {
   const updateCustomer = useUpdateCustomerMutation();
   const deleteCustomer = useDeleteCustomerMutation();
   const createPaymentPlan = useCreatePaymentPlanMutation();
+  const createAppointment = useCreateAppointmentMutation();
+  const { data: appointmentsResponse } = useAppointmentsQuery({ pageSize: 500 });
+  const allAppointments = appointmentsResponse?.items ?? [];
 
   // Extract data from responses with branch isolation
   const { data: branches = [] } = useBranchesQuery();
@@ -372,6 +381,101 @@ export const CustomersPage: React.FC = () => {
   const [exportModal, setExportModal] = useState(false);
   const [exportFormat, setExportFormat] = useState<'excel' | 'csv' | 'pdf' | 'json'>('excel');
   const [exportLoading, setExportLoading] = useState(false);
+
+  // Appointment scheduling states
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [customerForAppointment, setCustomerForAppointment] = useState<Customer | null>(null);
+  const [scheduleForm] = Form.useForm();
+  const [schedulingSubmitting, setSchedulingSubmitting] = useState(false);
+
+  const handleOpenScheduleModal = (customer?: Customer) => {
+    if (customer) {
+      setCustomerForAppointment(customer);
+      scheduleForm.setFieldsValue({
+        customerId: customer.id,
+        scheduledFor: dayjs().add(1, 'day').hour(10).minute(0).second(0),
+        reason: 'Payment Plan Consultation',
+        type: 'in_person',
+        assignedUserId: user?.id,
+        notes: '',
+      });
+    } else {
+      setCustomerForAppointment(null);
+      scheduleForm.setFieldsValue({
+        customerId: undefined,
+        scheduledFor: dayjs().add(1, 'day').hour(10).minute(0).second(0),
+        reason: 'General Customer Consultation',
+        type: 'in_person',
+        assignedUserId: user?.id,
+        notes: '',
+      });
+    }
+    setScheduleModalOpen(true);
+  };
+
+  const handleScheduleAppointmentSubmit = async (values: any) => {
+    setSchedulingSubmitting(true);
+    try {
+      const targetId = values.customerId || customerForAppointment?.id;
+      const targetCust = customers.find((c) => c.id === targetId) || customerForAppointment;
+      const scheduledIso = values.scheduledFor ? values.scheduledFor.toISOString() : new Date().toISOString();
+      const customerFullName = targetCust ? `${targetCust.firstName} ${targetCust.lastName}`.trim() : 'Customer';
+
+      const reasonWithNotes = values.notes?.trim() ? `${values.reason} — ${values.notes.trim()}` : values.reason;
+
+      const created = await createAppointment.mutateAsync(
+        tagPayloadWithBranch(
+          {
+            customerId: targetId,
+            scheduledFor: scheduledIso,
+            reason: reasonWithNotes,
+          },
+          user
+        )
+      );
+
+      const apptId = created?.id || `appt-${Date.now()}`;
+
+      // 1. Save to interaction storage for customer timeline tracking
+      saveStoredInteraction({
+        id: `inter_appt_${apptId}`,
+        appointmentId: apptId,
+        customerId: targetId,
+        prospectName: customerFullName,
+        prospectPhone: targetCust?.phoneNumber,
+        prospectSource: 'customer_service',
+        channel: values.type === 'phone' ? 'call' : values.type === 'video' ? 'email' : 'in_person',
+        response: `Appointment booked for ${dayjs(scheduledIso).format('MMM D, YYYY h:mm A')}. Purpose: ${values.reason}. Type: ${values.type}. Notes: ${values.notes || 'None'}`,
+        loggedByUserId: user?.id || 'staff',
+        loggedByUserName: user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Staff Member',
+        occurredAt: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      });
+
+      // 2. Dispatch real-time system event so Admin & staff dashboards immediately capture it
+      recordSystemEvent({
+        title: `Appointment Scheduled: ${customerFullName}`,
+        details: `${values.reason} scheduled for ${dayjs(scheduledIso).format('MMM D, YYYY h:mm A')} (${values.type === 'in_person' ? 'Office Visit' : values.type === 'site_visit' ? 'Site Inspection' : values.type === 'video' ? 'Video Conference' : 'Phone Call'})`,
+        category: 'appointment',
+        type: 'info',
+        actorName: user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Staff',
+        actorRole: user?.role,
+        targetRole: ['admin', 'super_admin', 'secretary', 'customer_service'],
+        link: '/cs/appointments',
+        refId: apptId,
+      });
+
+      queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
+      message.success(`Appointment scheduled for ${customerFullName} on ${dayjs(scheduledIso).format('MMM D, YYYY h:mm A')}!`);
+      setScheduleModalOpen(false);
+      scheduleForm.resetFields();
+      setCustomerForAppointment(null);
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to schedule appointment');
+    } finally {
+      setSchedulingSubmitting(false);
+    }
+  };
 
   // Calculate payment plan details dynamically
   const calculatePaymentPlan = (values: any) => {
@@ -1214,7 +1318,7 @@ const handleAddCustomer = async (values: any) => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 195,
       fixed: 'right' as const,
       render: (_: any, record: Customer) => (
         <Space>
@@ -1227,6 +1331,12 @@ const handleAddCustomer = async (values: any) => {
                 setSelectedCustomer(record);
                 setViewDrawerOpen(true);
               }}
+            />
+          </Tooltip>
+          <Tooltip title="Schedule Appointment">
+            <Button
+              icon={<CalendarOutlined />}
+              onClick={() => handleOpenScheduleModal(record)}
             />
           </Tooltip>
           {hasRole(['admin', 'secretary']) && (
@@ -1306,6 +1416,11 @@ const handleAddCustomer = async (values: any) => {
             label: 'Add Customer',
             onClick: () => setAddModal(true),
             icon: <PlusOutlined />,
+          },
+          {
+            label: 'Schedule Appointment',
+            onClick: () => handleOpenScheduleModal(),
+            icon: <CalendarOutlined />,
           },
           {
             label: 'Export',
@@ -2325,6 +2440,14 @@ const handleAddCustomer = async (values: any) => {
                     View Plan
                   </Button>
                 )}
+                <Button
+                  icon={<CalendarOutlined />}
+                  onClick={() => {
+                    handleOpenScheduleModal(selectedCustomer);
+                  }}
+                >
+                  Schedule Appointment
+                </Button>
               </Space>
             </div>
 
@@ -2388,6 +2511,97 @@ const handleAddCustomer = async (values: any) => {
               </Row>
             )}
 
+            {/* Scheduled Appointments */}
+            <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+              <Col span={24}>
+                <Card
+                  size="small"
+                  title={
+                    <Space>
+                      <CalendarOutlined style={{ color: tokens.primary }} />
+                      <span>Appointments & Consultations</span>
+                    </Space>
+                  }
+                  extra={
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<PlusOutlined />}
+                      onClick={() => handleOpenScheduleModal(selectedCustomer)}
+                    >
+                      Book Meeting
+                    </Button>
+                  }
+                  bordered={false}
+                  style={{ background: '#fafafa' }}
+                >
+                  {(() => {
+                    const custAppts = allAppointments.filter((a) => a.customerId === selectedCustomer.id);
+                    if (custAppts.length === 0) {
+                      return (
+                        <Empty
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          description="No scheduled appointments for this customer."
+                        >
+                          <Button
+                            size="small"
+                            type="dashed"
+                            icon={<CalendarOutlined />}
+                            onClick={() => handleOpenScheduleModal(selectedCustomer)}
+                          >
+                            Schedule Appointment Now
+                          </Button>
+                        </Empty>
+                      );
+                    }
+                    return (
+                      <List
+                        size="small"
+                        dataSource={custAppts}
+                        renderItem={(appt) => {
+                          const statusColor =
+                            appt.status === 'completed'
+                              ? 'green'
+                              : appt.status === 'scheduled'
+                              ? 'blue'
+                              : appt.status === 'canceled'
+                              ? 'red'
+                              : 'gold';
+                          return (
+                            <List.Item
+                              style={{ padding: '8px 4px' }}
+                              extra={
+                                <Tag color={statusColor} style={{ textTransform: 'capitalize' }}>
+                                  {appt.status}
+                                </Tag>
+                              }
+                            >
+                              <List.Item.Meta
+                                title={
+                                  <Space>
+                                    <ClockCircleOutlined style={{ color: '#1677ff' }} />
+                                    <Text strong>
+                                      {dayjs(appt.scheduledFor).format('MMM D, YYYY [at] h:mm A')}
+                                    </Text>
+                                  </Space>
+                                }
+                                description={
+                                  <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+                                    <div>Purpose: {appt.reason || 'General Discussion'}</div>
+                                    {appt.feedback && <div style={{ fontStyle: 'italic' }}>Notes: {appt.feedback}</div>}
+                                  </div>
+                                }
+                              />
+                            </List.Item>
+                          );
+                        }}
+                      />
+                    );
+                  })()}
+                </Card>
+              </Col>
+            </Row>
+
             {/* Timeline */}
             <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
               <Col span={24}>
@@ -2438,6 +2652,186 @@ const handleAddCustomer = async (values: any) => {
           </div>
         )}
       </Drawer>
+
+      {/* ── Schedule Appointment Modal ────────────────────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <CalendarOutlined style={{ color: tokens.primary }} />
+            <Text strong>
+              {customerForAppointment
+                ? `Schedule Appointment — ${customerForAppointment.firstName} ${customerForAppointment.lastName}`
+                : 'Schedule Customer Appointment'}
+            </Text>
+          </Space>
+        }
+        open={scheduleModalOpen}
+        onCancel={() => {
+          setScheduleModalOpen(false);
+          scheduleForm.resetFields();
+          setCustomerForAppointment(null);
+        }}
+        footer={null}
+        width={580}
+        style={{ top: 20 }}
+        destroyOnClose
+      >
+        <Form
+          form={scheduleForm}
+          layout="vertical"
+          onFinish={handleScheduleAppointmentSubmit}
+        >
+          {!customerForAppointment && (
+            <Form.Item
+              name="customerId"
+              label="Select Customer"
+              rules={[{ required: true, message: 'Please select a customer' }]}
+            >
+              <Select
+                showSearch
+                placeholder="Search customer by name or phone"
+                optionFilterProp="label"
+                options={customers.map((c) => ({
+                  value: c.id,
+                  label: `${c.firstName} ${c.lastName} (${c.phoneNumber || 'No phone'})`,
+                }))}
+              />
+            </Form.Item>
+          )}
+
+          {customerForAppointment && (
+            <div
+              style={{
+                background: '#f8fafc',
+                border: '1px solid #e2e8f0',
+                borderRadius: 8,
+                padding: '10px 14px',
+                marginBottom: 16,
+              }}
+            >
+              <Row justify="space-between" align="middle">
+                <Col>
+                  <Text strong>{customerForAppointment.firstName} {customerForAppointment.lastName}</Text>
+                  {customerForAppointment.phoneNumber && (
+                    <span style={{ fontSize: 12, color: '#64748b', marginLeft: 8 }}>
+                      <PhoneOutlined /> {customerForAppointment.phoneNumber}
+                    </span>
+                  )}
+                </Col>
+                <Col>
+                  <Tag color={customerForAppointment.type === 'fully_paid' ? 'green' : 'blue'}>
+                    {customerForAppointment.type === 'fully_paid' ? 'Fully Paid' : 'Payment Plan'}
+                  </Tag>
+                </Col>
+              </Row>
+            </div>
+          )}
+
+          <Row gutter={12}>
+            <Col span={14}>
+              <Form.Item
+                name="scheduledFor"
+                label="Appointment Date & Time"
+                rules={[{ required: true, message: 'Please select appointment date & time' }]}
+              >
+                <DatePicker
+                  showTime
+                  format="YYYY-MM-DD HH:mm"
+                  style={{ width: '100%' }}
+                  disabledDate={(curr) => curr && curr < dayjs().startOf('day')}
+                  placeholder="Select meeting date & time"
+                />
+              </Form.Item>
+            </Col>
+            <Col span={10}>
+              <Form.Item
+                name="type"
+                label="Meeting Format / Mode"
+                rules={[{ required: true, message: 'Please select format' }]}
+                initialValue="in_person"
+              >
+                <Select>
+                  <Option value="in_person">🏢 Office In-Person</Option>
+                  <Option value="site_visit">🚗 Site / Plot Visit</Option>
+                  <Option value="phone">📞 Phone Consultation</Option>
+                  <Option value="video">💻 Video / Zoom</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={12}>
+            <Col span={12}>
+              <Form.Item
+                name="reason"
+                label="Purpose / Agenda"
+                rules={[{ required: true, message: 'Please select meeting purpose' }]}
+                initialValue="Payment Plan Consultation"
+              >
+                <Select placeholder="Select purpose">
+                  <Option value="Payment Plan Consultation">Payment Plan Consultation</Option>
+                  <Option value="Land Inspection & Site Visit">Land Inspection & Site Visit</Option>
+                  <Option value="Deed Signing & Documentation">Deed Signing & Documentation</Option>
+                  <Option value="Plot Allocation & Boundary Review">Plot Allocation & Boundary Review</Option>
+                  <Option value="Arrears & Account Regularization">Arrears & Account Regularization</Option>
+                  <Option value="Customer Service / Support">Customer Service / Support</Option>
+                  <Option value="Executive Briefing">Executive Briefing</Option>
+                  <Option value="Other Discussion">Other Discussion</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item
+                name="assignedUserId"
+                label="Host / Assigned Staff Officer"
+                initialValue={user?.id}
+              >
+                <Select
+                  showSearch
+                  placeholder="Select staff host"
+                  optionFilterProp="label"
+                  options={allStaff.map((s) => ({
+                    value: s.id,
+                    label: `${getUserFullName(s)} (${s.role || 'Staff'})`,
+                  }))}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item
+            name="notes"
+            label="Meeting Notes / Special Instructions (Optional)"
+          >
+            <Input.TextArea
+              rows={3}
+              placeholder="e.g. Discuss installment rollover, review deed paperwork, or prepare site visit transport"
+            />
+          </Form.Item>
+
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button
+                onClick={() => {
+                  setScheduleModalOpen(false);
+                  scheduleForm.resetFields();
+                  setCustomerForAppointment(null);
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={schedulingSubmitting}
+                style={{ backgroundColor: '#001529', borderColor: '#001529', fontWeight: 600 }}
+              >
+                Confirm & Schedule Appointment
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

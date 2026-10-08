@@ -1,5 +1,5 @@
 // src/pages/dashboard/admin/components/ClientCheckInsTable.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Card,
   Table,
@@ -76,11 +76,22 @@ export const ClientCheckInsTable: React.FC<ClientCheckInsTableProps> = ({
   const { user, hasRole } = useAuth();
   const { data: branches = [] } = useBranchesQuery();
   const userBranchId = getUserBranchId(user);
+  const isAdmin = hasRole(['admin', 'super_admin', 'director', 'ceo', 'executive']);
 
   // Active branch: if prop provided use it; else if admin default 'all', else userBranchId
   const [selectedBranch, setSelectedBranch] = useState<string>(
-    propBranchId || (hasRole(['admin']) ? 'all' : (userBranchId || 'all'))
+    propBranchId || (isAdmin ? 'all' : (userBranchId || 'all'))
   );
+
+  useEffect(() => {
+    if (propBranchId) {
+      setSelectedBranch(propBranchId);
+    } else if (isAdmin) {
+      setSelectedBranch('all');
+    } else if (userBranchId) {
+      setSelectedBranch(userBranchId);
+    }
+  }, [propBranchId, userBranchId, isAdmin]);
 
   const {
     records,
@@ -591,7 +602,16 @@ export const ClientCheckInsTable: React.FC<ClientCheckInsTableProps> = ({
         footer={null}
         destroyOnClose
       >
-        <Form form={form} layout="vertical" onFinish={handleCheckInSubmit}>
+        <Form
+          form={form}
+          layout="vertical"
+          onFinish={handleCheckInSubmit}
+          initialValues={{
+            branchId: propBranchId || (selectedBranch !== 'all' ? selectedBranch : (userBranchId || branches[0]?.id)),
+            status: 'in_premises',
+            category: 'customer',
+          }}
+        >
           <Form.Item
             name="visitorName"
             label="Client / Visitor Full Name"

@@ -478,6 +478,29 @@ export function buildPaymentPlanSchedule(
     }
   });
 
+  // Also incorporate any backend recentPayments or payments returned by the API
+  const apiPayments: any[] = (plan as any).recentPayments || (plan as any).payments || [];
+  apiPayments.forEach((p, idx) => {
+    const alreadyPresent = transactions.some(
+      (t) => (p.reference && t.reference === p.reference) || (p.id && t.id === p.id)
+    );
+    if (!alreadyPresent && p.amountMinor > 0) {
+      transactions.push({
+        id: p.id || `api-tx-${idx}`,
+        sequence: p.sequence || idx + 1,
+        amountMinor: p.amountMinor,
+        paidOn: p.paidOn || new Date().toISOString(),
+        method: p.method || 'bank_transfer',
+        reference: p.reference || `REC-${(p.id || String(idx)).slice(-6)}`,
+        notes: `Recorded payment`,
+        deficitMinor: 0,
+        surplusAppliedMinor: 0,
+        balanceAfterMinor: p.balanceMinor,
+        effect: 'exact',
+      });
+    }
+  });
+
   // Sort transactions latest first
   transactions.sort((a, b) => dayjs(b.paidOn).valueOf() - dayjs(a.paidOn).valueOf());
 

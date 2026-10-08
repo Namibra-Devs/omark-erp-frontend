@@ -5,6 +5,8 @@ import type { ApiResponse, PaymentPlan, PaymentPlanStatus, PaymentMethod } from 
 import { buildPaymentPlanSchedule, recordLocalInstallmentPayment } from '@/utils/paymentPlanSchedule';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function getOrdinal(n: number): string {
   const s = ['th', 'st', 'nd', 'rd'];
   const v = n % 100;
@@ -41,46 +43,59 @@ export interface RecordPaymentParams {
 }
 
 /**
- * Resolves the real backend payment plan ID for a given plan object or customer ID.
- * If the plan ID is already a real backend ID (does not start with 'plan-'), returns it.
+ * Resolves the real backend payment plan UUID for a given plan object or customer ID.
+ * If the plan ID is already a valid UUID, returns it.
  * If it's a synthetic ID ('plan-...'), it checks the backend for an existing plan
  * for this customer, or creates one via POST /payment-plans.
  */
 export async function resolveOrCreateBackendPlan(
   plan: PlanIdentifier
 ): Promise<string> {
-  // If it's already a real ID (e.g. UUID, not starting with 'plan-')
-  if (plan.id && !plan.id.startsWith('plan-')) {
+  // If it's already a real UUID
+  if (plan.id && UUID_REGEX.test(plan.id)) {
     return plan.id;
   }
 
-  const customerId = plan.customerId || plan.id.replace(/^plan-/, '');
+  const customerId = plan.customerId || (plan.id.startsWith('plan-') ? plan.id.replace(/^plan-/, '') : plan.id);
   if (!customerId) {
     return plan.id;
   }
 
-  // 1. Check if backend already has a plan for this customer
+  // 1. Check customer detail endpoint directly (returns customer.plan)
+  try {
+    const custRes = await apiClient.get<ApiResponse<any>>(`/customers/${customerId}`);
+    const custData = unwrapData(custRes);
+    if (custData?.plan?.id && UUID_REGEX.test(custData.plan.id)) {
+      return custData.plan.id;
+    }
+  } catch (custErr) {
+    console.warn('[resolveOrCreateBackendPlan] Warning fetching customer detail:', custErr);
+  }
+
+  // 2. Check if backend already has a plan for this customer in list
   try {
     const listRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
-      params: { pageSize: 100 },
+      params: { pageSize: 200 },
     });
     const items = unwrapList(listRes).items;
     const existing = items.find((p: any) => p.customerId === customerId);
-    if (existing && existing.id && !existing.id.startsWith('plan-')) {
+    if (existing?.id && UUID_REGEX.test(existing.id)) {
       return existing.id;
     }
   } catch (e) {
     console.warn('[resolveOrCreateBackendPlan] Warning checking existing plans:', e);
   }
 
-  // 2. If not found, create a real plan on the backend
+  // 3. If not found, create a real plan on the backend database
   try {
     const totalAmountMinor = plan.totalAmountMinor || 35000000;
     const downPaymentMinor = plan.downPaymentMinor !== undefined 
       ? plan.downPaymentMinor 
       : Math.round(totalAmountMinor * 0.2);
     const numMonths = plan.numMonths || 6;
-    const startDate = plan.startDate || dayjs().format('YYYY-MM-DD');
+    const startDate = plan.startDate && dayjs(plan.startDate).isValid()
+      ? dayjs(plan.startDate).format('YYYY-MM-DD')
+      : dayjs().format('YYYY-MM-DD');
 
     const createRes = await apiClient.post<ApiResponse<PaymentPlan>>('/payment-plans', {
       customerId,
@@ -91,19 +106,19 @@ export async function resolveOrCreateBackendPlan(
       startDate,
     });
     const created = unwrapData(createRes);
-    if (created && created.id) {
+    if (created?.id && UUID_REGEX.test(created.id)) {
       return created.id;
     }
-  } catch (createErr) {
-    console.warn('[resolveOrCreateBackendPlan] Warning creating backend plan, checking list again:', createErr);
-    // In case creation failed because one already exists, retry list fetch
+  } catch (createErr: any) {
+    console.warn('[resolveOrCreateBackendPlan] Creation response:', createErr?.response?.data || createErr);
+    // In case creation failed because one already exists, retry fetch
     try {
       const listRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
-        params: { pageSize: 100 },
+        params: { pageSize: 200 },
       });
       const items = unwrapList(listRes).items;
       const existing = items.find((p: any) => p.customerId === customerId);
-      if (existing && existing.id && !existing.id.startsWith('plan-')) {
+      if (existing?.id && UUID_REGEX.test(existing.id)) {
         return existing.id;
       }
     } catch {
@@ -111,18 +126,12 @@ export async function resolveOrCreateBackendPlan(
     }
   }
 
-  // Fallback to original plan.id if backend could not be reached
   return plan.id;
 }
 
-/**
- * Universal payment recorder:
- * 1. Saves locally for instantaneous 0ms UI reactivity
- * 2. Permanently persists to the backend database (resolving/creating backend plan if needed)
- * 3. Automatically dispatches customer receipt SMS prompting them of payment
- */
 export interface RecordPaymentResult {
   success: boolean;
+  persistedToBackend: boolean;
   realPlanId: string;
   result?: any;
   receiptNumber: string;
@@ -138,10 +147,11 @@ export interface RecordPaymentResult {
 
 /**
  * Universal payment recorder:
- * 1. Automatically determines target installment sequence if not specified
- * 2. Saves locally for instantaneous 0ms UI reactivity with dynamic amortization recalculation
- * 3. Permanently persists to the backend database (resolving/creating backend plan if needed)
- * 4. Automatically dispatches customer receipt SMS prompting them of payment
+ * 1. Resolves/creates real backend payment plan UUID
+ * 2. Permanently persists payment to backend database (POST /payment-plans/{planId}/payments)
+ *    Strictly throws error if backend reject, ensuring data is never silently dropped
+ * 3. Saves locally for instantaneous 0ms UI reactivity with dynamic amortization recalculation
+ * 4. Automatically dispatches customer receipt SMS prompting them of payment via contact number
  * 5. Returns dynamic schedule recalculation details for immediate receipt and statement generation
  */
 export async function recordPlanPaymentWithBackend(
@@ -194,55 +204,80 @@ export async function recordPlanPaymentWithBackend(
     effect,
   };
 
-  // 1. Save locally for instant UI update and dynamic amortization
+  // 1. Resolve real backend plan ID and persist to backend database first
+  const realPlanId = await resolveOrCreateBackendPlan(plan);
+  const isRealBackendId = Boolean(realPlanId && UUID_REGEX.test(realPlanId));
+
+  if (!isRealBackendId) {
+    const customerIdentifier = plan.customerId || plan.id;
+    throw new Error(
+      `Unable to link customer (${customerIdentifier}) to a verified database payment plan. Please ensure the customer has an active payment plan registered on the server.`
+    );
+  }
+
+  const validMethods: PaymentMethod[] = ['cash', 'bank_transfer', 'mobile_money', 'cheque', 'other'];
+  const cleanMethod: PaymentMethod = validMethods.includes(method as any)
+    ? (method as PaymentMethod)
+    : 'bank_transfer';
+
+  const formattedPaidOn = dayjs(paidOnDate).isValid()
+    ? dayjs(paidOnDate).format('YYYY-MM-DD')
+    : dayjs().format('YYYY-MM-DD');
+
+  const cleanAmountMinor = Math.round(payment.amountMinor);
+  const cleanRef = (reference || `REC-${Date.now().toString().slice(-6)}`).trim();
+
+  let result: any = null;
+
+  try {
+    const res = await apiClient.post<ApiResponse<any>>(`/payment-plans/${realPlanId}/payments`, {
+      amountMinor: cleanAmountMinor,
+      paidOn: formattedPaidOn,
+      method: cleanMethod,
+      reference: cleanRef,
+    });
+    result = unwrapData(res);
+  } catch (apiErr: any) {
+    const backendMsg =
+      apiErr?.response?.data?.error?.message ||
+      apiErr?.response?.data?.message ||
+      (Array.isArray(apiErr?.response?.data?.error?.details) 
+        ? apiErr.response.data.error.details.map((d: any) => d.message).join(', ') 
+        : null) ||
+      apiErr?.message ||
+      'Backend database rejected payment recording';
+    console.error('[recordPlanPaymentWithBackend] Backend save failed:', backendMsg, apiErr);
+    throw new Error(`Database save failed: ${backendMsg}`);
+  }
+
+  // 2. Database write succeeded! Save locally for instant UI update and dynamic amortization
   recordLocalInstallmentPayment(
     plan.id,
     sequence,
-    payment.amountMinor,
-    method,
-    reference,
+    cleanAmountMinor,
+    cleanMethod,
+    cleanRef,
     paidOnDate,
     dynamicNote,
     customerInfo?.recordedBy,
     ledgerMeta
   );
 
-  // 2. Resolve real backend plan ID and persist to backend
-  let realPlanId = plan.id;
-  let result: any = null;
-
-  try {
-    realPlanId = await resolveOrCreateBackendPlan(plan);
-
-    if (realPlanId && !realPlanId.startsWith('plan-')) {
-      const res = await apiClient.post(`/payment-plans/${realPlanId}/payments`, {
-        amountMinor: payment.amountMinor,
-        paidOn: dayjs(paidOnDate).format('YYYY-MM-DD'),
-        method,
-        reference,
-      });
-      result = unwrapData(res);
-
-      // If synthetic plan ID was used originally, also record under realPlanId in local cache
-      if (realPlanId !== plan.id) {
-        recordLocalInstallmentPayment(
-          realPlanId,
-          sequence,
-          payment.amountMinor,
-          method,
-          reference,
-          paidOnDate,
-          dynamicNote,
-          customerInfo?.recordedBy,
-          ledgerMeta
-        );
-      }
-    }
-  } catch (apiErr) {
-    console.warn('[recordPlanPaymentWithBackend] Backend save warning:', apiErr);
+  if (realPlanId !== plan.id) {
+    recordLocalInstallmentPayment(
+      realPlanId,
+      sequence,
+      cleanAmountMinor,
+      cleanMethod,
+      cleanRef,
+      paidOnDate,
+      dynamicNote,
+      customerInfo?.recordedBy,
+      ledgerMeta
+    );
   }
 
-  // 3. Immediately recalculate updated schedule to obtain new balance & amortization adjustments
+  // 3. Recalculate updated schedule to obtain new balance & amortization adjustments
   const updatedSchedule = buildPaymentPlanSchedule(plan);
   const targetRow = updatedSchedule.rows.find((r: any) => r.sequence === sequence);
 
@@ -250,30 +285,52 @@ export async function recordPlanPaymentWithBackend(
   const deficitRolledOverMinor = targetRow?.deficitMinor || deficitMinor;
   const surplusAppliedMinor = surplusMinor;
   const isOverpayment = surplusMinor > 0;
-  const newBalanceMinor = updatedSchedule.currentBalanceMinor;
+  const newBalanceMinor = result?.balanceMinor !== undefined 
+    ? result.balanceMinor 
+    : updatedSchedule.currentBalanceMinor;
 
-  // 4. Dispatch automated SMS receipt to customer
+  // 4. Resolve customer contact number if missing and dispatch automated SMS receipt
+  let targetPhone = customerInfo?.phone?.trim();
+  let targetName = customerInfo?.name?.trim();
+
+  if ((!targetPhone || !targetName) && (plan.customerId || plan.id)) {
+    const custLookupId = plan.customerId || plan.id.replace(/^plan-/, '');
+    try {
+      const custRes = await apiClient.get<ApiResponse<any>>(`/customers/${custLookupId}`);
+      const custData = unwrapData(custRes);
+      if (!targetPhone && custData?.phoneNumber) {
+        targetPhone = custData.phoneNumber;
+      }
+      if ((!targetName || targetName === 'Valued Customer') && custData?.firstName) {
+        targetName = `${custData.firstName} ${custData.lastName || ''}`.trim();
+      }
+    } catch {
+      // ignore auxiliary lookup failure
+    }
+  }
+
   try {
     await dispatchPaymentReceiptSMS({
-      customerPhone: customerInfo?.phone,
-      customerName: customerInfo?.name,
-      amountMinor: payment.amountMinor,
+      customerPhone: targetPhone,
+      customerName: targetName,
+      amountMinor: cleanAmountMinor,
       remainingBalanceMinor: newBalanceMinor,
       propertyName: customerInfo?.propertyName,
-      reference,
-      method: String(method),
+      reference: cleanRef,
+      method: String(cleanMethod),
       installmentOrdinal: ordinal,
       recordedBy: customerInfo?.recordedBy,
     });
   } catch (smsErr) {
-    console.warn('[recordPlanPaymentWithBackend] SMS dispatch warning:', smsErr);
+    console.warn('[recordPlanPaymentWithBackend] SMS dispatch error:', smsErr);
   }
 
   return {
     success: true,
+    persistedToBackend: true,
     realPlanId,
     result,
-    receiptNumber: reference,
+    receiptNumber: cleanRef,
     sequence,
     installmentOrdinal: ordinal,
     isPartialPayment,
