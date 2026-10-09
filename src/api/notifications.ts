@@ -158,7 +158,7 @@ export function useSendBroadcastSMSMutation() {
         recipientPhoneNumbers: recipientPhones,
         phoneNumbers: recipientPhones,
         recipients: recipientPhones,
-        senderId: payload.senderId || 'OMARK',
+        senderId: payload.senderId || 'OMARK ESTATES',
       };
 
       const res = await apiClient.post<ApiResponse<any>>('/notifications/send-sms', body);

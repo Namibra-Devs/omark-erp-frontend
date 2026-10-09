@@ -1,9 +1,10 @@
 // src/components/layout/AppShell.tsx
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Layout, theme } from 'antd';
 import { Outlet } from 'react-router-dom';
 import { NavMenu } from './NavMenu';
 import { TopHeader } from './TopHeader';
+import { rehydrateAllPaymentPlansData } from '@/utils/paymentPlansStorage';
 
 const { Sider, Content } = Layout;
 
@@ -12,6 +13,10 @@ export const AppShell: React.FC = () => {
   const {
     token: { colorBgContainer },
   } = theme.useToken();
+
+  useEffect(() => {
+    rehydrateAllPaymentPlansData().catch(() => {});
+  }, []);
 
   return (
     <Layout style={{ minHeight: '100vh' }}>

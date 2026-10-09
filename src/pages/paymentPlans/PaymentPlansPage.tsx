@@ -75,6 +75,7 @@ import { tokens } from '@/constants/tokens';
 import { paymentPlanStatusLabels, progressBandLabels } from '@/constants/enums';
 import {
   usePaymentPlansQuery,
+  usePaymentPlanQuery,
   useCreatePaymentPlanMutation,
   getProgressBand,
   type PaymentPlan,
@@ -82,6 +83,8 @@ import {
   type ProgressBand,
   type CreatePaymentPlanPayload,
 } from '@/api/paymentPlans';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
 import { PaymentPlanScheduleTable } from '@/components/paymentPlan/PaymentPlanScheduleTable';
@@ -91,6 +94,12 @@ import {
   usePaymentPlanScheduleListener
 } from '@/utils/paymentPlanSchedule';
 import { getCachedCustomer } from '@/utils/customerPortalCache';
+import {
+  rehydrateAllPaymentPlansData,
+  saveStoredPaymentPlan,
+  getCustomerPlanDefinition,
+  saveCustomerPlanDefinition,
+} from '@/utils/paymentPlansStorage';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery } from '@/api/properties';
 import type { Customer } from '@/types';
@@ -123,12 +132,40 @@ export const PaymentPlansPage: React.FC = () => {
   const [bandFilter, setBandFilter] = useState<string>(urlBand);
   const [selectedPlan, setSelectedPlan] = useState<PaymentPlan | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
+
+  const selectedPlanId = selectedPlan?.id || '';
+  const isRealSelectedBackendPlan = Boolean(viewDrawerOpen && selectedPlanId && UUID_REGEX.test(selectedPlanId));
+  const { data: liveSelectedPlanData } = usePaymentPlanQuery(isRealSelectedBackendPlan ? selectedPlanId : undefined);
+
+  const effectiveSelectedPlan = useMemo(() => {
+    if (!selectedPlan) return null;
+    if (!liveSelectedPlanData) return selectedPlan;
+    return {
+      ...selectedPlan,
+      ...liveSelectedPlanData,
+      balanceMinor: liveSelectedPlanData.balanceMinor !== undefined ? liveSelectedPlanData.balanceMinor : selectedPlan.balanceMinor,
+      status: liveSelectedPlanData.status || selectedPlan.status,
+    };
+  }, [selectedPlan, liveSelectedPlanData]);
   const [agreementModalOpen, setAgreementModalOpen] = useState(false);
   const [agreementPlan, setAgreementPlan] = useState<PaymentPlan | null>(null);
   const [recordPaymentPlan, setRecordPaymentPlan] = useState<PaymentPlan | null>(null);
   const [recordPaymentModalOpen, setRecordPaymentModalOpen] = useState(false);
   const [addModal, setAddModal] = useState(false);
   const [addForm] = Form.useForm();
+
+  // Rehydrate multi-tier payment plans & overrides from server settings & IndexedDB
+  useEffect(() => {
+    let isMounted = true;
+    rehydrateAllPaymentPlansData().then(() => {
+      if (isMounted) {
+        refetchPaymentPlans();
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   // Sync state if URL query params change
   useEffect(() => {
@@ -287,7 +324,8 @@ export const PaymentPlansPage: React.FC = () => {
       if (c.type !== 'payment_plan' && !(c as any).plan) return; // Only payment plan customers
 
       const cached = getCachedCustomer(c.id);
-      const embeddedPlan = (c as any).plan || cached?.paymentPlan;
+      const customPlanDef = getCustomerPlanDefinition(c.id);
+      const embeddedPlan = (c as any).plan || customPlanDef || cached?.paymentPlan;
       const prop = propertyMap[c.propertyId];
 
       const totalAmountMinor = embeddedPlan?.totalAmountMinor || prop?.priceMinor || 35000000;
@@ -346,6 +384,9 @@ export const PaymentPlansPage: React.FC = () => {
         createdAt: c.createdAt || new Date().toISOString(),
         updatedAt: c.updatedAt || new Date().toISOString(),
       };
+
+      // Ensure customer plan details are permanently preserved across cache clears
+      saveCustomerPlanDefinition(c.id, syntheticPlan);
 
       plansMap.set(c.id, syntheticPlan);
     });
@@ -434,18 +475,53 @@ export const PaymentPlansPage: React.FC = () => {
     try {
       const totalAmountMinor = Math.round((values.totalAmount || 0) * 100);
       const downPaymentMinor = Math.round((values.downPayment || 0) * 100);
+      const balanceMinor = Math.max(totalAmountMinor - downPaymentMinor, 0);
+      const numMonths = values.numMonths || 6;
+      const progressPercent = totalAmountMinor > 0 ? Math.round((downPaymentMinor / totalAmountMinor) * 100) : 0;
+      const startDate = values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD');
 
       const payload: CreatePaymentPlanPayload = {
         customerId: values.customerId,
         totalAmountMinor,
         downPaymentMinor,
         planBasis: 'months',
-        numMonths: values.numMonths,
-        startDate: values.startDate ? values.startDate.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
+        numMonths,
+        startDate,
       };
 
-      await createPaymentPlan.mutateAsync(payload);
-      message.success('Payment plan created successfully!');
+      const newPlan: PaymentPlan = {
+        id: `plan-${values.customerId}-${Date.now().toString().slice(-4)}`,
+        customerId: values.customerId,
+        propertyId: customerMap[values.customerId]?.propertyId || '',
+        totalAmountMinor,
+        downPaymentMinor,
+        balanceMinor,
+        numMonths,
+        monthlyAmountMinor: Math.round(balanceMinor / Math.max(numMonths, 1)),
+        currency: 'GHS',
+        startDate,
+        status: 'active',
+        progressPercent,
+        progressBand: getProgressBand(progressPercent),
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 1. Immediately save to multi-tier persistent store (LocalStorage + IndexedDB + Backend Settings)
+      await saveStoredPaymentPlan(newPlan);
+      await saveCustomerPlanDefinition(values.customerId, newPlan);
+
+      // 2. Also dispatch to backend API
+      try {
+        const backendRes = await createPaymentPlan.mutateAsync(payload);
+        if (backendRes?.id) {
+          await saveStoredPaymentPlan({ ...newPlan, id: backendRes.id });
+        }
+      } catch (apiErr) {
+        console.warn('[handleAddPlan] Backend API warning, preserved in multi-tier storage:', apiErr);
+      }
+
+      message.success('Payment plan created and permanently stored!');
       setAddModal(false);
       addForm.resetFields();
       refetchPaymentPlans();
@@ -803,12 +879,13 @@ export const PaymentPlansPage: React.FC = () => {
 
   // ── Render Drawer Content ─────────────────────────────────────────────────
   const renderDrawerContent = () => {
-    if (!selectedPlan) return null;
+    const activePlan = effectiveSelectedPlan || selectedPlan;
+    if (!activePlan) return null;
 
-    const customerName = getCustomerName(selectedPlan.customerId);
-    const customerPhone = getCustomerPhone(selectedPlan.customerId);
-    const property = getCustomerProperty(selectedPlan.customerId);
-    const dynamicSchedule = buildPaymentPlanSchedule(selectedPlan);
+    const customerName = getCustomerName(activePlan.customerId);
+    const customerPhone = getCustomerPhone(activePlan.customerId);
+    const property = getCustomerProperty(activePlan.customerId);
+    const dynamicSchedule = buildPaymentPlanSchedule(activePlan);
     const dynamicBalanceMinor = dynamicSchedule.currentBalanceMinor;
     const isFullyPaid = dynamicBalanceMinor === 0;
 
@@ -834,7 +911,7 @@ export const PaymentPlansPage: React.FC = () => {
                 Payment Plan - {customerName}
               </Title>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                <IdcardOutlined /> ID: {selectedPlan.id}
+                <IdcardOutlined /> ID: {activePlan.id}
               </Text>
             </div>
           </Space>
@@ -848,12 +925,12 @@ export const PaymentPlansPage: React.FC = () => {
 
         {/* Status Banner */}
         <div style={{
-          background: selectedPlan.status === 'active' ? '#e6f7ff' : 
-                     selectedPlan.status === 'completed' ? '#f6ffed' :
-                     selectedPlan.status === 'defaulted' ? '#fff2e8' : '#fafafa',
-          border: `1px solid ${selectedPlan.status === 'active' ? '#91d5ff' : 
-                               selectedPlan.status === 'completed' ? '#b7eb8f' :
-                               selectedPlan.status === 'defaulted' ? '#ffccc7' : '#d9d9d9'}`,
+          background: activePlan.status === 'active' ? '#e6f7ff' : 
+                     activePlan.status === 'completed' ? '#f6ffed' :
+                     activePlan.status === 'defaulted' ? '#fff2e8' : '#fafafa',
+          border: `1px solid ${activePlan.status === 'active' ? '#91d5ff' : 
+                               activePlan.status === 'completed' ? '#b7eb8f' :
+                               activePlan.status === 'defaulted' ? '#ffccc7' : '#d9d9d9'}`,
           borderRadius: 8,
           padding: '12px 16px',
           marginBottom: 24,
@@ -862,19 +939,19 @@ export const PaymentPlansPage: React.FC = () => {
           justifyContent: 'space-between'
         }}>
           <Space>
-            {selectedPlan.status === 'active' && <ClockCircleOutlined style={{ color: '#1890ff' }} />}
-            {selectedPlan.status === 'completed' && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
-            {selectedPlan.status === 'defaulted' && <WarningOutlined style={{ color: '#ff4d4f' }} />}
-            {selectedPlan.status === 'cancelled' && <CloseCircleOutlined style={{ color: '#d9d9d9' }} />}
-            <Text strong>Status: {paymentPlanStatusLabels[selectedPlan.status] || selectedPlan.status}</Text>
+            {activePlan.status === 'active' && <ClockCircleOutlined style={{ color: '#1890ff' }} />}
+            {activePlan.status === 'completed' && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
+            {activePlan.status === 'defaulted' && <WarningOutlined style={{ color: '#ff4d4f' }} />}
+            {activePlan.status === 'cancelled' && <CloseCircleOutlined style={{ color: '#d9d9d9' }} />}
+            <Text strong>Status: {paymentPlanStatusLabels[activePlan.status] || activePlan.status}</Text>
           </Space>
           <Badge 
-            status={selectedPlan.status === 'active' ? 'processing' : 
-                   selectedPlan.status === 'completed' ? 'success' :
-                   selectedPlan.status === 'defaulted' ? 'error' : 'default'} 
-            text={selectedPlan.status === 'active' ? 'Active' : 
-                  selectedPlan.status === 'completed' ? 'Completed' :
-                  selectedPlan.status === 'defaulted' ? 'Defaulted' : 'Cancelled'}
+            status={activePlan.status === 'active' ? 'processing' : 
+                   activePlan.status === 'completed' ? 'success' :
+                   activePlan.status === 'defaulted' ? 'error' : 'default'} 
+            text={activePlan.status === 'active' ? 'Active' : 
+                  activePlan.status === 'completed' ? 'Completed' :
+                  activePlan.status === 'defaulted' ? 'Defaulted' : 'Cancelled'}
           />
         </div>
 
@@ -886,7 +963,7 @@ export const PaymentPlansPage: React.FC = () => {
               icon={<DollarOutlined />}
               style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
               onClick={() => {
-                setRecordPaymentPlan(selectedPlan);
+                setRecordPaymentPlan(activePlan);
                 setRecordPaymentModalOpen(true);
               }}
             >
@@ -896,7 +973,7 @@ export const PaymentPlansPage: React.FC = () => {
               type="primary"
               ghost
               icon={<FilePdfOutlined />}
-              onClick={() => handlePrintPlan(selectedPlan)}
+              onClick={() => handlePrintPlan(activePlan)}
             >
               Generate Statement PDF
             </Button>
@@ -908,7 +985,7 @@ export const PaymentPlansPage: React.FC = () => {
           <Col span={24}>
             <Card size="small" title="Plan Information" bordered={false} style={{ background: '#fafafa' }}>
               <div style={{ marginBottom: 16 }}>
-                <ProgressCell percent={selectedPlan.progressPercent} band={selectedPlan.progressBand} />
+                <ProgressCell percent={activePlan.progressPercent} band={activePlan.progressBand} />
               </div>
               <Descriptions column={2} size="small">
                 <Descriptions.Item label="Customer">
@@ -918,10 +995,10 @@ export const PaymentPlansPage: React.FC = () => {
                   {property}
                 </Descriptions.Item>
                 <Descriptions.Item label="Total Amount">
-                  <MoneyText minor={selectedPlan.totalAmountMinor} />
+                  <MoneyText minor={activePlan.totalAmountMinor} />
                 </Descriptions.Item>
                 <Descriptions.Item label="Down Payment">
-                  <MoneyText minor={selectedPlan.downPaymentMinor} />
+                  <MoneyText minor={activePlan.downPaymentMinor} />
                 </Descriptions.Item>
                 <Descriptions.Item label="Balance">
                   {isFullyPaid ? (
@@ -931,13 +1008,13 @@ export const PaymentPlansPage: React.FC = () => {
                   )}
                 </Descriptions.Item>
                 <Descriptions.Item label="Monthly Amount">
-                  <MoneyText minor={selectedPlan.monthlyAmountMinor} />
+                  <MoneyText minor={activePlan.monthlyAmountMinor} />
                 </Descriptions.Item>
                 <Descriptions.Item label="Duration">
-                  {selectedPlan.numMonths} months
+                  {activePlan.numMonths} months
                 </Descriptions.Item>
                 <Descriptions.Item label="Start Date">
-                  {dayjs(selectedPlan.startDate).format('MMMM DD, YYYY')}
+                  {dayjs(activePlan.startDate).format('MMMM DD, YYYY')}
                 </Descriptions.Item>
               </Descriptions>
             </Card>
@@ -947,10 +1024,10 @@ export const PaymentPlansPage: React.FC = () => {
         {/* Payment Plan Schedule with Actions */}
         <div style={{ marginTop: 20 }}>
           <PaymentPlanScheduleTable
-            plan={selectedPlan}
-            customerName={getCustomerName(selectedPlan.customerId)}
-            customerPhone={getCustomerPhone(selectedPlan.customerId)}
-            propertyName={getCustomerProperty(selectedPlan.customerId)}
+            plan={activePlan}
+            customerName={getCustomerName(activePlan.customerId)}
+            customerPhone={getCustomerPhone(activePlan.customerId)}
+            propertyName={getCustomerProperty(activePlan.customerId)}
             onRecordPayment={async () => {
               refetchPaymentPlans();
             }}
@@ -966,18 +1043,18 @@ export const PaymentPlansPage: React.FC = () => {
                   <Text>Payment plan created</Text>
                   <br />
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {dayjs(selectedPlan.createdAt).format('MMMM DD, YYYY HH:mm')}
+                    {dayjs(activePlan.createdAt).format('MMMM DD, YYYY HH:mm')}
                   </Text>
                 </Timeline.Item>
-                <Timeline.Item color={selectedPlan.status === 'active' ? 'green' : 'red'}>
-                  <Text>Status: {paymentPlanStatusLabels[selectedPlan.status] || selectedPlan.status}</Text>
+                <Timeline.Item color={activePlan.status === 'active' ? 'green' : 'red'}>
+                  <Text>Status: {paymentPlanStatusLabels[activePlan.status] || activePlan.status}</Text>
                   <br />
                   <Text type="secondary" style={{ fontSize: 12 }}>
-                    {selectedPlan.progressPercent}% complete
+                    {activePlan.progressPercent}% complete
                   </Text>
                 </Timeline.Item>
                 <Timeline.Item color="gray">
-                  <Text>Last updated {dayjs(selectedPlan.updatedAt).fromNow()}</Text>
+                  <Text>Last updated {dayjs(activePlan.updatedAt).fromNow()}</Text>
                 </Timeline.Item>
               </Timeline>
             </Card>
@@ -994,7 +1071,7 @@ export const PaymentPlansPage: React.FC = () => {
         }}>
           <Button 
             type="primary" 
-            onClick={() => navigate(`/customers/${selectedPlan.customerId}`)}
+            onClick={() => navigate(`/customers/${activePlan.customerId}`)}
           >
             View Customer
           </Button>

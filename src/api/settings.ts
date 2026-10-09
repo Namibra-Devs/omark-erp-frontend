@@ -6,6 +6,10 @@ import type { ApiResponse } from '@/types';
 export interface AppSettings {
   marketingCampaigns?: any[];
   marketingTasks?: any[];
+  paymentPlans?: any[];
+  paymentPlanOverrides?: Record<string, any>;
+  customerPlans?: Record<string, any>;
+  customerPortalCache?: Record<string, any>;
   [key: string]: any;
 }
 

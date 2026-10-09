@@ -40,7 +40,7 @@ import {
 import dayjs from 'dayjs';
 import { useQueryClient } from '@tanstack/react-query';
 import apiClient from '@/api/client';
-import { paymentPlansKeys } from '@/api/paymentPlans';
+import { paymentPlansKeys, usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
 import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 import type { PaymentPlan, Installment, PaymentMethod } from '@/types';
@@ -57,6 +57,8 @@ import { tokens } from '@/constants/tokens';
 
 const { Text, Title, Paragraph } = Typography;
 const { Option } = Select;
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface PaymentPlanScheduleTableProps {
   plan: Partial<PaymentPlan> & { id: string };
@@ -91,6 +93,31 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
   // Listen for local updates so all instances stay in sync
   usePaymentPlanScheduleListener();
 
+  const isRealUuid = Boolean(plan?.id && UUID_REGEX.test(plan.id));
+  const { data: planDetail, refetch: refetchPlanDetail } = usePaymentPlanQuery(isRealUuid ? plan.id : undefined);
+  const { data: fetchedInstallments, refetch: refetchInstallments } = useInstallmentsQuery(isRealUuid ? plan.id : undefined);
+
+  const resolvedInstallments = useMemo(() => {
+    if (installments && installments.length > 0) return installments;
+    if (fetchedInstallments && fetchedInstallments.length > 0) return fetchedInstallments;
+    if (planDetail?.installments && planDetail.installments.length > 0) return planDetail.installments;
+    return [];
+  }, [installments, fetchedInstallments, planDetail]);
+
+  const resolvedPayments = useMemo(() => {
+    const list =
+      (planDetail as any)?.recentPayments ||
+      (planDetail as any)?.payments ||
+      (plan as any)?.recentPayments ||
+      (plan as any)?.payments ||
+      [];
+    return Array.isArray(list) ? list : [];
+  }, [planDetail, plan]);
+
+  const mergedPlan = useMemo(() => {
+    return planDetail ? { ...plan, ...planDetail } : plan;
+  }, [plan, planDetail]);
+
   const [activeTab, setActiveTab] = useState<'schedule' | 'ledger'>('schedule');
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [selectedRow, setSelectedRow] = useState<ScheduleInstallmentRow | null>(null);
@@ -100,10 +127,10 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
   const [receiptData, setReceiptData] = useState<PaymentReceiptData | null>(null);
   const [form] = Form.useForm();
 
-  // Schedule info computed from plan and installments
+  // Schedule info computed from plan, installments, and backend payments
   const scheduleInfo = useMemo(() => {
-    return buildPaymentPlanSchedule(plan, installments);
-  }, [plan, installments]);
+    return buildPaymentPlanSchedule(mergedPlan, resolvedInstallments, resolvedPayments);
+  }, [mergedPlan, resolvedInstallments, resolvedPayments]);
 
   // Sort mode: default to 'priority' if there are overdue/due items, else 'sequence'
   const [sortMode, setSortMode] = useState<'priority' | 'sequence'>(
@@ -173,6 +200,8 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       queryClient.invalidateQueries({ queryKey: ['secretary-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['payments'] });
+      refetchPlanDetail();
+      refetchInstallments();
 
       // 2. Call parent callback if provided
       if (onRecordPayment) {
@@ -239,6 +268,8 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       queryClient.invalidateQueries({ queryKey: ['secretary-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['accounts-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['payments'] });
+      refetchPlanDetail();
+      refetchInstallments();
 
       // 2. Call parent callback if provided
       if (onRecordPayment) {

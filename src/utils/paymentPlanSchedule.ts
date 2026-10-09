@@ -99,9 +99,6 @@ export interface LocalPlanOverride {
   updatedAt: string;
 }
 
-const OVERRIDES_STORAGE_KEY = 'omark_payment_plan_overrides';
-const SCHEDULE_CHANGE_EVENT = 'omark-payment-plan-updated';
-
 /**
  * Returns ordinal number string: 1 -> "1st", 2 -> "2nd", 3 -> "3rd", 4 -> "4th", etc.
  */
@@ -124,31 +121,17 @@ export function numberToWord(n: number): string {
   return words[n] || String(n);
 }
 
-type OverridesMap = Record<string, LocalPlanOverride>;
+import {
+  getStoredPaymentOverrides,
+  saveStoredPaymentOverrides,
+  OVERRIDES_STORAGE_KEY,
+  SCHEDULE_CHANGE_EVENT,
+} from '@/utils/paymentPlansStorage';
 
-const loadOverrides = (): OverridesMap => {
-  try {
-    const raw = localStorage.getItem(OVERRIDES_STORAGE_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch {
-    // ignore parsing errors
-  }
-  return {};
-};
-
-const saveOverrides = (map: OverridesMap) => {
-  try {
-    localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(map));
-  } catch {
-    // ignore
-  }
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(SCHEDULE_CHANGE_EVENT));
-  }
-};
+export { OVERRIDES_STORAGE_KEY, SCHEDULE_CHANGE_EVENT };
 
 export const getPlanPaymentOverrides = (planId: string): LocalPlanOverride | undefined => {
-  return loadOverrides()[planId];
+  return getStoredPaymentOverrides()[planId];
 };
 
 /**
@@ -170,7 +153,7 @@ export const recordLocalInstallmentPayment = (
     effect?: 'overpayment' | 'underpayment' | 'exact' | 'advance';
   }
 ): void => {
-  const map = loadOverrides();
+  const map = getStoredPaymentOverrides();
   const existing = map[planId] || { paidInstallments: {}, transactions: [], updatedAt: new Date().toISOString() };
 
   if (!existing.transactions) {
@@ -206,7 +189,7 @@ export const recordLocalInstallmentPayment = (
 
   existing.updatedAt = new Date().toISOString();
   map[planId] = existing;
-  saveOverrides(map);
+  saveStoredPaymentOverrides(map);
 };
 
 /**
@@ -234,10 +217,28 @@ export const usePaymentPlanScheduleListener = () => {
  */
 export function buildPaymentPlanSchedule(
   plan: Partial<PaymentPlan> & { id: string },
-  apiInstallments: Installment[] = []
+  apiInstallments: Installment[] = [],
+  apiPaymentsArg: any[] = []
 ): PaymentPlanScheduleInfo {
   const overrides = getPlanPaymentOverrides(plan.id);
   const numMonths = Math.max(plan.numMonths || 6, 1);
+
+  // Normalize API payments from arguments or embedded in plan
+  const rawApiPayments: any[] = [
+    ...(Array.isArray(apiPaymentsArg) ? apiPaymentsArg : []),
+    ...((plan as any)?.recentPayments || []),
+    ...((plan as any)?.payments || []),
+  ];
+  const apiPayments: any[] = [];
+  const seenRawRefs = new Set<string>();
+  rawApiPayments.forEach((p, idx) => {
+    if (!p || typeof p !== 'object') return;
+    const key = p.reference ? `ref:${p.reference}` : p.id ? `id:${p.id}` : `idx:${idx}`;
+    if (!seenRawRefs.has(key)) {
+      seenRawRefs.add(key);
+      apiPayments.push(p);
+    }
+  });
 
   // Total contract liability to be settled in installments:
   // In real estate agreements, this is totalAmount minus downPayment, or the initial balance
@@ -252,6 +253,14 @@ export function buildPaymentPlanSchedule(
   if (totalScheduledMinor <= 0) {
     totalScheduledMinor = plan.balanceMinor || 35000000;
   }
+
+  // Calculate server-verified paid amounts
+  const backendPaidAmountMinor =
+    plan.balanceMinor !== undefined && plan.balanceMinor >= 0
+      ? Math.max(0, totalScheduledMinor - plan.balanceMinor)
+      : 0;
+  const apiPaymentsSumMinor = apiPayments.reduce((s, p) => s + (p.amountMinor || 0), 0);
+  const knownServerPaidMinor = Math.max(backendPaidAmountMinor, apiPaymentsSumMinor);
 
   // Base start date
   const rawStart = plan.startDate ? dayjs(plan.startDate) : dayjs();
@@ -278,6 +287,7 @@ export function buildPaymentPlanSchedule(
   for (let i = 1; i <= numMonths; i++) {
     const existing = sortedApi.find((item) => item.sequence === i);
     const localPayment = overrides?.paidInstallments?.[i];
+    const seqApiPayment = apiPayments.find((p) => p.sequence === i);
 
     // Determine baseline expected amount for this month
     let baseInstallmentMinor = existing?.expectedAmountMinor ?? 0;
@@ -309,11 +319,23 @@ export function buildPaymentPlanSchedule(
     carriedDeficitMinor = 0;
 
     // Determine actual cash paid for this installment:
-    let paidAmountMinor = localPayment?.amountMinor ?? ((existing as any)?.actualAmountMinor || 0);
+    let paidAmountMinor = 0;
+    const matchedMethod = localPayment?.method || seqApiPayment?.method;
+    const matchedRef = localPayment?.reference || seqApiPayment?.reference;
+    const matchedPaidAt = localPayment?.paidAt || seqApiPayment?.paidOn || existing?.paidAt;
 
-    // If marked paid on the verified backend record without exact amount
-    if (paidAmountMinor === 0 && (planIsFullyCompleted || existing?.isPaid)) {
+    if (localPayment?.amountMinor && localPayment.amountMinor > 0) {
+      paidAmountMinor = localPayment.amountMinor;
+    } else if (seqApiPayment?.amountMinor && seqApiPayment.amountMinor > 0) {
+      paidAmountMinor = seqApiPayment.amountMinor;
+    } else if (existing?.isPaid) {
+      paidAmountMinor = (existing as any).actualAmountMinor || existing.expectedAmountMinor || baseInstallmentMinor;
+    } else if (planIsFullyCompleted) {
       paidAmountMinor = baseInstallmentMinor;
+    } else if (knownServerPaidMinor > totalCashPaidMinor) {
+      // Credit portion of server-verified paid funds to this installment in sequence
+      const remainingVerifiedMinor = knownServerPaidMinor - totalCashPaidMinor;
+      paidAmountMinor = Math.min(adjustedExpectedMinor, remainingVerifiedMinor);
     }
 
     totalCashPaidMinor += paidAmountMinor;
@@ -389,11 +411,11 @@ export function buildPaymentPlanSchedule(
     const remainingBalanceMinor = Math.max(0, totalScheduledMinor - totalCashPaidMinor);
 
     const paidAt =
-      localPayment?.paidAt ||
+      matchedPaidAt ||
       existing?.paidAt ||
       (isPaid ? plan.updatedAt || plan.startDate || dueDateStr : undefined);
-    const paymentMethod = localPayment?.method || (isPaid ? 'bank_transfer' : undefined);
-    const reference = localPayment?.reference || (isPaid ? `REC-${i}` : undefined);
+    const paymentMethod = matchedMethod || (isPaid ? 'bank_transfer' : undefined);
+    const reference = matchedRef || (isPaid ? `REC-${i}` : undefined);
 
     rows.push({
       id: existing?.id || `${plan.id}-inst-${i}`,
@@ -428,8 +450,19 @@ export function buildPaymentPlanSchedule(
     });
   }
 
-  // If there is any leftover carried deficit on the last month, it remains part of currentBalanceMinor
-  const currentBalanceMinor = Math.max(0, totalScheduledMinor - totalCashPaidMinor);
+  // Calculate current outstanding balance with server balance priority
+  const localOverridesTotalMinor = Object.values(overrides?.paidInstallments || {}).reduce(
+    (sum: number, inst: any) => sum + (inst.amountMinor || 0),
+    0
+  );
+  const unsyncedLocalMinor = Math.max(0, localOverridesTotalMinor - backendPaidAmountMinor);
+
+  let currentBalanceMinor = Math.max(0, totalScheduledMinor - totalCashPaidMinor);
+  if (plan.balanceMinor !== undefined) {
+    const backendRemaining = Math.max(0, plan.balanceMinor - unsyncedLocalMinor);
+    // Never allow balance to exceed backend remaining if backend is lower
+    currentBalanceMinor = Math.min(currentBalanceMinor, backendRemaining);
+  }
 
   const firstDueDate = rows[0]?.dueDateFormatted || startDate.format('D MMM YYYY');
   const lastDueDate =
@@ -452,15 +485,50 @@ export function buildPaymentPlanSchedule(
   // Find next upcoming / unpaid / partially paid installment
   const nextDueRow = rows.find((r) => !r.isPaid);
 
-  // Real-time ledger compilation
+  // Real-time ledger compilation: combine API payments, local overrides, and confirmed installments
   const rawTransactions = overrides?.transactions || [];
-  const transactions: PlanPaymentTransaction[] = [...rawTransactions];
+  const transactions: PlanPaymentTransaction[] = [];
+  const seenTxRefs = new Set<string>();
 
-  // Synthesize ledger records from confirmed/paid rows if not already represented in raw transactions
+  // 1. Add API payments from backend database
+  apiPayments.forEach((p, idx) => {
+    const ref = p.reference || `REC-${(p.id || String(idx)).slice(-6)}`;
+    const txId = p.id || `api-tx-${idx}`;
+    if (ref) seenTxRefs.add(ref);
+    if (p.id) seenTxRefs.add(p.id);
+
+    transactions.push({
+      id: txId,
+      sequence: p.sequence,
+      amountMinor: p.amountMinor,
+      paidOn: p.paidOn || p.createdAt || new Date().toISOString(),
+      method: p.method || 'bank_transfer',
+      reference: ref,
+      notes: p.notes || 'Recorded server payment',
+      recordedBy: p.recordedByUserId || p.recordedBy,
+      deficitMinor: 0,
+      surplusAppliedMinor: 0,
+      balanceAfterMinor: p.balanceMinor,
+      effect: 'exact',
+    });
+  });
+
+  // 2. Add local overrides transactions (if not already represented)
+  rawTransactions.forEach((t) => {
+    if (t.reference && seenTxRefs.has(t.reference)) return;
+    if (t.id && seenTxRefs.has(t.id)) return;
+    if (t.reference) seenTxRefs.add(t.reference);
+    if (t.id) seenTxRefs.add(t.id);
+    transactions.push(t);
+  });
+
+  // 3. Synthesize ledger records from confirmed/paid rows if not already represented
   rows.forEach((row) => {
     if (row.isPaid || row.paidAmountMinor > 0) {
-      const exists = transactions.some((t) => t.sequence === row.sequence);
-      if (!exists) {
+      const alreadyCovered = transactions.some(
+        (t) => (t.sequence === row.sequence) || (row.reference && t.reference === row.reference)
+      );
+      if (!alreadyCovered) {
         transactions.push({
           id: `seed-tx-${plan.id}-${row.sequence}`,
           sequence: row.sequence,
@@ -475,29 +543,6 @@ export function buildPaymentPlanSchedule(
           effect: row.surplusAppliedMinor > 0 ? 'overpayment' : row.deficitMinor > 0 ? 'underpayment' : 'exact',
         });
       }
-    }
-  });
-
-  // Also incorporate any backend recentPayments or payments returned by the API
-  const apiPayments: any[] = (plan as any).recentPayments || (plan as any).payments || [];
-  apiPayments.forEach((p, idx) => {
-    const alreadyPresent = transactions.some(
-      (t) => (p.reference && t.reference === p.reference) || (p.id && t.id === p.id)
-    );
-    if (!alreadyPresent && p.amountMinor > 0) {
-      transactions.push({
-        id: p.id || `api-tx-${idx}`,
-        sequence: p.sequence || idx + 1,
-        amountMinor: p.amountMinor,
-        paidOn: p.paidOn || new Date().toISOString(),
-        method: p.method || 'bank_transfer',
-        reference: p.reference || `REC-${(p.id || String(idx)).slice(-6)}`,
-        notes: `Recorded payment`,
-        deficitMinor: 0,
-        surplusAppliedMinor: 0,
-        balanceAfterMinor: p.balanceMinor,
-        effect: 'exact',
-      });
     }
   });
 

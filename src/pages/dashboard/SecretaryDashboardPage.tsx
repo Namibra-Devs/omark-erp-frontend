@@ -72,6 +72,7 @@ import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation } from '@/api/customers';
 import { useProspectsQuery, getStoredProspects } from '@/api/prospects';
 import { usePaymentPlansQuery, getProgressBand } from '@/api/paymentPlans';
+import { saveStoredPaymentPlan, saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
 import { useRecordPaymentMutation } from '@/api/payments';
 import { useCreateExpenseMutation } from '@/api/expenses';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
@@ -1095,7 +1096,7 @@ export const SecretaryDashboardPage: React.FC = () => {
           }
         : undefined;
 
-      await createCustomer.mutateAsync({
+      const newCust = await createCustomer.mutateAsync({
         firstName: values.firstName,
         lastName: values.lastName,
         phoneNumber: values.phoneNumber,
@@ -1104,6 +1105,29 @@ export const SecretaryDashboardPage: React.FC = () => {
         propertyId: values.propertyId,
         createPlan,
       });
+
+      if (createPlan && (newCust as any)?.id) {
+        const balanceMinor = Math.max(createPlan.totalAmountMinor - createPlan.downPaymentMinor, 0);
+        const planObj: any = {
+          id: `plan-${(newCust as any).id}`,
+          customerId: (newCust as any).id,
+          propertyId: values.propertyId,
+          totalAmountMinor: createPlan.totalAmountMinor,
+          downPaymentMinor: createPlan.downPaymentMinor,
+          balanceMinor,
+          numMonths: createPlan.numMonths || 6,
+          monthlyAmountMinor: createPlan.monthlyAmountMinor || Math.round(balanceMinor / Math.max(createPlan.numMonths || 6, 1)),
+          currency: 'GHS',
+          startDate: createPlan.startDate,
+          status: 'active',
+          progressPercent: createPlan.totalAmountMinor > 0 ? Math.round((createPlan.downPaymentMinor / createPlan.totalAmountMinor) * 100) : 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        saveStoredPaymentPlan(planObj).catch(() => {});
+        saveCustomerPlanDefinition((newCust as any).id, planObj).catch(() => {});
+      }
+
       message.success('Customer added successfully!');
       setAddCustomerModal(false);
       form.resetFields();

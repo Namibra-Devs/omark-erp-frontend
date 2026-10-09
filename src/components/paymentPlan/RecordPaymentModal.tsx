@@ -29,7 +29,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useQueryClient } from '@tanstack/react-query';
-import { paymentPlansKeys, usePaymentPlansQuery } from '@/api/paymentPlans';
+import { paymentPlansKeys, usePaymentPlansQuery, usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery } from '@/api/properties';
 import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
@@ -41,6 +41,8 @@ import {
 import { PaymentReceiptModal, type PaymentReceiptData } from './PaymentReceiptModal';
 import { tokens } from '@/constants/tokens';
 import type { PaymentPlan, PaymentMethod } from '@/types';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const { Text, Title } = Typography;
 const { Option } = Select;
@@ -143,11 +145,41 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     };
   }, [propPlan, customer, plansData]);
 
+  const resolvedPlanId = resolvedPlan?.id || '';
+  const isRealBackendPlan = Boolean(open && resolvedPlanId && UUID_REGEX.test(resolvedPlanId));
+
+  const { data: livePlanData } = usePaymentPlanQuery(isRealBackendPlan ? resolvedPlanId : undefined);
+  const { data: liveInstallmentsData } = useInstallmentsQuery(isRealBackendPlan ? resolvedPlanId : undefined);
+
+  const activePlan = useMemo(() => {
+    if (!resolvedPlan) return null;
+    if (!livePlanData) return resolvedPlan;
+    return {
+      ...resolvedPlan,
+      ...livePlanData,
+      balanceMinor: livePlanData.balanceMinor !== undefined ? livePlanData.balanceMinor : resolvedPlan.balanceMinor,
+      status: livePlanData.status || resolvedPlan.status,
+    };
+  }, [resolvedPlan, livePlanData]);
+
+  const resolvedInstallments = useMemo(() => {
+    if (liveInstallmentsData && liveInstallmentsData.length > 0) return liveInstallmentsData;
+    if (livePlanData?.installments && livePlanData.installments.length > 0) return livePlanData.installments;
+    return [];
+  }, [liveInstallmentsData, livePlanData]);
+
+  const resolvedPayments = useMemo(() => {
+    if (livePlanData?.recentPayments && livePlanData.recentPayments.length > 0) {
+      return livePlanData.recentPayments;
+    }
+    return [];
+  }, [livePlanData]);
+
   // Compute schedule for the plan
   const scheduleInfo = useMemo(() => {
-    if (!resolvedPlan) return null;
-    return buildPaymentPlanSchedule(resolvedPlan);
-  }, [resolvedPlan]);
+    if (!activePlan) return null;
+    return buildPaymentPlanSchedule(activePlan, resolvedInstallments, resolvedPayments);
+  }, [activePlan, resolvedInstallments, resolvedPayments]);
 
   // Resolve target installment row
   const targetRow = useMemo<ScheduleInstallmentRow | null>(() => {
@@ -237,7 +269,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const newOutstanding = Math.max(0, totalBalance - currentAmt);
 
   const handleSubmit = async (values: any) => {
-    if (!resolvedPlan || !targetRow) return;
+    const planToRecord = activePlan || resolvedPlan;
+    if (!planToRecord || !targetRow) return;
     setSubmitting(true);
     try {
       const amountGHS = values.amountGHS !== undefined && values.amountGHS !== null ? values.amountGHS : expectedGHS;
@@ -247,7 +280,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       const reference = values.reference || `REC-${Date.now().toString().slice(-6)}`;
 
       const result = await recordPlanPaymentWithBackend(
-        resolvedPlan,
+        planToRecord,
         {
           amountMinor,
           paidOn,
@@ -296,7 +329,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         paymentDate: dayjs(paidOn).format('YYYY-MM-DD'),
         paymentMethod: method,
         reference,
-        planId: resolvedPlan.id,
+        planId: planToRecord.id,
         installmentOrdinal: result.installmentOrdinal || targetRow.ordinal,
         installmentSequence: result.sequence || targetRow.sequence,
         expectedAmountGHS: targetRow.installmentGHS,
@@ -305,7 +338,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         deficitRolledOverGHS: result.deficitRolledOverMinor / 100,
         surplusAppliedGHS: result.surplusAppliedMinor / 100,
         newOutstandingBalanceGHS: result.newBalanceMinor / 100,
-        totalContractGHS: (resolvedPlan.totalAmountMinor || 0) / 100,
+        totalContractGHS: (planToRecord.totalAmountMinor || 0) / 100,
       };
 
       setReceiptData(receiptPayload);

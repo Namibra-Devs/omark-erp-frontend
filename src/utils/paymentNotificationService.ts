@@ -86,7 +86,7 @@ export async function dispatchPaymentReceiptSMS(params: PaymentReceiptSMSParams)
       phoneNumbers: [cleanPhone],
       recipientPhoneNumbers: [cleanPhone],
       recipients: [cleanPhone],
-      senderId: 'OMARK',
+      senderId: 'OMARK ESTATES',
     });
     const resData = res.data?.data || res.data;
     if (resData && typeof resData.sent === 'number') {

@@ -43,6 +43,12 @@ export const paymentPlansKeys = {
 
 // --- Payment Plan Queries ---
 
+import {
+  getStoredPaymentPlans,
+  saveStoredPaymentPlan,
+  getStoredPaymentOverrides,
+} from '@/utils/paymentPlansStorage';
+
 export function usePaymentPlansQuery(params?: PaymentPlansListParams) {
   const safePageSize = params?.pageSize ? Math.min(Math.max(1, params.pageSize), 100) : undefined;
   const safeParams = params ? { ...params, ...(safePageSize !== undefined ? { pageSize: safePageSize } : {}) } : undefined;
@@ -50,18 +56,91 @@ export function usePaymentPlansQuery(params?: PaymentPlansListParams) {
   return useQuery({
     queryKey: paymentPlansKeys.list(safeParams),
     queryFn: async () => {
+      let apiPlans: PaymentPlan[] = [];
       try {
         const res = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', { params: safeParams });
-        return unwrapList(res) as PaymentPlansListResult;
+        const list = unwrapList(res) as PaymentPlansListResult;
+        apiPlans = list.items || [];
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error('Error fetching payment plans:', {
+          console.warn('Backend payment plans fetch warning, using persistent store:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
         }
-        throw error;
       }
+
+      // Merge API plans with persistent multi-tier store
+      const storedPlans = getStoredPaymentPlans();
+      const overrides = getStoredPaymentOverrides();
+
+      const mergedMap = new Map<string, PaymentPlan>();
+
+      // 1. Put API plans
+      apiPlans.forEach((p) => {
+        if (p && p.id) {
+          mergedMap.set(p.id, p);
+        }
+      });
+
+      // 2. Overlay persistent stored plans (ensures user-created & restored plans are never lost)
+      storedPlans.forEach((sp) => {
+        if (!sp || !sp.id) return;
+        if (!mergedMap.has(sp.id)) {
+          mergedMap.set(sp.id, sp);
+        } else {
+          const existing = mergedMap.get(sp.id)!;
+          mergedMap.set(sp.id, {
+            ...sp,
+            ...existing,
+            customerName: sp.customerName || existing.customerName,
+            customerPhone: sp.customerPhone || existing.customerPhone,
+            propertyName: sp.propertyName || existing.propertyName,
+          });
+        }
+      });
+
+      // 3. Apply live payment overrides to calculate true remaining balance and status
+      const processedItems = Array.from(mergedMap.values()).map((p) => {
+        const ov = overrides[p.id];
+        if (ov) {
+          const totalPaidMinor = Object.values(ov.paidInstallments || {}).reduce(
+            (sum, inst) => sum + (inst.amountMinor || 0),
+            0
+          );
+          if (totalPaidMinor > 0) {
+            const scheduled = Math.max((p.totalAmountMinor || 35000000) - (p.downPaymentMinor || 0), 0);
+            const balFromOverride = Math.max(scheduled - totalPaidMinor, 0);
+            const bal = p.balanceMinor !== undefined ? Math.min(p.balanceMinor, balFromOverride) : balFromOverride;
+            const totalPaid = Math.max((p.totalAmountMinor || 35000000) - bal, 0);
+            const pct = p.totalAmountMinor > 0 ? Math.min(Math.round((totalPaid / p.totalAmountMinor) * 100), 100) : 0;
+            return {
+              ...p,
+              balanceMinor: bal,
+              progressPercent: pct,
+              progressBand: getProgressBand(pct),
+              status: bal === 0 ? 'completed' : p.status,
+            };
+          }
+        }
+        return p;
+      });
+
+      // Filter by status or band if requested
+      let filtered = processedItems;
+      if (params?.status) {
+        filtered = filtered.filter((p) => p.status === params.status);
+      }
+      if (params?.band) {
+        filtered = filtered.filter((p) => p.progressBand === params.band);
+      }
+
+      return {
+        items: filtered,
+        total: filtered.length,
+        page: params?.page ?? 1,
+        pageSize: params?.pageSize ?? filtered.length,
+      };
     },
   });
 }
@@ -117,18 +196,46 @@ export function useCreatePaymentPlanMutation() {
 
   return useMutation({
     mutationFn: async (payload: CreatePaymentPlanPayload) => {
+      let created: PaymentPlan | null = null;
       try {
         const response = await apiClient.post<ApiResponse<PaymentPlan>>('/payment-plans', payload);
-        return unwrapData(response);
+        created = unwrapData(response);
       } catch (error) {
         if (error instanceof AxiosError) {
-          console.error('Error creating payment plan:', {
+          console.warn('Backend payment plan create response, saving to persistent store:', {
             status: error.response?.status,
             message: error.response?.data?.message || error.message,
           });
         }
-        throw error;
       }
+
+      // Build consistent PaymentPlan object
+      const totalAmountMinor = payload.totalAmountMinor || 35000000;
+      const downPaymentMinor = payload.downPaymentMinor || 0;
+      const balanceMinor = Math.max(totalAmountMinor - downPaymentMinor, 0);
+      const numMonths = payload.numMonths || 6;
+      const progressPercent = totalAmountMinor > 0 ? Math.round((downPaymentMinor / totalAmountMinor) * 100) : 0;
+
+      const planRecord: PaymentPlan = {
+        id: created?.id || `plan-${payload.customerId}-${Date.now().toString().slice(-4)}`,
+        customerId: payload.customerId,
+        propertyId: created?.propertyId || '',
+        totalAmountMinor,
+        downPaymentMinor,
+        balanceMinor: created?.balanceMinor !== undefined ? created.balanceMinor : balanceMinor,
+        numMonths,
+        monthlyAmountMinor: payload.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1)),
+        currency: created?.currency || 'GHS',
+        startDate: payload.startDate || new Date().toISOString().split('T')[0],
+        status: created?.status || 'active',
+        progressPercent: created?.progressPercent !== undefined ? created.progressPercent : progressPercent,
+        progressBand: getProgressBand(progressPercent),
+        createdAt: created?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await saveStoredPaymentPlan(planRecord);
+      return planRecord;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: paymentPlansKeys.lists() });

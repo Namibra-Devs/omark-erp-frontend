@@ -10,6 +10,7 @@ import { useConvertProspectMutation } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery, formatPropertyPrice } from '@/api/properties';
 import { assertNoCustomerDuplicates, checkCustomerConflicts } from '@/utils/duplicateValidation';
+import { saveStoredPaymentPlan, saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
 import type { Prospect, CustomerType } from '@/types';
 
 const { Option } = Select;
@@ -93,6 +94,32 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
         propertyId: values.propertyId,
         createPlan,
       });
+
+      if (createPlan && result?.id) {
+        const totalAmountMinor = createPlan.totalAmountMinor || 35000000;
+        const downPaymentMinor = createPlan.downPaymentMinor || 0;
+        const balanceMinor = Math.max(totalAmountMinor - downPaymentMinor, 0);
+        const numMonths = createPlan.numMonths || 6;
+        const progressPercent = totalAmountMinor > 0 ? Math.round((downPaymentMinor / totalAmountMinor) * 100) : 0;
+        const planObj: any = {
+          id: `plan-${result.id}`,
+          customerId: result.id,
+          propertyId: values.propertyId,
+          totalAmountMinor,
+          downPaymentMinor,
+          balanceMinor,
+          numMonths,
+          monthlyAmountMinor: createPlan.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1)),
+          currency: 'GHS',
+          startDate: createPlan.startDate,
+          status: 'active',
+          progressPercent,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        saveStoredPaymentPlan(planObj).catch(() => {});
+        saveCustomerPlanDefinition(result.id, planObj).catch(() => {});
+      }
 
       const codeInfo = result.code ? ` (Sales Code: ${result.code})` : '';
       message.success(`${prospect.firstName} ${prospect.lastName} is now a customer!${codeInfo}`);

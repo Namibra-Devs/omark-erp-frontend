@@ -18,6 +18,7 @@ import {
   createDuplicateNameRule,
   assertNoCustomerDuplicates,
 } from '@/utils/duplicateValidation';
+import { saveStoredPaymentPlan, saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
 
 const { Option } = Select;
 const { Text } = Typography;
@@ -96,6 +97,40 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
 
       const taggedPayload = tagPayloadWithBranch(customerData, user);
       const newCustomer = await createCustomer.mutateAsync(taggedPayload);
+
+      if (customerData.createPlan && newCustomer?.id) {
+        const planData = customerData.createPlan;
+        const balanceMinor = Math.max(planData.totalAmountMinor - planData.downPaymentMinor, 0);
+        const realPlanId =
+          (newCustomer as any)?.plan?.id ||
+          (newCustomer as any)?.planId ||
+          (newCustomer as any)?.paymentPlanId ||
+          (newCustomer as any)?.paymentPlan?.id;
+        const finalPlanId =
+          realPlanId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(realPlanId)
+            ? realPlanId
+            : `plan-${newCustomer.id}`;
+
+        const planObj: any = {
+          id: finalPlanId,
+          customerId: newCustomer.id,
+          propertyId: values.propertyId,
+          totalAmountMinor: planData.totalAmountMinor,
+          downPaymentMinor: planData.downPaymentMinor,
+          balanceMinor,
+          numMonths: planData.numMonths || 12,
+          monthlyAmountMinor: planData.monthlyAmountMinor || Math.round(balanceMinor / Math.max(planData.numMonths || 12, 1)),
+          currency: 'GHS',
+          startDate: planData.startDate,
+          status: 'active',
+          progressPercent: planData.totalAmountMinor > 0 ? Math.round((planData.downPaymentMinor / planData.totalAmountMinor) * 100) : 0,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        saveStoredPaymentPlan(planObj).catch(() => {});
+        saveCustomerPlanDefinition(newCustomer.id, planObj).catch(() => {});
+      }
+
       message.success(`Customer ${values.firstName} ${values.lastName} added successfully!`);
       form.resetFields();
       onClose();

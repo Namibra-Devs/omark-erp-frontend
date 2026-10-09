@@ -641,7 +641,7 @@ export const UnifiedBroadcastCenter: React.FC = () => {
           recipientPhoneNumbers,
           phoneNumbers: recipientPhoneNumbers,
           recipients: recipientPhoneNumbers,
-          senderId: 'OMARK',
+          senderId: 'OMARK ESTATES',
         });
       }
 
@@ -1183,7 +1183,7 @@ export const UnifiedBroadcastCenter: React.FC = () => {
                 >
                   <Space size={16} wrap>
                     <Checkbox value="sms">
-                      📱 Direct Carrier SMS (Sender ID: <strong>OMARK</strong>)
+                      📱 Direct Carrier SMS (Sender ID: <strong>OMARK ESTATES</strong>)
                     </Checkbox>
                     {audienceType === 'staff' && (
                       <Checkbox value="in_app">
@@ -1307,7 +1307,7 @@ export const UnifiedBroadcastCenter: React.FC = () => {
                 </Col>
                 <Col span={12}>
                   <div style={{ fontSize: 11, color: '#64748b' }}>Sender Identification:</div>
-                  <Tag color="green" style={{ fontWeight: 700 }}>OMARK</Tag>
+                  <Tag color="green" style={{ fontWeight: 700 }}>OMARK ESTATES</Tag>
                 </Col>
                 <Col span={12}>
                   <div style={{ fontSize: 11, color: '#64748b' }}>Channel Pipeline:</div>
@@ -1709,7 +1709,7 @@ export const UnifiedBroadcastCenter: React.FC = () => {
                 <div>• <strong>Audience:</strong> {audienceType === 'customers' ? 'Clients & Buyers' : 'Internal Staff Team'}</div>
                 <div>• <strong>Included Recipients:</strong> {selectedRecipients.length} contacts ({excludedCount} excluded)</div>
                 <div>• <strong>Channels:</strong> {channels.map((c) => c.toUpperCase()).join(', ')}</div>
-                <div>• <strong>Sender ID:</strong> OMARK</div>
+                <div>• <strong>Sender ID:</strong> OMARK ESTATES</div>
                 {validMobileCount < selectedRecipients.length && (
                   <div style={{ color: '#d97706', marginTop: 4 }}>
                     ℹ️ Note: {selectedRecipients.length - validMobileCount} recipients do not have a mobile number registered and will receive the announcement via ERP In-App Bell / Portal only.

@@ -151,6 +151,9 @@ export interface PaymentPlan {
   progressBand: ProgressBand;
   createdAt: string;
   updatedAt: string;
+  customerName?: string;
+  customerPhone?: string;
+  propertyName?: string;
 }
 
 export interface Installment {

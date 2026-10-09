@@ -604,7 +604,7 @@ export const MarketingDashboardPage: React.FC = () => {
           recipientPhoneNumbers: recipientPhones,
           phoneNumbers: recipientPhones,
           recipients: recipientPhones,
-          senderId: 'OMARK',
+          senderId: 'OMARK ESTATES',
         });
       }
 
@@ -2957,7 +2957,7 @@ export const MarketingDashboardPage: React.FC = () => {
             <Col span={12}>
               <Form.Item name="channel" label="Delivery Channel" rules={[{ required: true }]}>
                 <Select>
-                  <Option value="sms">📱 SMS Broadcast (Direct Carrier)</Option>
+                  <Option value="sms">📱 SMS Broadcast (Sender ID: OMARK ESTATES)</Option>
                   <Option value="whatsapp">💬 WhatsApp Outreach Link</Option>
                 </Select>
               </Form.Item>

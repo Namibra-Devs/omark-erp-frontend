@@ -315,7 +315,7 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
           recipientPhoneNumbers: recipientPhones,
           phoneNumbers: recipientPhones,
           recipients: recipientPhones,
-          senderId: 'OMARK',
+          senderId: 'OMARK ESTATES',
         });
         dispatchSuccess = true;
       } catch (primaryErr: any) {
@@ -327,7 +327,7 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
             message: baseMessage,
             messageText: baseMessage,
             phoneNumbers: recipientPhones,
-            senderId: 'OMARK',
+            senderId: 'OMARK ESTATES',
           });
           dispatchSuccess = true;
         } catch {
@@ -733,7 +733,7 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
                 <div style={{ textAlign: 'center', marginBottom: 10 }}>
                   <Badge status="processing" text={<Text strong style={{ fontSize: 11 }}>SMS Preview Simulator</Text>} />
                   <div style={{ fontSize: 10, color: '#8c8c8c' }}>
-                    Sender: <Tag color="blue" style={{ fontSize: 10, padding: '0 4px', margin: 0 }}>OMARK</Tag>
+                    Sender: <Tag color="blue" style={{ fontSize: 10, padding: '0 4px', margin: 0 }}>OMARK ESTATES</Tag>
                   </div>
                 </div>
 
@@ -761,7 +761,7 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
                     {previewMessage || 'Your message will appear here...'}
                   </Paragraph>
                   <div style={{ textAlign: 'right', marginTop: 6, fontSize: 10, color: '#bfbfbf' }}>
-                    {dayjs().format('hh:mm A')} • SMS via Omark
+                    {dayjs().format('hh:mm A')} • SMS via Omark Estates
                   </div>
                 </div>
 

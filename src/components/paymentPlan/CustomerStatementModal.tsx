@@ -1,5 +1,5 @@
 // src/components/paymentPlan/CustomerStatementModal.tsx
-import React, { useRef } from 'react';
+import React, { useRef, useMemo } from 'react';
 import {
   Modal,
   Button,
@@ -32,7 +32,10 @@ import {
   type PaymentPlanScheduleInfo,
   type ScheduleInstallmentRow,
 } from '@/utils/paymentPlanSchedule';
+import { usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
 import { tokens } from '@/constants/tokens';
+
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -55,11 +58,50 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
 }) => {
   const printRef = useRef<HTMLDivElement>(null);
 
+  const planId = plan?.id || '';
+  const isRealBackendPlan = Boolean(open && planId && UUID_REGEX.test(planId));
+
+  const { data: livePlanData } = usePaymentPlanQuery(isRealBackendPlan ? planId : undefined);
+  const { data: liveInstallmentsData } = useInstallmentsQuery(isRealBackendPlan ? planId : undefined);
+
+  const mergedPlan = useMemo(() => {
+    if (!plan) return null;
+    if (!livePlanData) return plan;
+    return {
+      ...plan,
+      ...livePlanData,
+      balanceMinor: livePlanData.balanceMinor !== undefined ? livePlanData.balanceMinor : plan.balanceMinor,
+      status: livePlanData.status || plan.status,
+    };
+  }, [plan, livePlanData]);
+
+  const resolvedInstallments = useMemo(() => {
+    if (liveInstallmentsData && liveInstallmentsData.length > 0) return liveInstallmentsData;
+    if (livePlanData?.installments && livePlanData.installments.length > 0) return livePlanData.installments;
+    return [];
+  }, [liveInstallmentsData, livePlanData]);
+
+  const resolvedPayments = useMemo(() => {
+    if (livePlanData?.recentPayments && livePlanData.recentPayments.length > 0) {
+      return livePlanData.recentPayments;
+    }
+    return [];
+  }, [livePlanData]);
+
+  const scheduleInfo: PaymentPlanScheduleInfo = useMemo(() => {
+    if (!mergedPlan) {
+      return buildPaymentPlanSchedule({ id: '', customerId: '', propertyId: '' } as any);
+    }
+    return buildPaymentPlanSchedule(mergedPlan as any, resolvedInstallments, resolvedPayments);
+  }, [mergedPlan, resolvedInstallments, resolvedPayments]);
+
   if (!plan) return null;
 
-  const scheduleInfo: PaymentPlanScheduleInfo = buildPaymentPlanSchedule(plan);
   const overrides = getPlanPaymentOverrides(plan.id);
-  const transactions = overrides?.transactions || [];
+  const transactions =
+    scheduleInfo.transactions && scheduleInfo.transactions.length > 0
+      ? scheduleInfo.transactions
+      : overrides?.transactions || [];
 
   const totalContractGHS = (plan.totalAmountMinor || scheduleInfo.totalAmountMinor || 0) / 100;
   const downPaymentGHS = (plan.downPaymentMinor || scheduleInfo.downPaymentMinor || 0) / 100;

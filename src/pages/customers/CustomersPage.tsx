@@ -11,6 +11,7 @@ import {
 } from '@/api/customers';
 import { useProspectsQuery } from '@/api/prospects';
 import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
+import { saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
 import {
   createDuplicatePhoneRule,
   createDuplicateNameRule,
@@ -845,8 +846,10 @@ const handleAddCustomer = async (values: any) => {
           monthlyAmountMinor: customerData.createPlan.monthlyAmountMinor,
           startDate: customerData.createPlan.startDate,
         });
+        saveCustomerPlanDefinition(newCustomer.id, customerData.createPlan).catch(() => {});
       } catch (planErr) {
         console.warn('[CustomersPage] Proactive backend payment plan creation notice:', planErr);
+        saveCustomerPlanDefinition(newCustomer.id, customerData.createPlan).catch(() => {});
       }
     }
 

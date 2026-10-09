@@ -1,5 +1,6 @@
 // src/utils/customerPortalCache.ts
 import type { Customer, Installment, PaymentPlan, Payment, Property } from '@/types';
+import { updateAppSettings } from '@/api/settings';
 
 const DIRECTORY_KEY = 'omark_portal_customer_cache';
 
@@ -29,6 +30,7 @@ const load = (): CacheMap => {
 
 const save = (map: CacheMap) => {
   localStorage.setItem(DIRECTORY_KEY, JSON.stringify(map));
+  updateAppSettings({ customerPortalCache: map }).catch(() => {});
 };
 
 export const cacheCustomerSummaries = (

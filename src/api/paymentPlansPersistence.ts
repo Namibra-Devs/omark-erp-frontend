@@ -4,6 +4,13 @@ import dayjs from 'dayjs';
 import type { ApiResponse, PaymentPlan, PaymentPlanStatus, PaymentMethod } from '@/types';
 import { buildPaymentPlanSchedule, recordLocalInstallmentPayment } from '@/utils/paymentPlanSchedule';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
+import {
+  saveStoredPaymentPlan,
+  saveCustomerPlanDefinition,
+  getStoredPaymentPlans,
+  getStoredPaymentOverrides,
+  saveStoredPaymentOverrides,
+} from '@/utils/paymentPlansStorage';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -56,10 +63,45 @@ export async function resolveOrCreateBackendPlan(
     return plan.id;
   }
 
-  const customerId = plan.customerId || (plan.id.startsWith('plan-') ? plan.id.replace(/^plan-/, '') : plan.id);
+  let customerId = plan.customerId;
+  if (!customerId && plan.id) {
+    const stored = getStoredPaymentPlans().find((p) => p.id === plan.id);
+    if (stored?.customerId) {
+      customerId = stored.customerId;
+    } else {
+      const raw = plan.id.replace(/^plan-/, '');
+      const match = raw.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+      customerId = match ? match[1] : raw;
+    }
+  }
+
   if (!customerId) {
     return plan.id;
   }
+
+  const onPlanResolved = (resolvedId: string, resolvedPlanObj?: any) => {
+    if (resolvedId && UUID_REGEX.test(resolvedId) && resolvedId !== plan.id) {
+      const currentStored = getStoredPaymentPlans();
+      const existing = currentStored.find((p) => p.id === plan.id || p.id === resolvedId);
+      if (existing) {
+        saveStoredPaymentPlan({
+          ...existing,
+          ...resolvedPlanObj,
+          id: resolvedId,
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
+      } else if (resolvedPlanObj) {
+        saveStoredPaymentPlan(resolvedPlanObj).catch(() => {});
+      }
+
+      // Mirror any local overrides from synthetic ID to real UUID
+      const overrides = getStoredPaymentOverrides();
+      if (overrides[plan.id] && !overrides[resolvedId]) {
+        overrides[resolvedId] = { ...overrides[plan.id] };
+        saveStoredPaymentOverrides(overrides).catch(() => {});
+      }
+    }
+  };
 
   // 1. Check customer detail endpoint directly (returns customer.plan or paymentPlan)
   try {
@@ -72,6 +114,7 @@ export async function resolveOrCreateBackendPlan(
       custData?.planId ||
       custData?.paymentPlanId;
     if (planCandidate && UUID_REGEX.test(planCandidate)) {
+      onPlanResolved(planCandidate, custData?.plan || custData?.paymentPlan);
       return planCandidate;
     }
   } catch (custErr) {
@@ -86,6 +129,8 @@ export async function resolveOrCreateBackendPlan(
     const listData = unwrapList(listRes);
     const existing = listData.items.find((p: any) => p.customerId === customerId);
     if (existing?.id && UUID_REGEX.test(existing.id)) {
+      onPlanResolved(existing.id, existing);
+      saveStoredPaymentPlan(existing).catch(() => {});
       return existing.id;
     }
 
@@ -99,9 +144,12 @@ export async function resolveOrCreateBackendPlan(
           const nextItems = unwrapList(nextRes).items;
           const match = nextItems.find((item: any) => item.customerId === customerId);
           if (match?.id && UUID_REGEX.test(match.id)) {
+            onPlanResolved(match.id, match);
             return match.id;
           }
-        } catch {}
+        } catch {
+          // ignore secondary lookup error
+        }
       }
     }
   } catch (e) {
@@ -129,6 +177,9 @@ export async function resolveOrCreateBackendPlan(
     });
     const created = unwrapData(createRes) || (createRes?.data as any)?.data || createRes?.data;
     if (created?.id && UUID_REGEX.test(created.id)) {
+      onPlanResolved(created.id, created);
+      saveStoredPaymentPlan(created).catch(() => {});
+      saveCustomerPlanDefinition(customerId, created).catch(() => {});
       return created.id;
     }
   } catch (createErr: any) {
@@ -137,6 +188,7 @@ export async function resolveOrCreateBackendPlan(
     const errData = createErr?.response?.data;
     const errPlanId = errData?.plan?.id || errData?.data?.id || errData?.planId || errData?.id;
     if (errPlanId && UUID_REGEX.test(errPlanId)) {
+      onPlanResolved(errPlanId);
       return errPlanId;
     }
 
@@ -147,6 +199,7 @@ export async function resolveOrCreateBackendPlan(
       const items = unwrapList(listRes).items;
       const existing = items.find((p: any) => p.customerId === customerId);
       if (existing?.id && UUID_REGEX.test(existing.id)) {
+        onPlanResolved(existing.id, existing);
         return existing.id;
       }
     } catch {
@@ -274,8 +327,8 @@ export async function recordPlanPaymentWithBackend(
     const isOverpayment = surplusMinor > 0;
     const newBalanceMinor = updatedSchedule.currentBalanceMinor;
 
-    let targetPhone = customerInfo?.phone?.trim();
-    let targetName = customerInfo?.name?.trim();
+    const targetPhone = customerInfo?.phone?.trim();
+    const targetName = customerInfo?.name?.trim();
 
     try {
       await dispatchPaymentReceiptSMS({
@@ -370,6 +423,23 @@ export async function recordPlanPaymentWithBackend(
   const newBalanceMinor = result?.balanceMinor !== undefined 
     ? result.balanceMinor 
     : updatedSchedule.currentBalanceMinor;
+
+  // Update stored plan record to match the backend write
+  try {
+    const currentStored = getStoredPaymentPlans();
+    const storedMatch = currentStored.find((p) => p.id === realPlanId || p.id === plan.id);
+    if (storedMatch) {
+      saveStoredPaymentPlan({
+        ...storedMatch,
+        id: realPlanId,
+        balanceMinor: newBalanceMinor,
+        status: newBalanceMinor === 0 ? 'completed' : storedMatch.status,
+        updatedAt: new Date().toISOString(),
+      }).catch(() => {});
+    }
+  } catch {
+    // ignore storage sync failure
+  }
 
   // 4. Resolve customer contact number if missing and dispatch automated SMS receipt
   let targetPhone = customerInfo?.phone?.trim();
