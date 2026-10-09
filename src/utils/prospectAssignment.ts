@@ -216,10 +216,9 @@ export function getStaffAssignedProspects(
   const role = effectiveUser?.role || 'marketing_staff';
   const isMarketingDirector = role === 'marketing_director';
 
-  // 1. If marketing director:
-  if (isMarketingDirector && options?.includeDepartmentPipeline !== false) {
-    // Marketing Director oversees marketing pipeline prospects (source === 'marketing' or unassigned source)
-    // plus any prospects specifically assigned to or created by them
+  // 1. If marketing director AND explicitly requested to include whole department pipeline:
+  if (isMarketingDirector && options?.includeDepartmentPipeline === true) {
+    // Marketing Director oversees marketing pipeline prospects ONLY when explicitly requested
     const matched = allProspects.filter((p) =>
       p.source === 'marketing' ||
       !p.source ||
@@ -229,8 +228,7 @@ export function getStaffAssignedProspects(
     return filterEntitiesByBranch(matched, effectiveUser, branches);
   }
 
-  // 2. If marketing staff or other individual contributor:
-  // Directly assigned/created prospects belong to this staff member regardless of lead location.
+  // 2. Direct prospects added by or assigned to this staff member (including marketing director's own portfolio)
   return allProspects.filter((p) =>
     isProspectAssignedOrCreatedByStaff(p, effectiveUser)
   );
@@ -246,22 +244,197 @@ export function getStaffAssignedProspectCount(
 ): { count: number; directCount: number; isDirector: boolean } {
   if (!staffUser) return { count: 0, directCount: 0, isDirector: false };
 
-  const assigned = getStaffAssignedProspects(allProspects, staffUser, branches);
-
   const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
   const stored = staffId ? getStoredUserAssignment(staffId) : undefined;
   const base = typeof staffUser === 'object' ? staffUser : { id: staffId };
   const role = base.role || stored?.role || 'marketing_staff';
   const isDirector = role === 'marketing_director';
 
-  const directList = isDirector
-    ? allProspects.filter((p) => isProspectAssignedOrCreatedByStaff(p, { ...stored, ...base }))
-    : assigned;
+  const directList = allProspects.filter((p) =>
+    isProspectAssignedOrCreatedByStaff(p, { ...stored, ...base })
+  );
 
   return {
-    count: assigned.length,
+    count: directList.length,
     directCount: directList.length,
     isDirector,
+  };
+}
+
+export interface StaffProspectDistribution {
+  id: string;
+  userId?: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  role: string;
+  department?: string;
+  userObj?: any;
+  addedProspects: Prospect[];
+  assignedProspects: Prospect[];
+  totalProspects: number;
+  meetingScheduled: number;
+  meetingCompleted: number;
+  converted: number;
+  conversionRate: number;
+  revenueGeneratedMinor: number;
+  isUnassignedPool?: boolean;
+}
+
+/**
+ * Cleanly partitions all marketing prospects across all marketing staff (including director)
+ * and unassigned leads so that the sum of prospects across the table amounts to the exact
+ * total marketing prospects (e.g. 364), without double-counting or inflating the director's row.
+ */
+export function distributeProspectsAcrossMarketingStaff(
+  allMarketingProspects: Prospect[],
+  marketingStaffUsers: any[],
+  apiMarketers: any[] = []
+): {
+  staffRows: StaffProspectDistribution[];
+  unassignedRow: StaffProspectDistribution | null;
+  totalAttributedProspects: number;
+} {
+  const staffMap = new Map<string, {
+    staff: any;
+    added: Prospect[];
+    assigned: Prospect[];
+  }>();
+
+  marketingStaffUsers.forEach((staff) => {
+    staffMap.set(String(staff.id).trim(), {
+      staff,
+      added: [],
+      assigned: [],
+    });
+  });
+
+  const unassignedProspects: Prospect[] = [];
+
+  allMarketingProspects.forEach((prospect) => {
+    // 1. Check if created by a marketing staff member
+    let matchedCreatorStaff: any = null;
+    for (const s of marketingStaffUsers) {
+      if (
+        areIdsEqual(prospect.createdByUserId, s.id) ||
+        areIdsEqual((prospect as any).creatorId, s.id) ||
+        areIdsEqual((prospect as any).created_by_user_id, s.id)
+      ) {
+        matchedCreatorStaff = s;
+        break;
+      }
+      const cName = prospect.createdByName || (prospect as any).creatorName;
+      if (cName && isStaffNameMatching(cName, s)) {
+        matchedCreatorStaff = s;
+        break;
+      }
+    }
+
+    // 2. Check if assigned to a marketing staff member
+    let matchedAssigneeStaff: any = null;
+    for (const s of marketingStaffUsers) {
+      if (
+        areIdsEqual(prospect.assignedUserId, s.id) ||
+        areIdsEqual((prospect as any).assignedStaffId, s.id) ||
+        areIdsEqual((prospect as any).assignedTo, s.id)
+      ) {
+        matchedAssigneeStaff = s;
+        break;
+      }
+      const aName = (prospect as any).assignedStaffName || (prospect as any).assignedUserName;
+      if (aName && isStaffNameMatching(aName, s)) {
+        matchedAssigneeStaff = s;
+        break;
+      }
+    }
+
+    if (matchedAssigneeStaff) {
+      staffMap.get(String(matchedAssigneeStaff.id).trim())?.assigned.push(prospect);
+    }
+
+    // Primary attribution for the staff table: who added / brought in the lead
+    const primaryStaff = matchedCreatorStaff || matchedAssigneeStaff;
+    if (primaryStaff) {
+      staffMap.get(String(primaryStaff.id).trim())?.added.push(prospect);
+    } else {
+      unassignedProspects.push(prospect);
+    }
+  });
+
+  const staffRows: StaffProspectDistribution[] = marketingStaffUsers.map((staff) => {
+    const entry = staffMap.get(String(staff.id).trim());
+    const addedProspects = entry?.added || [];
+    const assignedProspects = entry?.assigned || [];
+    const staffName = getUserFullName(staff);
+
+    const apiRecord = apiMarketers.find(
+      (m) => m.userId === staff.id || m.id === staff.id || m.name?.toLowerCase() === staffName.toLowerCase()
+    );
+
+    // Count is strictly based on the prospects added/attributed to this staff member
+    const totalProspects = addedProspects.length;
+    const meetingScheduled = addedProspects.filter((p) => p.status === 'meeting_scheduled').length;
+    const meetingCompleted = addedProspects.filter((p) => p.status === 'meeting_completed').length;
+    const converted = Math.max(
+      addedProspects.filter((p) => p.status === 'purchased').length,
+      (staff.role !== 'marketing_director' ? Math.min(apiRecord?.converted ?? 0, totalProspects) : 0)
+    );
+    const conversionRate = totalProspects > 0 ? Math.round((converted / totalProspects) * 1000) / 10 : 0;
+
+    return {
+      id: staff.id,
+      userId: staff.id,
+      name: staffName,
+      email: staff.email,
+      phone: staff.phoneNumber || (typeof staff.phone === 'string' ? staff.phone : staff.phone?.number) || '',
+      role: staff.role,
+      department: staff.department,
+      userObj: staff,
+      addedProspects,
+      assignedProspects,
+      totalProspects,
+      meetingScheduled,
+      meetingCompleted,
+      converted,
+      conversionRate,
+      revenueGeneratedMinor: converted * 4500000,
+      isUnassignedPool: false,
+    };
+  }).sort((a, b) => b.totalProspects - a.totalProspects || b.converted - a.converted);
+
+  let unassignedRow: StaffProspectDistribution | null = null;
+  if (unassignedProspects.length > 0) {
+    const scheduled = unassignedProspects.filter((p) => p.status === 'meeting_scheduled').length;
+    const completed = unassignedProspects.filter((p) => p.status === 'meeting_completed').length;
+    const conv = unassignedProspects.filter((p) => p.status === 'purchased').length;
+    unassignedRow = {
+      id: 'unassigned-inbound-leads',
+      userId: undefined,
+      name: '🌐 Direct / Inbound Marketing Leads (Unassigned)',
+      email: 'General Pipeline',
+      phone: 'Unassigned',
+      role: 'inbound_pool',
+      department: 'Marketing',
+      userObj: null,
+      addedProspects: unassignedProspects,
+      assignedProspects: [],
+      totalProspects: unassignedProspects.length,
+      meetingScheduled: scheduled,
+      meetingCompleted: completed,
+      converted: conv,
+      conversionRate: unassignedProspects.length > 0 ? Math.round((conv / unassignedProspects.length) * 1000) / 10 : 0,
+      revenueGeneratedMinor: conv * 4500000,
+      isUnassignedPool: true,
+    };
+  }
+
+  const totalAttributedProspects =
+    staffRows.reduce((acc, r) => acc + r.totalProspects, 0) + (unassignedRow?.totalProspects ?? 0);
+
+  return {
+    staffRows,
+    unassignedRow,
+    totalAttributedProspects,
   };
 }
 

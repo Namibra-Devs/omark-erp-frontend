@@ -130,6 +130,20 @@ const addAuthAndRateGuardInterceptor = (instance: AxiosInstance) => {
         config.headers.Authorization = `Bearer ${token}`;
       }
 
+      // Automatically clamp pageSize and limit to maximum allowed by backend (100) to prevent VALIDATION_ERROR
+      if (config.params) {
+        if (typeof config.params.pageSize === 'number' && config.params.pageSize > 100) {
+          config.params.pageSize = 100;
+        } else if (typeof config.params.pageSize === 'string' && Number(config.params.pageSize) > 100) {
+          config.params.pageSize = 100;
+        }
+        if (typeof config.params.limit === 'number' && config.params.limit > 100) {
+          config.params.limit = 100;
+        } else if (typeof config.params.limit === 'string' && Number(config.params.limit) > 100) {
+          config.params.limit = 100;
+        }
+      }
+
       // Only apply deduplication and rate-guard cache fallback to GET requests
       if (config.method?.toLowerCase() === 'get') {
         const cacheKey = getCacheKey(config);

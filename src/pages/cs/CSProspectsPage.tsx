@@ -47,12 +47,15 @@ import {
   EnvironmentOutlined,
   IdcardOutlined,
   CustomerServiceOutlined,
-  DollarOutlined
+  DollarOutlined,
+  NotificationOutlined,
+  SendOutlined
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PageHeader } from '@/components/shared/PageHeader';
+import { CSOutreachBroadcastModal } from '@/components/cs/CSOutreachBroadcastModal';
 import { ConvertProspectModal } from '@/components/shared/ConvertProspectModal';
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { PhotoUpload, PendingPhotoUpload } from '@/components/shared/PhotoUpload';
@@ -119,6 +122,17 @@ export const CSProspectsPage: React.FC = () => {
   const [appointmentTargetProspect, setAppointmentTargetProspect] = useState<Prospect | null>(null);
   const [appointmentForm] = Form.useForm();
   const queryClient = useQueryClient();
+
+  // Outreach Broadcast states
+  const [broadcastModalOpen, setBroadcastModalOpen] = useState(false);
+  const [broadcastSingleTarget, setBroadcastSingleTarget] = useState<Prospect | null>(null);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [selectedRows, setSelectedRows] = useState<Prospect[]>([]);
+
+  const handleOpenBroadcast = (target?: Prospect | null) => {
+    setBroadcastSingleTarget(target || null);
+    setBroadcastModalOpen(true);
+  };
 
   // Export states
   const [exportModal, setExportModal] = useState(false);
@@ -723,10 +737,16 @@ export const CSProspectsPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 220,
+      width: 260,
       fixed: 'right' as const,
       render: (_: any, record: Prospect) => (
         <Space>
+          <Tooltip title="Send Outreach SMS">
+            <Button 
+              icon={<SendOutlined style={{ color: '#722ed1' }} />} 
+              onClick={() => handleOpenBroadcast(record)}
+            />
+          </Tooltip>
           <Tooltip title="Book Appointment">
             <Button 
               icon={<CalendarOutlined style={{ color: '#001529' }} />} 
@@ -886,6 +906,15 @@ export const CSProspectsPage: React.FC = () => {
         {/* Quick Actions */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
+            <Button
+              icon={<SendOutlined />}
+              style={{ background: '#722ed1', borderColor: '#722ed1', color: '#fff' }}
+              onClick={() => {
+                handleOpenBroadcast(selectedProspect);
+              }}
+            >
+              Send Outreach SMS
+            </Button>
             <Button
               type="primary"
               icon={<EditOutlined />}
@@ -1165,6 +1194,12 @@ export const CSProspectsPage: React.FC = () => {
         title="Customer Service Prospects"
         actions={[
           {
+            label: selectedRowKeys.length > 0 ? `Outreach Broadcast (${selectedRowKeys.length})` : 'Outreach Broadcast',
+            onClick: () => handleOpenBroadcast(null),
+            icon: <NotificationOutlined />,
+            style: { background: '#722ed1', borderColor: '#722ed1', color: '#fff' },
+          },
+          {
             label: 'Book Appointment',
             onClick: () => handleOpenBookAppointment(),
             icon: <CalendarOutlined />,
@@ -1331,6 +1366,43 @@ export const CSProspectsPage: React.FC = () => {
         </Row>
       </Card>
 
+      {/* Selected Row Banner */}
+      {selectedRowKeys.length > 0 && (
+        <Alert
+          style={{ marginBottom: 16, borderRadius: 8, background: '#f9f0ff', borderColor: '#d3adf7' }}
+          type="info"
+          showIcon
+          icon={<SendOutlined style={{ color: '#722ed1' }} />}
+          message={
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
+              <Text strong style={{ color: '#531dab' }}>
+                {selectedRowKeys.length} prospect{selectedRowKeys.length > 1 ? 's' : ''} selected for outreach
+              </Text>
+              <Space>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<SendOutlined />}
+                  style={{ background: '#722ed1', borderColor: '#722ed1' }}
+                  onClick={() => handleOpenBroadcast(null)}
+                >
+                  Send Outreach SMS ({selectedRowKeys.length})
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setSelectedRowKeys([]);
+                    setSelectedRows([]);
+                  }}
+                >
+                  Clear Selection
+                </Button>
+              </Space>
+            </div>
+          }
+        />
+      )}
+
       {/* Table */}
       <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
         <Table
@@ -1340,6 +1412,30 @@ export const CSProspectsPage: React.FC = () => {
           loading={prospectsLoading}
           size="middle"
           scroll={{ x: 1000 }}
+          rowSelection={{
+            selectedRowKeys,
+            onChange: (keys, rows) => {
+              setSelectedRowKeys(keys);
+              setSelectedRows((prev) => {
+                const map = new Map<string, Prospect>();
+                prev.forEach((p) => {
+                  if (keys.includes(p.id)) map.set(p.id, p);
+                });
+                rows.forEach((p) => {
+                  if (keys.includes(p.id)) map.set(p.id, p);
+                });
+                filteredProspects.forEach((p) => {
+                  if (keys.includes(p.id) && !map.has(p.id)) map.set(p.id, p);
+                });
+                return Array.from(map.values());
+              });
+            },
+            selections: [
+              Table.SELECTION_ALL,
+              Table.SELECTION_INVERT,
+              Table.SELECTION_NONE,
+            ],
+          }}
           pagination={{
             pageSize: 10,
             showSizeChanger: true,
@@ -1941,6 +2037,22 @@ export const CSProspectsPage: React.FC = () => {
           refetchProspects();
           queryClient.invalidateQueries({ queryKey: prospectKeys.all });
           queryClient.invalidateQueries({ queryKey: customerKeys.all });
+        }}
+      />
+
+      <CSOutreachBroadcastModal
+        open={broadcastModalOpen}
+        onClose={() => {
+          setBroadcastModalOpen(false);
+          setBroadcastSingleTarget(null);
+        }}
+        allProspects={filteredProspects}
+        selectedProspects={selectedRows}
+        singleTargetProspect={broadcastSingleTarget}
+        onSuccess={() => {
+          setSelectedRowKeys([]);
+          setSelectedRows([]);
+          refetchProspects();
         }}
       />
     </div>

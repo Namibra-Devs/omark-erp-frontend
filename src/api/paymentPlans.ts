@@ -44,11 +44,14 @@ export const paymentPlansKeys = {
 // --- Payment Plan Queries ---
 
 export function usePaymentPlansQuery(params?: PaymentPlansListParams) {
+  const safePageSize = params?.pageSize ? Math.min(Math.max(1, params.pageSize), 100) : undefined;
+  const safeParams = params ? { ...params, ...(safePageSize !== undefined ? { pageSize: safePageSize } : {}) } : undefined;
+
   return useQuery({
-    queryKey: paymentPlansKeys.list(params),
+    queryKey: paymentPlansKeys.list(safeParams),
     queryFn: async () => {
       try {
-        const res = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', { params });
+        const res = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', { params: safeParams });
         return unwrapList(res) as PaymentPlansListResult;
       } catch (error) {
         if (error instanceof AxiosError) {

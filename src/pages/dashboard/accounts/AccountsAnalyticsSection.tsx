@@ -52,10 +52,10 @@ interface AccountsAnalyticsSectionProps {
 export const AccountsAnalyticsSection: React.FC<AccountsAnalyticsSectionProps> = () => {
   // ── Queries ────────────────────────────────────────────────────────────────
   const { data: analyticsData, isLoading: analyticsLoading } = useAnalyticsDashboardQuery();
-  const { data: paymentPlansData, isLoading: plansLoading } = usePaymentPlansQuery({ pageSize: 500 });
-  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 1000 });
-  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 1000 });
-  const { data: usersData, isLoading: usersLoading } = useUsersQuery({ pageSize: 500 });
+  const { data: paymentPlansData, isLoading: plansLoading } = usePaymentPlansQuery({ pageSize: 100 });
+  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
+  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 100 });
+  const { data: usersData, isLoading: usersLoading } = useUsersQuery({ pageSize: 100 });
 
   const paymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
   const customers: Customer[] = customersData?.items ?? [];

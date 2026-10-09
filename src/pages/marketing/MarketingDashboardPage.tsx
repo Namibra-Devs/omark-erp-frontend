@@ -70,6 +70,7 @@ import {
   ShareAltOutlined,
   FundProjectionScreenOutlined,
   MoneyCollectOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -90,7 +91,7 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
-import { isProspectAssignedOrCreatedByStaff, consolidateAllProspects } from '@/utils/prospectAssignment';
+import { isProspectAssignedOrCreatedByStaff, consolidateAllProspects, distributeProspectsAcrossMarketingStaff } from '@/utils/prospectAssignment';
 import {
   type MarketingCampaign,
   type MarketingTask,
@@ -101,6 +102,8 @@ import {
   CHANNEL_CONFIG,
   getStoredCampaigns,
   getStoredTasks,
+  loadCampaignsFromBackend,
+  loadTasksFromBackend,
   saveCampaign,
   updateCampaign,
   deleteCampaign,
@@ -214,7 +217,46 @@ export const MarketingDashboardPage: React.FC = () => {
   const handleRefreshMarketingStorage = () => {
     setCampaigns(getStoredCampaigns());
     setTasks(getStoredTasks());
+    loadCampaignsFromBackend().then((loaded) => {
+      if (loaded && loaded.length > 0) setCampaigns(loaded);
+    });
+    loadTasksFromBackend().then((loaded) => {
+      if (loaded && loaded.length > 0) setTasks(loaded);
+    });
   };
+
+  // Re-hydrate campaigns and tasks from backend server database & IndexedDB on mount
+  useEffect(() => {
+    let isMounted = true;
+    loadCampaignsFromBackend().then((loaded) => {
+      if (isMounted && loaded && loaded.length > 0) {
+        setCampaigns(loaded);
+      }
+    });
+    loadTasksFromBackend().then((loaded) => {
+      if (isMounted && loaded && loaded.length > 0) {
+        setTasks(loaded);
+      }
+    });
+
+    const handleCampaignsUpdated = (e: any) => {
+      if (e.detail) setCampaigns(e.detail);
+      else setCampaigns(getStoredCampaigns());
+    };
+    const handleTasksUpdated = (e: any) => {
+      if (e.detail) setTasks(e.detail);
+      else setTasks(getStoredTasks());
+    };
+
+    window.addEventListener('omark-marketing-campaigns-updated', handleCampaignsUpdated);
+    window.addEventListener('omark-marketing-tasks-updated', handleTasksUpdated);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('omark-marketing-campaigns-updated', handleCampaignsUpdated);
+      window.removeEventListener('omark-marketing-tasks-updated', handleTasksUpdated);
+    };
+  }, []);
 
   // Queries
   const {
@@ -444,48 +486,23 @@ export const MarketingDashboardPage: React.FC = () => {
     });
   }, [analyticsData]);
 
-  // Marketer Performance Aggregation
-  const marketerLeaderboard = useMemo(() => {
-    const liveMarketersFromApi = marketingApiData?.marketers || [];
+  // Marketer Performance & Prospects Oversight Aggregation
+  const {
+    staffRows: marketerLeaderboard,
+    unassignedRow: unassignedLeadsRow,
+    totalAttributedProspects,
+  } = useMemo(() => {
+    return distributeProspectsAcrossMarketingStaff(
+      allMarketingProspects,
+      marketingStaffUsers,
+      marketingApiData?.marketers || []
+    );
+  }, [allMarketingProspects, marketingStaffUsers, marketingApiData]);
 
-    return marketingStaffUsers
-      .map((staff) => {
-        const staffName = getUserFullName(staff);
-        const apiRecord = liveMarketersFromApi.find(
-          (m) => m.userId === staff.id || m.id === staff.id || m.name?.toLowerCase() === staffName.toLowerCase()
-        );
-
-        const staffProspects = allMarketingProspects.filter((p) =>
-          isProspectAssignedOrCreatedByStaff(p, staff)
-        );
-
-        const totalProspects = Math.max(staffProspects.length, apiRecord?.totalProspects ?? 0);
-        const meetingScheduled = staffProspects.filter((p) => p.status === 'meeting_scheduled').length;
-        const meetingCompleted = staffProspects.filter((p) => p.status === 'meeting_completed').length;
-        const converted = Math.max(
-          staffProspects.filter((p) => p.status === 'purchased').length,
-          apiRecord?.converted ?? 0
-        );
-
-        const conversionRate = totalProspects > 0 ? Math.round((converted / totalProspects) * 1000) / 10 : 0;
-
-        return {
-          id: staff.id,
-          name: staffName,
-          email: staff.email,
-          phone: staff.phone,
-          role: staff.role,
-          department: staff.department,
-          totalProspects,
-          meetingScheduled,
-          meetingCompleted,
-          converted,
-          conversionRate,
-          revenueGeneratedMinor: apiRecord?.revenueMinor || converted * 4500000,
-        };
-      })
-      .sort((a, b) => b.totalProspects - a.totalProspects || b.converted - a.converted);
-  }, [marketingStaffUsers, marketingApiData, allMarketingProspects]);
+  // Combined data for table view so all rows amount to the total marketing prospects (364)
+  const allMarketerTableData = useMemo(() => {
+    return unassignedLeadsRow ? [...marketerLeaderboard, unassignedLeadsRow] : marketerLeaderboard;
+  }, [marketerLeaderboard, unassignedLeadsRow]);
 
   // Modals & Drawers State
   const [addProspectOpen, setAddProspectOpen] = useState(false);
@@ -1824,6 +1841,160 @@ export const MarketingDashboardPage: React.FC = () => {
                     </Card>
                   </Col>
                 </Row>
+
+                {/* ── Marketing Staff Oversight & Prospect Distribution Snapshot ───── */}
+                <Card
+                  title={
+                    <Space>
+                      <TrophyOutlined style={{ color: '#d97706' }} />
+                      <span>Marketing Staff Prospects & Performance Oversight ({marketingStaffUsers.length} Staff)</span>
+                    </Space>
+                  }
+                  extra={
+                    <Space>
+                      <Tag color="geekblue" style={{ fontWeight: 700, padding: '2px 8px' }}>
+                        Total: {totalAttributedProspects} Marketing Prospects
+                      </Tag>
+                      <Button type="link" onClick={() => setActiveTab('team')}>
+                        View Full Oversight Table &rarr;
+                      </Button>
+                    </Space>
+                  }
+                  style={{ marginTop: 24, borderRadius: 14, boxShadow: '0 2px 10px rgba(0,0,0,0.03)', border: '1px solid #e2e8f0' }}
+                >
+                  <Table
+                    dataSource={allMarketerTableData}
+                    rowKey="id"
+                    pagination={{ pageSize: 6 }}
+                    size="small"
+                    scroll={{ x: 800 }}
+                    columns={[
+                      {
+                        title: 'Staff Member',
+                        key: 'name',
+                        render: (_, record) => {
+                          if (record.isUnassignedPool) {
+                            return (
+                              <Space>
+                                <Avatar icon={<GlobalOutlined />} style={{ backgroundColor: '#0284c7' }} />
+                                <div>
+                                  <Text strong style={{ color: '#0284c7' }}>{record.name}</Text>
+                                  <div style={{ fontSize: 11, color: '#64748b' }}>Unassigned Pipeline Leads</div>
+                                </div>
+                              </Space>
+                            );
+                          }
+                          const isDir = record.role === 'marketing_director';
+                          return (
+                            <Space>
+                              <Avatar style={{ backgroundColor: isDir ? '#7c3aed' : '#0284c7' }}>
+                                {record.name.charAt(0)}
+                              </Avatar>
+                              <div>
+                                <Text strong>{record.name}</Text>
+                                <div>
+                                  <Tag color={isDir ? 'purple' : 'blue'}>
+                                    {isDir ? 'Director' : 'Marketer'}
+                                  </Tag>
+                                </div>
+                              </div>
+                            </Space>
+                          );
+                        },
+                      },
+                      {
+                        title: 'Prospects Added',
+                        dataIndex: 'totalProspects',
+                        key: 'prospects',
+                        sorter: (a, b) => a.totalProspects - b.totalProspects,
+                        render: (val, record) => {
+                          if (record.isUnassignedPool) {
+                            return (
+                              <Tag color="orange" style={{ fontWeight: 700 }}>
+                                🌐 {val} Inbound Leads
+                              </Tag>
+                            );
+                          }
+                          return (
+                            <Tag color="blue" style={{ fontWeight: 700 }}>
+                              👥 {val} Prospects
+                            </Tag>
+                          );
+                        },
+                      },
+                      {
+                        title: 'Inspections Scheduled',
+                        dataIndex: 'meetingScheduled',
+                        key: 'scheduled',
+                        render: (val) => <span>{val} Visits</span>,
+                      },
+                      {
+                        title: 'Buyers Converted',
+                        dataIndex: 'converted',
+                        key: 'converted',
+                        render: (val) => <Tag color="green">{val} Closed</Tag>,
+                      },
+                      {
+                        title: 'Conversion Rate',
+                        dataIndex: 'conversionRate',
+                        key: 'rate',
+                        render: (val) => (
+                          <span style={{ fontWeight: 700 }}>{val}%</span>
+                        ),
+                      },
+                      {
+                        title: 'Actions',
+                        key: 'actions',
+                        render: (_, record) => (
+                          <Button
+                            size="small"
+                            type="link"
+                            onClick={() => {
+                              if (record.isUnassignedPool) {
+                                setActiveTab('prospects');
+                                setProspectStaffFilter('unassigned');
+                              } else {
+                                navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name)}`);
+                              }
+                            }}
+                          >
+                            View Leads &rarr;
+                          </Button>
+                        ),
+                      },
+                    ]}
+                    summary={() => {
+                      const sumProspects = allMarketerTableData.reduce((acc, r) => acc + r.totalProspects, 0);
+                      const sumConverted = allMarketerTableData.reduce((acc, r) => acc + r.converted, 0);
+                      return (
+                        <Table.Summary.Row style={{ background: '#f8fafc', fontWeight: 700 }}>
+                          <Table.Summary.Cell index={0}>
+                            <Text strong>TOTAL ({marketingStaffUsers.length} Staff + Inbound)</Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={1}>
+                            <Tag color="geekblue" style={{ fontWeight: 800 }}>
+                              🎯 {sumProspects} Total Marketing Prospects
+                            </Tag>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={2}>
+                            —
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={3}>
+                            <Tag color="green">{sumConverted} Converted</Tag>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={4}>
+                            —
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={5}>
+                            <Button size="small" type="primary" onClick={() => setActiveTab('team')}>
+                              View Full Oversight
+                            </Button>
+                          </Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      );
+                    }}
+                  />
+                </Card>
               </>
             ),
           },
@@ -2391,7 +2562,7 @@ export const MarketingDashboardPage: React.FC = () => {
             key: 'team',
             label: (
               <span>
-                <TrophyOutlined /> Team Leaderboard & Performance
+                <TrophyOutlined /> Team Prospects Oversight & Performance ({marketingStaffUsers.length})
               </span>
             ),
             children: (
@@ -2399,31 +2570,52 @@ export const MarketingDashboardPage: React.FC = () => {
                 title={
                   <Space>
                     <TrophyOutlined style={{ color: '#d97706' }} />
-                    <span>Marketing Staff Acquisition Leaderboard</span>
+                    <span>Marketing Staff Prospects & Performance Oversight</span>
                   </Space>
                 }
                 extra={
-                  <Button
-                    icon={<CrownOutlined />}
-                    onClick={() => setBonusModalOpen(true)}
-                    style={{ background: '#fef3c7', borderColor: '#fde68a', color: '#b45309' }}
-                  >
-                    Bonus & Commission Rules
-                  </Button>
+                  <Space wrap>
+                    <Tag color="geekblue" style={{ fontSize: 13, padding: '3px 10px', fontWeight: 700 }}>
+                      Total Pipeline: {totalAttributedProspects} Prospects
+                    </Tag>
+                    <Button
+                      icon={<CrownOutlined />}
+                      onClick={() => setBonusModalOpen(true)}
+                      style={{ background: '#fef3c7', borderColor: '#fde68a', color: '#b45309' }}
+                    >
+                      Bonus & Commission Rules
+                    </Button>
+                  </Space>
                 }
                 style={{ borderRadius: 14, boxShadow: '0 2px 10px rgba(0,0,0,0.03)', border: '1px solid #e2e8f0' }}
               >
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 16, borderRadius: 8 }}
+                  message={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+                      <span>
+                        <strong>Executive Oversight:</strong> Overseeing all {marketingStaffUsers.length} marketing staff with their respective prospects added. Staff-attributed and inbound leads combine to <strong>{totalAttributedProspects} Total Marketing Prospects</strong>.
+                      </span>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        Click any marketer's count to filter the full prospects pipeline
+                      </Text>
+                    </div>
+                  }
+                />
                 <Table
-                  dataSource={marketerLeaderboard}
+                  dataSource={allMarketerTableData}
                   rowKey="id"
-                  pagination={{ pageSize: 8 }}
-                  scroll={{ x: 900 }}
+                  pagination={{ pageSize: 10, showSizeChanger: true }}
+                  scroll={{ x: 1000 }}
                   columns={[
                     {
                       title: 'Rank',
                       key: 'rank',
-                      width: 70,
-                      render: (_, __, idx) => {
+                      width: 75,
+                      render: (_, record, idx) => {
+                        if (record.isUnassignedPool) return <Tag color="default">General</Tag>;
                         if (idx === 0) return <Tag color="gold" style={{ fontWeight: 800 }}>🥇 1st</Tag>;
                         if (idx === 1) return <Tag color="silver" style={{ fontWeight: 800 }}>🥈 2nd</Tag>;
                         if (idx === 2) return <Tag color="orange" style={{ fontWeight: 800 }}>🥉 3rd</Tag>;
@@ -2433,39 +2625,103 @@ export const MarketingDashboardPage: React.FC = () => {
                     {
                       title: 'Staff Member',
                       key: 'name',
-                      render: (_, record) => (
-                        <Space>
-                          <Avatar style={{ backgroundColor: record.role === 'marketing_director' ? '#7c3aed' : '#0284c7' }}>
-                            {record.name.charAt(0)}
-                          </Avatar>
-                          <div>
-                            <Text strong>{record.name}</Text>
+                      width: 240,
+                      render: (_, record) => {
+                        if (record.isUnassignedPool) {
+                          return (
+                            <Space>
+                              <Avatar icon={<GlobalOutlined />} style={{ backgroundColor: '#0284c7' }} />
+                              <div>
+                                <Text strong style={{ color: '#0284c7' }}>{record.name}</Text>
+                                <div style={{ fontSize: 12, color: '#64748b' }}>Unassigned Pipeline Leads</div>
+                              </div>
+                            </Space>
+                          );
+                        }
+                        const isDir = record.role === 'marketing_director';
+                        return (
+                          <Space>
+                            <Avatar style={{ backgroundColor: isDir ? '#7c3aed' : '#0284c7' }}>
+                              {record.name.charAt(0)}
+                            </Avatar>
                             <div>
-                              <Tag color={record.role === 'marketing_director' ? 'purple' : 'blue'}>
-                                {record.role === 'marketing_director' ? 'Director' : 'Marketer'}
-                              </Tag>
+                              <Text strong>{record.name}</Text>
+                              <div>
+                                <Tag color={isDir ? 'purple' : 'blue'}>
+                                  {isDir ? 'Director' : 'Marketer'}
+                                </Tag>
+                                {record.phone && (
+                                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+                                    {record.phone}
+                                  </Text>
+                                )}
+                              </div>
                             </div>
-                          </div>
-                        </Space>
-                      ),
+                          </Space>
+                        );
+                      },
                     },
                     {
-                      title: 'Assigned Leads',
+                      title: 'Prospects Added',
                       dataIndex: 'totalProspects',
                       key: 'prospects',
+                      width: 160,
                       sorter: (a, b) => a.totalProspects - b.totalProspects,
-                      render: (val) => <Text strong style={{ color: '#0284c7' }}>{val}</Text>,
+                      render: (val, record) => {
+                        if (record.isUnassignedPool) {
+                          return (
+                            <Tag color="orange" style={{ fontWeight: 700, fontSize: 13, padding: '2px 8px' }}>
+                              🌐 {val} Inbound Leads
+                            </Tag>
+                          );
+                        }
+                        return (
+                          <Tooltip title={`Click to view the ${val} prospects added by ${record.name}`}>
+                            <Button
+                              type="link"
+                              style={{ padding: 0, fontWeight: 700, fontSize: 13 }}
+                              onClick={() =>
+                                navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name)}`)
+                              }
+                            >
+                              <Tag color="blue" style={{ fontSize: 12, padding: '2px 8px', borderRadius: 6, cursor: 'pointer', fontWeight: 700 }}>
+                                👥 {val} Prospects &rarr;
+                              </Tag>
+                            </Button>
+                          </Tooltip>
+                        );
+                      },
+                    },
+                    {
+                      title: 'Pipeline Status',
+                      key: 'statusBreakdown',
+                      width: 220,
+                      render: (_, record) => {
+                        const newCount = record.addedProspects.filter((p: any) => p.status === 'new').length;
+                        return (
+                          <Space size={4} wrap>
+                            {newCount > 0 && <Tag color="blue">{newCount} New</Tag>}
+                            {record.meetingScheduled > 0 && <Tag color="cyan">{record.meetingScheduled} Sched.</Tag>}
+                            {record.meetingCompleted > 0 && <Tag color="green">{record.meetingCompleted} Done</Tag>}
+                            {record.converted > 0 && <Tag color="purple">{record.converted} Won</Tag>}
+                            {record.totalProspects === 0 && <Text type="secondary" style={{ fontSize: 12 }}>No leads yet</Text>}
+                          </Space>
+                        );
+                      },
                     },
                     {
                       title: 'Inspections Scheduled',
                       dataIndex: 'meetingScheduled',
                       key: 'scheduled',
+                      width: 140,
+                      sorter: (a, b) => a.meetingScheduled - b.meetingScheduled,
                       render: (val) => <span>{val} Visits</span>,
                     },
                     {
                       title: 'Buyers Converted',
                       dataIndex: 'converted',
                       key: 'converted',
+                      width: 130,
                       sorter: (a, b) => a.converted - b.converted,
                       render: (val) => <Tag color="green" style={{ fontWeight: 700 }}>{val} Closed</Tag>,
                     },
@@ -2473,9 +2729,10 @@ export const MarketingDashboardPage: React.FC = () => {
                       title: 'Conversion Rate',
                       dataIndex: 'conversionRate',
                       key: 'rate',
+                      width: 140,
                       sorter: (a, b) => a.conversionRate - b.conversionRate,
                       render: (val) => (
-                        <div style={{ minWidth: 100 }}>
+                        <div style={{ minWidth: 90 }}>
                           <span style={{ fontWeight: 700 }}>{val}%</span>
                           <Progress
                             percent={val}
@@ -2489,19 +2746,92 @@ export const MarketingDashboardPage: React.FC = () => {
                     {
                       title: 'Actions',
                       key: 'actions',
-                      render: (_, record) => (
-                        <Button
-                          size="small"
-                          type="link"
-                          onClick={() =>
-                            navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name)}`)
-                          }
-                        >
-                          View Leads &rarr;
-                        </Button>
-                      ),
+                      width: 120,
+                      render: (_, record) => {
+                        if (record.isUnassignedPool) {
+                          return (
+                            <Button
+                              size="small"
+                              type="primary"
+                              ghost
+                              onClick={() => {
+                                setActiveTab('prospects');
+                                setProspectStaffFilter('unassigned');
+                              }}
+                            >
+                              Assign Leads &rarr;
+                            </Button>
+                          );
+                        }
+                        return (
+                          <Button
+                            size="small"
+                            type="link"
+                            onClick={() =>
+                              navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name)}`)
+                            }
+                          >
+                            View Leads &rarr;
+                          </Button>
+                        );
+                      },
                     },
                   ]}
+                  summary={() => {
+                    const sumProspects = allMarketerTableData.reduce((acc, r) => acc + r.totalProspects, 0);
+                    const sumScheduled = allMarketerTableData.reduce((acc, r) => acc + r.meetingScheduled, 0);
+                    const sumCompleted = allMarketerTableData.reduce((acc, r) => acc + r.meetingCompleted, 0);
+                    const sumConverted = allMarketerTableData.reduce((acc, r) => acc + r.converted, 0);
+                    const avgRate = sumProspects > 0 ? Math.round((sumConverted / sumProspects) * 1000) / 10 : 0;
+
+                    return (
+                      <Table.Summary fixed>
+                        <Table.Summary.Row style={{ background: '#f8fafc', fontWeight: 700 }}>
+                          <Table.Summary.Cell index={0}>
+                            <Text strong style={{ color: '#0f172a' }}>TOTAL</Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={1}>
+                            <Text strong style={{ color: '#0f172a' }}>
+                              All Marketing Staff & Pipeline ({marketingStaffUsers.length} Staff Members)
+                            </Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={2}>
+                            <Tag color="geekblue" style={{ fontSize: 13, fontWeight: 800, padding: '3px 10px' }}>
+                              🎯 {sumProspects} Total Marketing Prospects
+                            </Tag>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={3}>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              {sumProspects - sumScheduled - sumConverted} in Progress
+                            </Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={4}>
+                            <Text strong>{sumScheduled} Visits</Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={5}>
+                            <Tag color="green" style={{ fontWeight: 800 }}>
+                              {sumConverted} Converted
+                            </Tag>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={6}>
+                            <Text strong style={{ color: '#16a34a' }}>{avgRate}%</Text>
+                          </Table.Summary.Cell>
+                          <Table.Summary.Cell index={7}>
+                            <Button
+                              size="small"
+                              type="primary"
+                              onClick={() => {
+                                setActiveTab('prospects');
+                                setProspectStaffFilter('all');
+                              }}
+                            >
+                              View All {sumProspects}
+                            </Button>
+                          </Table.Summary.Cell>
+                        </Table.Summary.Row>
+                      </Table.Summary>
+                    );
+                  }}
                 />
               </Card>
             ),

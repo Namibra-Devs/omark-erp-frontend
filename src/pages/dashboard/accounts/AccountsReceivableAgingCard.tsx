@@ -60,8 +60,8 @@ export const AccountsReceivableAgingCard: React.FC<AccountsReceivableAgingCardPr
   const navigate = useNavigate();
   const [selectedBucket, setSelectedBucket] = useState<AgingBucketKey>('all');
 
-  const { data: paymentPlansData, isLoading: plansLoading } = usePaymentPlansQuery({ pageSize: 500 });
-  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 1000 });
+  const { data: paymentPlansData, isLoading: plansLoading } = usePaymentPlansQuery({ pageSize: 100 });
+  const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 100 });
 
   const paymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
   const customers: Customer[] = customersData?.items ?? [];

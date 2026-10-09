@@ -82,6 +82,8 @@ import {
   type MarketingTask,
   getStoredCampaigns,
   getStoredTasks,
+  loadCampaignsFromBackend,
+  loadTasksFromBackend,
   calculateMarketingMetrics,
 } from '@/utils/marketingCampaignsStorage';
 import { MarketingCampaignsSection } from '@/components/marketing/MarketingCampaignsSection';
@@ -112,7 +114,46 @@ export const DirectorOverviewPage: React.FC = () => {
   const handleRefreshMarketing = () => {
     setCampaigns(getStoredCampaigns());
     setTasks(getStoredTasks());
+    loadCampaignsFromBackend().then((loaded) => {
+      if (loaded && loaded.length > 0) setCampaigns(loaded);
+    });
+    loadTasksFromBackend().then((loaded) => {
+      if (loaded && loaded.length > 0) setTasks(loaded);
+    });
   };
+
+  // Re-hydrate campaigns and tasks from backend server database & IndexedDB on mount
+  useEffect(() => {
+    let isMounted = true;
+    loadCampaignsFromBackend().then((loaded) => {
+      if (isMounted && loaded && loaded.length > 0) {
+        setCampaigns(loaded);
+      }
+    });
+    loadTasksFromBackend().then((loaded) => {
+      if (isMounted && loaded && loaded.length > 0) {
+        setTasks(loaded);
+      }
+    });
+
+    const handleCampaignsUpdated = (e: any) => {
+      if (e.detail) setCampaigns(e.detail);
+      else setCampaigns(getStoredCampaigns());
+    };
+    const handleTasksUpdated = (e: any) => {
+      if (e.detail) setTasks(e.detail);
+      else setTasks(getStoredTasks());
+    };
+
+    window.addEventListener('omark-marketing-campaigns-updated', handleCampaignsUpdated);
+    window.addEventListener('omark-marketing-tasks-updated', handleTasksUpdated);
+
+    return () => {
+      isMounted = false;
+      window.removeEventListener('omark-marketing-campaigns-updated', handleCampaignsUpdated);
+      window.removeEventListener('omark-marketing-tasks-updated', handleTasksUpdated);
+    };
+  }, []);
 
   // Queries
   const { data, isLoading, isFetching, isError, error, refetch } = useMarketingDashboardQuery();
@@ -286,8 +327,9 @@ export const DirectorOverviewPage: React.FC = () => {
       const statusPurchased = staffProspects.filter((p) => p.status === 'purchased').length;
       const localConverted = staffCustomers.length > 0 ? staffCustomers.length : statusPurchased;
 
-      const totalProspects = Math.max(staffProspects.length, apiMarketer?.totalProspects ?? 0);
-      const converted = Math.max(localConverted, apiMarketer?.converted ?? 0);
+      const isDir = u.role === 'marketing_director';
+      const totalProspects = isDir ? staffProspects.length : Math.max(staffProspects.length, apiMarketer?.totalProspects ?? 0);
+      const converted = Math.max(localConverted, isDir ? localConverted : (apiMarketer?.converted ?? 0));
       const conversionRate = totalProspects > 0 ? (converted / totalProspects) * 100 : (apiMarketer?.conversionRate ?? 0);
 
       const resolvedNew = Math.max(statusNew, apiMarketer?.new ?? apiMarketer?.byStatus?.new ?? 0);
@@ -383,7 +425,7 @@ export const DirectorOverviewPage: React.FC = () => {
         });
       } else {
         const existing = staffMap.get(id);
-        if (m.totalProspects && m.totalProspects > existing.totalProspects) {
+        if (m.totalProspects && m.totalProspects > existing.totalProspects && existing.role !== 'marketing_director') {
           existing.totalProspects = m.totalProspects;
           if (m.new !== undefined) existing.new = m.new;
           if (m.meetingScheduled !== undefined) existing.meetingScheduled = m.meetingScheduled;

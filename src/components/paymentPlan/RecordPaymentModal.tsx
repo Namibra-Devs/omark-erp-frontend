@@ -88,9 +88,9 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const [receiptData, setReceiptData] = useState<PaymentReceiptData | null>(null);
 
   // Load auxiliary data to resolve relations if needed
-  const { data: plansData } = usePaymentPlansQuery({ pageSize: 500 });
-  const { data: customersData } = useCustomersQuery({ pageSize: 500 });
-  const { data: propertiesData } = usePropertiesQuery({ pageSize: 500 });
+  const { data: plansData } = usePaymentPlansQuery({ pageSize: 100 });
+  const { data: customersData } = useCustomersQuery({ pageSize: 100 });
+  const { data: propertiesData } = usePropertiesQuery({ pageSize: 100 });
 
   const propertyMap = useMemo(() => {
     const map: Record<string, any> = {};

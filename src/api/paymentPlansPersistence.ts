@@ -61,26 +61,48 @@ export async function resolveOrCreateBackendPlan(
     return plan.id;
   }
 
-  // 1. Check customer detail endpoint directly (returns customer.plan)
+  // 1. Check customer detail endpoint directly (returns customer.plan or paymentPlan)
   try {
     const custRes = await apiClient.get<ApiResponse<any>>(`/customers/${customerId}`);
-    const custData = unwrapData(custRes);
-    if (custData?.plan?.id && UUID_REGEX.test(custData.plan.id)) {
-      return custData.plan.id;
+    const custData = unwrapData(custRes) || (custRes?.data as any)?.data || custRes?.data;
+    const planCandidate =
+      custData?.plan?.id ||
+      custData?.paymentPlan?.id ||
+      (typeof custData?.plan === 'string' ? custData.plan : undefined) ||
+      custData?.planId ||
+      custData?.paymentPlanId;
+    if (planCandidate && UUID_REGEX.test(planCandidate)) {
+      return planCandidate;
     }
   } catch (custErr) {
     console.warn('[resolveOrCreateBackendPlan] Warning fetching customer detail:', custErr);
   }
 
-  // 2. Check if backend already has a plan for this customer in list
+  // 2. Check if backend already has a plan for this customer in list (using safe pageSize: 100)
   try {
     const listRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
-      params: { pageSize: 200 },
+      params: { pageSize: 100 },
     });
-    const items = unwrapList(listRes).items;
-    const existing = items.find((p: any) => p.customerId === customerId);
+    const listData = unwrapList(listRes);
+    const existing = listData.items.find((p: any) => p.customerId === customerId);
     if (existing?.id && UUID_REGEX.test(existing.id)) {
       return existing.id;
+    }
+
+    // If there are more pages in the list, search remaining pages (up to 5 pages)
+    if (listData.totalPages > 1) {
+      for (let p = 2; p <= Math.min(listData.totalPages, 5); p++) {
+        try {
+          const nextRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
+            params: { page: p, pageSize: 100 },
+          });
+          const nextItems = unwrapList(nextRes).items;
+          const match = nextItems.find((item: any) => item.customerId === customerId);
+          if (match?.id && UUID_REGEX.test(match.id)) {
+            return match.id;
+          }
+        } catch {}
+      }
     }
   } catch (e) {
     console.warn('[resolveOrCreateBackendPlan] Warning checking existing plans:', e);
@@ -105,16 +127,22 @@ export async function resolveOrCreateBackendPlan(
       numMonths,
       startDate,
     });
-    const created = unwrapData(createRes);
+    const created = unwrapData(createRes) || (createRes?.data as any)?.data || createRes?.data;
     if (created?.id && UUID_REGEX.test(created.id)) {
       return created.id;
     }
   } catch (createErr: any) {
     console.warn('[resolveOrCreateBackendPlan] Creation response:', createErr?.response?.data || createErr);
-    // In case creation failed because one already exists, retry fetch
+    // In case creation failed because one already exists, check error response or retry fetch with pageSize 100
+    const errData = createErr?.response?.data;
+    const errPlanId = errData?.plan?.id || errData?.data?.id || errData?.planId || errData?.id;
+    if (errPlanId && UUID_REGEX.test(errPlanId)) {
+      return errPlanId;
+    }
+
     try {
       const listRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
-        params: { pageSize: 200 },
+        params: { pageSize: 100 },
       });
       const items = unwrapList(listRes).items;
       const existing = items.find((p: any) => p.customerId === customerId);
@@ -208,13 +236,6 @@ export async function recordPlanPaymentWithBackend(
   const realPlanId = await resolveOrCreateBackendPlan(plan);
   const isRealBackendId = Boolean(realPlanId && UUID_REGEX.test(realPlanId));
 
-  if (!isRealBackendId) {
-    const customerIdentifier = plan.customerId || plan.id;
-    throw new Error(
-      `Unable to link customer (${customerIdentifier}) to a verified database payment plan. Please ensure the customer has an active payment plan registered on the server.`
-    );
-  }
-
   const validMethods: PaymentMethod[] = ['cash', 'bank_transfer', 'mobile_money', 'cheque', 'other'];
   const cleanMethod: PaymentMethod = validMethods.includes(method as any)
     ? (method as PaymentMethod)
@@ -226,6 +247,67 @@ export async function recordPlanPaymentWithBackend(
 
   const cleanAmountMinor = Math.round(payment.amountMinor);
   const cleanRef = (reference || `REC-${Date.now().toString().slice(-6)}`).trim();
+
+  // If plan is not linked to a verified backend UUID (e.g. offline or demo synthetic plan), record to local ledger & dispatch SMS
+  if (!isRealBackendId) {
+    console.warn(
+      `[recordPlanPaymentWithBackend] Storing payment in local ledger for plan ${plan.id} (not a backend database UUID)`
+    );
+
+    recordLocalInstallmentPayment(
+      plan.id,
+      sequence,
+      cleanAmountMinor,
+      cleanMethod,
+      cleanRef,
+      paidOnDate,
+      dynamicNote,
+      customerInfo?.recordedBy,
+      ledgerMeta
+    );
+
+    const updatedSchedule = buildPaymentPlanSchedule(plan);
+    const targetRow = updatedSchedule.rows.find((r: any) => r.sequence === sequence);
+    const isPartialPayment = Boolean(targetRow?.isPartiallyPaid) || isUnder;
+    const deficitRolledOverMinor = targetRow?.deficitMinor || deficitMinor;
+    const surplusAppliedMinor = surplusMinor;
+    const isOverpayment = surplusMinor > 0;
+    const newBalanceMinor = updatedSchedule.currentBalanceMinor;
+
+    let targetPhone = customerInfo?.phone?.trim();
+    let targetName = customerInfo?.name?.trim();
+
+    try {
+      await dispatchPaymentReceiptSMS({
+        customerPhone: targetPhone,
+        customerName: targetName,
+        amountMinor: cleanAmountMinor,
+        remainingBalanceMinor: newBalanceMinor,
+        propertyName: customerInfo?.propertyName,
+        reference: cleanRef,
+        method: String(cleanMethod),
+        installmentOrdinal: ordinal,
+        recordedBy: customerInfo?.recordedBy,
+      });
+    } catch (smsErr) {
+      console.warn('[recordPlanPaymentWithBackend] SMS dispatch error:', smsErr);
+    }
+
+    return {
+      success: true,
+      persistedToBackend: false,
+      realPlanId: plan.id,
+      receiptNumber: cleanRef,
+      sequence,
+      installmentOrdinal: ordinal,
+      isPartialPayment,
+      isOverpayment,
+      deficitRolledOverMinor,
+      surplusAppliedMinor,
+      newBalanceMinor,
+      updatedSchedule,
+    };
+  }
 
   let result: any = null;
 

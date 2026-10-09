@@ -1,6 +1,8 @@
 // src/utils/marketingCampaignsStorage.ts
 import dayjs from 'dayjs';
 import type { Prospect } from '@/types';
+import { fetchAppSettings, updateAppSettings } from '@/api/settings';
+import apiClient from '@/api/client';
 
 export type MarketingChannel =
   | 'billboard'
@@ -290,12 +292,266 @@ export const DEFAULT_TASKS: MarketingTask[] = [
   },
 ];
 
-// ── Local Storage Accessors ───────────────────────────────────────────────────
+// ── Multi-Tier Persistent Storage Engine (Backend Database + IndexedDB + LocalStorage) ────
+
+const IDB_DB_NAME = 'omark_erp_marketing_db';
+const IDB_STORE_NAME = 'marketing_store';
+const IDB_VERSION = 1;
+
+function openMarketingDB(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      const request = window.indexedDB.open(IDB_DB_NAME, IDB_VERSION);
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+        if (!db.objectStoreNames.contains(IDB_STORE_NAME)) {
+          db.createObjectStore(IDB_STORE_NAME);
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => {
+        console.warn('[Marketing IDB] Failed to open IndexedDB:', request.error);
+        resolve(null);
+      };
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function getIndexedDBItem<T>(key: string): Promise<T | null> {
+  try {
+    const db = await openMarketingDB();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE_NAME, 'readonly');
+      const store = tx.objectStore(IDB_STORE_NAME);
+      const req = store.get(key);
+      req.onsuccess = () => resolve((req.result as T) ?? null);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function setIndexedDBItem<T>(key: string, value: T): Promise<void> {
+  try {
+    const db = await openMarketingDB();
+    if (!db) return;
+    return new Promise((resolve) => {
+      const tx = db.transaction(IDB_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(IDB_STORE_NAME);
+      const req = store.put(value, key);
+      req.onsuccess = () => resolve();
+      req.onerror = () => resolve();
+    });
+  } catch {
+    // Fail silently
+  }
+}
+
+export function mergeCampaigns(
+  primaryList: MarketingCampaign[],
+  fallbackList: MarketingCampaign[] = DEFAULT_CAMPAIGNS
+): MarketingCampaign[] {
+  const map = new Map<string, MarketingCampaign>();
+
+  // 1. Seed fallback defaults so baseline exists
+  for (const item of fallbackList) {
+    if (item && item.id) map.set(item.id, item);
+  }
+
+  // 2. Overlay primary list (from server or IndexedDB) which includes user-created campaigns and modifications
+  if (Array.isArray(primaryList)) {
+    for (const item of primaryList) {
+      if (item && item.id) {
+        map.set(item.id, item);
+      }
+    }
+  }
+
+  // 3. Check if localStorage has any campaigns that haven't synced yet
+  try {
+    const rawLocal = localStorage.getItem(CAMPAIGNS_STORAGE_KEY);
+    if (rawLocal) {
+      const localList: MarketingCampaign[] = JSON.parse(rawLocal);
+      if (Array.isArray(localList)) {
+        for (const lc of localList) {
+          if (lc && lc.id) {
+            if (!map.has(lc.id)) {
+              map.set(lc.id, lc);
+            } else {
+              const existing = map.get(lc.id)!;
+              const existingTime = new Date(existing.updatedAt || existing.createdAt || 0).getTime();
+              const localTime = new Date(lc.updatedAt || lc.createdAt || 0).getTime();
+              if (localTime > existingTime) {
+                map.set(lc.id, lc);
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const result = Array.from(map.values());
+  return result.length > 0 ? result : DEFAULT_CAMPAIGNS;
+}
+
+export function mergeTasks(
+  primaryList: MarketingTask[],
+  fallbackList: MarketingTask[] = DEFAULT_TASKS
+): MarketingTask[] {
+  const map = new Map<string, MarketingTask>();
+
+  for (const item of fallbackList) {
+    if (item && item.id) map.set(item.id, item);
+  }
+
+  if (Array.isArray(primaryList)) {
+    for (const item of primaryList) {
+      if (item && item.id) {
+        map.set(item.id, item);
+      }
+    }
+  }
+
+  try {
+    const rawLocal = localStorage.getItem(TASKS_STORAGE_KEY);
+    if (rawLocal) {
+      const localList: MarketingTask[] = JSON.parse(rawLocal);
+      if (Array.isArray(localList)) {
+        for (const lt of localList) {
+          if (lt && lt.id) {
+            if (!map.has(lt.id)) {
+              map.set(lt.id, lt);
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  const result = Array.from(map.values());
+  return result.length > 0 ? result : DEFAULT_TASKS;
+}
+
+let campaignSyncTimer: any = null;
+let taskSyncTimer: any = null;
+
+export async function syncCampaignsToBackend(campaigns: MarketingCampaign[]): Promise<void> {
+  // Always update IndexedDB immediately for instant offline resilience
+  await setIndexedDBItem(CAMPAIGNS_STORAGE_KEY, campaigns);
+
+  // Sync to backend settings API (persists in PostgreSQL database on server)
+  if (campaignSyncTimer) clearTimeout(campaignSyncTimer);
+  campaignSyncTimer = setTimeout(async () => {
+    try {
+      await updateAppSettings({ marketingCampaigns: campaigns });
+    } catch (err) {
+      console.warn('[Marketing Campaigns] Error syncing to backend settings:', err);
+    }
+  }, 200);
+}
+
+export async function syncTasksToBackend(tasks: MarketingTask[]): Promise<void> {
+  await setIndexedDBItem(TASKS_STORAGE_KEY, tasks);
+
+  if (taskSyncTimer) clearTimeout(taskSyncTimer);
+  taskSyncTimer = setTimeout(async () => {
+    try {
+      await updateAppSettings({ marketingTasks: tasks });
+    } catch (err) {
+      console.warn('[Marketing Tasks] Error syncing to backend settings:', err);
+    }
+  }, 200);
+}
+
+export async function loadCampaignsFromBackend(): Promise<MarketingCampaign[]> {
+  // 1. Try backend settings API (true database store across devices)
+  try {
+    const settings = await fetchAppSettings();
+    if (settings && Array.isArray(settings.marketingCampaigns) && settings.marketingCampaigns.length > 0) {
+      const merged = mergeCampaigns(settings.marketingCampaigns);
+      localStorage.setItem(CAMPAIGNS_STORAGE_KEY, JSON.stringify(merged));
+      await setIndexedDBItem(CAMPAIGNS_STORAGE_KEY, merged);
+      window.dispatchEvent(new CustomEvent('omark-marketing-campaigns-updated', { detail: merged }));
+      return merged;
+    }
+  } catch (err) {
+    console.warn('[Marketing Campaigns] Failed to fetch settings from backend:', err);
+  }
+
+  // 2. Try IndexedDB (client database that survives cookie and cache clearing)
+  try {
+    const idbCampaigns = await getIndexedDBItem<MarketingCampaign[]>(CAMPAIGNS_STORAGE_KEY);
+    if (Array.isArray(idbCampaigns) && idbCampaigns.length > 0) {
+      const merged = mergeCampaigns(idbCampaigns);
+      localStorage.setItem(CAMPAIGNS_STORAGE_KEY, JSON.stringify(merged));
+      window.dispatchEvent(new CustomEvent('omark-marketing-campaigns-updated', { detail: merged }));
+      // Background push to backend settings
+      updateAppSettings({ marketingCampaigns: merged }).catch(() => {});
+      return merged;
+    }
+  } catch (err) {
+    console.warn('[Marketing Campaigns] Failed to fetch from IndexedDB:', err);
+  }
+
+  // 3. Fallback to localStorage or defaults
+  const current = getStoredCampaigns();
+  setIndexedDBItem(CAMPAIGNS_STORAGE_KEY, current).catch(() => {});
+  updateAppSettings({ marketingCampaigns: current }).catch(() => {});
+  return current;
+}
+
+export async function loadTasksFromBackend(): Promise<MarketingTask[]> {
+  try {
+    const settings = await fetchAppSettings();
+    if (settings && Array.isArray(settings.marketingTasks) && settings.marketingTasks.length > 0) {
+      const merged = mergeTasks(settings.marketingTasks);
+      localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(merged));
+      await setIndexedDBItem(TASKS_STORAGE_KEY, merged);
+      window.dispatchEvent(new CustomEvent('omark-marketing-tasks-updated', { detail: merged }));
+      return merged;
+    }
+  } catch (err) {
+    console.warn('[Marketing Tasks] Failed to fetch settings from backend:', err);
+  }
+
+  try {
+    const idbTasks = await getIndexedDBItem<MarketingTask[]>(TASKS_STORAGE_KEY);
+    if (Array.isArray(idbTasks) && idbTasks.length > 0) {
+      const merged = mergeTasks(idbTasks);
+      localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(merged));
+      window.dispatchEvent(new CustomEvent('omark-marketing-tasks-updated', { detail: merged }));
+      updateAppSettings({ marketingTasks: merged }).catch(() => {});
+      return merged;
+    }
+  } catch (err) {
+    console.warn('[Marketing Tasks] Failed to fetch from IndexedDB:', err);
+  }
+
+  const current = getStoredTasks();
+  setIndexedDBItem(TASKS_STORAGE_KEY, current).catch(() => {});
+  updateAppSettings({ marketingTasks: current }).catch(() => {});
+  return current;
+}
 
 export function getStoredCampaigns(): MarketingCampaign[] {
   try {
     const raw = localStorage.getItem(CAMPAIGNS_STORAGE_KEY);
     if (!raw) {
+      // Background check IndexedDB in case localStorage was just cleared
+      getIndexedDBItem<MarketingCampaign[]>(CAMPAIGNS_STORAGE_KEY).then((idb) => {
+        if (Array.isArray(idb) && idb.length > 0) {
+          localStorage.setItem(CAMPAIGNS_STORAGE_KEY, JSON.stringify(idb));
+          window.dispatchEvent(new CustomEvent('omark-marketing-campaigns-updated', { detail: idb }));
+        }
+      });
       localStorage.setItem(CAMPAIGNS_STORAGE_KEY, JSON.stringify(DEFAULT_CAMPAIGNS));
       return DEFAULT_CAMPAIGNS;
     }
@@ -320,6 +576,22 @@ export function saveCampaign(campaign: MarketingCampaign): void {
     }
     localStorage.setItem(CAMPAIGNS_STORAGE_KEY, JSON.stringify(updated));
     window.dispatchEvent(new CustomEvent('omark-marketing-campaigns-updated', { detail: updated }));
+
+    // Multi-tier persistence: IndexedDB + Backend Settings
+    syncCampaignsToBackend(updated).catch(() => {});
+
+    // Also mirror to branch project if branchId is associated
+    if (campaign.branchId) {
+      apiClient
+        .post(`/branches/${campaign.branchId}/projects`, {
+          name: campaign.name,
+          description: campaign.description || `Marketing Campaign: ${campaign.channelLabel}`,
+          status: campaign.status === 'completed' ? 'completed' : campaign.status === 'paused' ? 'on_hold' : 'active',
+          startDate: campaign.startDate,
+          endDate: campaign.endDate,
+        })
+        .catch(() => {});
+    }
   } catch (err) {
     console.warn('[Marketing Campaigns] Failed to save campaign:', err);
   }
@@ -332,6 +604,7 @@ export function updateCampaign(id: string, updates: Partial<MarketingCampaign>):
     list[idx] = { ...list[idx], ...updates, updatedAt: new Date().toISOString() };
     localStorage.setItem(CAMPAIGNS_STORAGE_KEY, JSON.stringify(list));
     window.dispatchEvent(new CustomEvent('omark-marketing-campaigns-updated', { detail: list }));
+    syncCampaignsToBackend(list).catch(() => {});
   }
 }
 
@@ -340,12 +613,19 @@ export function deleteCampaign(id: string): void {
   const filtered = list.filter((c) => c.id !== id);
   localStorage.setItem(CAMPAIGNS_STORAGE_KEY, JSON.stringify(filtered));
   window.dispatchEvent(new CustomEvent('omark-marketing-campaigns-updated', { detail: filtered }));
+  syncCampaignsToBackend(filtered).catch(() => {});
 }
 
 export function getStoredTasks(): MarketingTask[] {
   try {
     const raw = localStorage.getItem(TASKS_STORAGE_KEY);
     if (!raw) {
+      getIndexedDBItem<MarketingTask[]>(TASKS_STORAGE_KEY).then((idb) => {
+        if (Array.isArray(idb) && idb.length > 0) {
+          localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(idb));
+          window.dispatchEvent(new CustomEvent('omark-marketing-tasks-updated', { detail: idb }));
+        }
+      });
       localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(DEFAULT_TASKS));
       return DEFAULT_TASKS;
     }
@@ -370,6 +650,7 @@ export function saveTask(task: MarketingTask): void {
     }
     localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(updated));
     window.dispatchEvent(new CustomEvent('omark-marketing-tasks-updated', { detail: updated }));
+    syncTasksToBackend(updated).catch(() => {});
   } catch (err) {
     console.warn('[Marketing Tasks] Failed to save task:', err);
   }
@@ -382,6 +663,7 @@ export function updateTask(id: string, updates: Partial<MarketingTask>): void {
     list[idx] = { ...list[idx], ...updates };
     localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(list));
     window.dispatchEvent(new CustomEvent('omark-marketing-tasks-updated', { detail: list }));
+    syncTasksToBackend(list).catch(() => {});
   }
 }
 
@@ -390,7 +672,9 @@ export function deleteTask(id: string): void {
   const filtered = list.filter((t) => t.id !== id);
   localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(filtered));
   window.dispatchEvent(new CustomEvent('omark-marketing-tasks-updated', { detail: filtered }));
+  syncTasksToBackend(filtered).catch(() => {});
 }
+
 
 // ── Metrics Aggregation Helper ────────────────────────────────────────────────
 

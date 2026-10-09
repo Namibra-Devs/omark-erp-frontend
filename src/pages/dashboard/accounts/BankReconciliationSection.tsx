@@ -79,8 +79,8 @@ export const BankReconciliationSection: React.FC = () => {
     refetch: refetchUnmatched,
   } = useUnmatchedBankEntriesQuery();
 
-  const { data: paymentPlansData, refetch: refetchPlans } = usePaymentPlansQuery({ pageSize: 500 });
-  const { data: customersData } = useCustomersQuery({ pageSize: 500 });
+  const { data: paymentPlansData, refetch: refetchPlans } = usePaymentPlansQuery({ pageSize: 100 });
+  const { data: customersData } = useCustomersQuery({ pageSize: 100 });
   const importBankMutation = useImportBankStatementMutation();
 
   const paymentPlans: PaymentPlan[] = paymentPlansData?.items ?? [];
