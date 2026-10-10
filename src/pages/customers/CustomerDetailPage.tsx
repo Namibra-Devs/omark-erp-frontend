@@ -59,6 +59,7 @@ import {
   getPaymentMethodConfig,
 } from '@/api/payments';
 import { PaymentPlanScheduleTable } from '@/components/paymentPlan/PaymentPlanScheduleTable';
+import { findBackendPlanForCustomer } from '@/api/paymentPlansPersistence';
 import { buildPaymentPlanSchedule } from '@/utils/paymentPlanSchedule';
 import { useDeedsQuery, useGenerateDeedMutation } from '@/api/deeds';
 import {
@@ -139,10 +140,23 @@ export const CustomerDetailPage: React.FC = () => {
   const customer = customerData as any;
 
   // The real backend embeds the customer's active payment plan on the customer
-  // detail response (`customer.plan`). Payment-plan-scoped endpoints (record
-  // payment / Paystack initialize & verify / installments) need the plan's own
-  // `id` — not the customer id — so we read it from there.
-  const planId: string | undefined = customer?.plan?.id;
+  // detail response (`customer.plan`). If not embedded, query the backend payment-plans
+  // across statuses to ensure the customer's real plan is found.
+  const [resolvedPlan, setResolvedPlan] = useState<any>(null);
+
+  useEffect(() => {
+    if (customer?.plan?.id) {
+      setResolvedPlan(customer.plan);
+    } else if (id) {
+      findBackendPlanForCustomer(id, customer?.propertyId)
+        .then((found) => {
+          if (found) setResolvedPlan(found);
+        })
+        .catch(() => {});
+    }
+  }, [customer?.plan, id, customer?.propertyId]);
+
+  const planId: string | undefined = customer?.plan?.id || resolvedPlan?.id;
 
   const {
     data: paymentPlanData,
@@ -177,7 +191,7 @@ export const CustomerDetailPage: React.FC = () => {
   // Prefer the dedicated payment-plan detail fetch (it may carry `installments`
   // / `recentPayments` embedded by the backend); fall back to the plan summary
   // already embedded on the customer response while that fetch is in flight.
-  const paymentPlan = (paymentPlanData ?? customer?.plan ?? null) as any;
+  const paymentPlan = (paymentPlanData ?? customer?.plan ?? resolvedPlan ?? null) as any;
   const installments = installmentsData ?? paymentPlan?.installments ?? [];
   // There is no standalone GET /payments (list) endpoint on the real API — the
   // only "payment history" available is whatever the backend chooses to embed

@@ -47,6 +47,7 @@ import {
   getStoredPaymentPlans,
   saveStoredPaymentPlan,
   getStoredPaymentOverrides,
+  isValidServerId,
 } from '@/utils/paymentPlansStorage';
 
 export function usePaymentPlansQuery(params?: PaymentPlansListParams) {
@@ -60,7 +61,66 @@ export function usePaymentPlansQuery(params?: PaymentPlansListParams) {
       try {
         const res = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', { params: safeParams });
         const list = unwrapList(res) as PaymentPlansListResult;
-        apiPlans = list.items || [];
+        apiPlans = [...(list.items || [])];
+
+        const totalPages = (list as any).totalPages || (list.total && safePageSize ? Math.ceil(list.total / safePageSize) : 1);
+        if (!params?.page && totalPages > 1) {
+          const promises = [];
+          for (let p = 2; p <= Math.min(totalPages, 15); p++) {
+            promises.push(
+              apiClient
+                .get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
+                  params: { ...safeParams, page: p },
+                })
+                .then((r) => unwrapList(r).items || [])
+                .catch(() => [])
+            );
+          }
+          const otherPages = await Promise.all(promises);
+          otherPages.forEach((pItems) => apiPlans.push(...pItems));
+        }
+
+        // If no specific status is requested, fetch other statuses (defaulted, completed, cancelled)
+        // to prevent backend default status filtering from hiding non-active customer plans
+        if (!params?.status) {
+          const statusesToFetch: PaymentPlanStatus[] = ['defaulted', 'completed', 'cancelled'];
+          const statusPromises = statusesToFetch.map(async (st) => {
+            try {
+              const stRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
+                params: { ...safeParams, status: st, page: 1, pageSize: 100 },
+              });
+              const stList = unwrapList(stRes);
+              const items = stList.items || [];
+              const stTotalPages = (stList as any).totalPages || (stList.total ? Math.ceil(stList.total / 100) : 1);
+              if (stTotalPages > 1) {
+                const subPromises = [];
+                for (let sp = 2; sp <= Math.min(stTotalPages, 5); sp++) {
+                  subPromises.push(
+                    apiClient
+                      .get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
+                        params: { ...safeParams, status: st, page: sp, pageSize: 100 },
+                      })
+                      .then((r) => unwrapList(r).items || [])
+                      .catch(() => [])
+                  );
+                }
+                const subResults = await Promise.all(subPromises);
+                subResults.forEach((subItems) => items.push(...subItems));
+              }
+              return items;
+            } catch {
+              return [];
+            }
+          });
+          const allStatusResults = await Promise.all(statusPromises);
+          allStatusResults.forEach((statusItems) => {
+            statusItems.forEach((p) => {
+              if (p && p.id && !apiPlans.some((existing) => existing.id === p.id)) {
+                apiPlans.push(p);
+              }
+            });
+          });
+        }
       } catch (error) {
         if (error instanceof AxiosError) {
           console.warn('Backend payment plans fetch warning, using persistent store:', {
@@ -70,33 +130,17 @@ export function usePaymentPlansQuery(params?: PaymentPlansListParams) {
         }
       }
 
-      // Merge API plans with persistent multi-tier store
-      const storedPlans = getStoredPaymentPlans();
       const overrides = getStoredPaymentOverrides();
-
       const mergedMap = new Map<string, PaymentPlan>();
 
-      // 1. Put API plans
+      // De-duplicate API plans by real server plan ID (server is sole authoritative source)
       apiPlans.forEach((p) => {
-        if (p && p.id) {
-          mergedMap.set(p.id, p);
-        }
-      });
-
-      // 2. Overlay persistent stored plans (ensures user-created & restored plans are never lost)
-      storedPlans.forEach((sp) => {
-        if (!sp || !sp.id) return;
-        if (!mergedMap.has(sp.id)) {
-          mergedMap.set(sp.id, sp);
-        } else {
-          const existing = mergedMap.get(sp.id)!;
-          mergedMap.set(sp.id, {
-            ...sp,
-            ...existing,
-            customerName: sp.customerName || existing.customerName,
-            customerPhone: sp.customerPhone || existing.customerPhone,
-            propertyName: sp.propertyName || existing.propertyName,
-          });
+        const pId = (p.id || (p as any)._id || '').toString().trim();
+        if (pId && isValidServerId(pId)) {
+          const normKey = pId.toLowerCase();
+          if (!mergedMap.has(normKey)) {
+            mergedMap.set(normKey, { ...p, id: pId });
+          }
         }
       });
 

@@ -4,106 +4,81 @@ import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import type { LocalPlanOverride } from '@/utils/paymentPlanSchedule';
 import { fetchAppSettings, updateAppSettings } from '@/api/settings';
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isValidServerId(id: any): boolean {
+  if (!id || typeof id !== 'string') return false;
+  const trimmed = id.trim();
+  if (
+    trimmed.startsWith('plan-') ||
+    trimmed.startsWith('synth-') ||
+    trimmed.startsWith('mock-') ||
+    trimmed.startsWith('temp-') ||
+    trimmed.startsWith('local-')
+  ) {
+    return false;
+  }
+  // MongoDB 24-character hex ObjectId
+  if (/^[0-9a-f]{24}$/i.test(trimmed)) return true;
+  // Standard UUID format (hyphenated)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) return true;
+  // General server alphanumeric ID of 8+ characters
+  if (/^[a-zA-Z0-9_-]{8,}$/.test(trimmed)) return true;
+  return false;
+}
 
 export const PLANS_STORAGE_KEY = 'omark_payment_plans_store';
 export const OVERRIDES_STORAGE_KEY = 'omark_payment_plan_overrides';
 export const CUSTOMER_PLANS_STORAGE_KEY = 'omark_customer_plans_store';
 export const SCHEDULE_CHANGE_EVENT = 'omark-payment-plan-updated';
 
-// ── Multi-Tier IndexedDB Engine ─────────────────────────────────────────────
-const IDB_DB_NAME = 'omark_erp_payment_plans_db';
-const IDB_VERSION = 1;
-const IDB_STORE_PLANS = 'plans_store';
-const IDB_STORE_OVERRIDES = 'overrides_store';
-const IDB_STORE_CUSTOMER_PLANS = 'customer_plans_store';
+// ── Startup Purge of Legacy IndexedDB and Cached Storage Keys ─────────────
+export const IDB_DB_NAME = 'omark_erp_payment_plans_db';
 
-function openPaymentPlansDB(): Promise<IDBDatabase | null> {
-  if (typeof window === 'undefined' || !window.indexedDB) {
-    return Promise.resolve(null);
-  }
-  return new Promise((resolve) => {
-    try {
-      const request = window.indexedDB.open(IDB_DB_NAME, IDB_VERSION);
-      request.onupgradeneeded = (event) => {
-        const db = (event.target as IDBOpenDBRequest).result;
-        if (!db.objectStoreNames.contains(IDB_STORE_PLANS)) {
-          db.createObjectStore(IDB_STORE_PLANS);
-        }
-        if (!db.objectStoreNames.contains(IDB_STORE_OVERRIDES)) {
-          db.createObjectStore(IDB_STORE_OVERRIDES);
-        }
-        if (!db.objectStoreNames.contains(IDB_STORE_CUSTOMER_PLANS)) {
-          db.createObjectStore(IDB_STORE_CUSTOMER_PLANS);
-        }
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => {
-        console.warn('[PaymentPlans IDB] Failed to open IndexedDB:', request.error);
-        resolve(null);
-      };
-    } catch {
-      resolve(null);
+/**
+ * Startup Purge: Delete legacy IndexedDB 'omark_erp_payment_plans_db' and associated cache keys
+ * so that server API data is the sole authoritative source of truth.
+ */
+export function purgeLegacyPaymentPlansDB(): void {
+  if (typeof window !== 'undefined') {
+    if (window.indexedDB) {
+      try {
+        const deleteReq = window.indexedDB.deleteDatabase(IDB_DB_NAME);
+        deleteReq.onsuccess = () => {
+          console.log('[Storage Purge] Legacy IndexedDB deleted successfully:', IDB_DB_NAME);
+        };
+        deleteReq.onerror = () => {
+          console.warn('[Storage Purge] Failed to delete legacy IndexedDB:', IDB_DB_NAME);
+        };
+        deleteReq.onblocked = () => {
+          console.warn('[Storage Purge] Deletion of legacy IndexedDB blocked:', IDB_DB_NAME);
+        };
+      } catch (err) {
+        console.warn('[Storage Purge] Error deleting legacy IndexedDB:', err);
+      }
     }
-  });
-}
 
-async function getIDBItem<T>(storeName: string, key: string): Promise<T | null> {
-  try {
-    const db = await openPaymentPlansDB();
-    if (!db) return null;
-    return new Promise((resolve) => {
-      const tx = db.transaction(storeName, 'readonly');
-      const store = tx.objectStore(storeName);
-      const req = store.get(key);
-      req.onsuccess = () => resolve((req.result as T) ?? null);
-      req.onerror = () => resolve(null);
-    });
-  } catch {
-    return null;
+    if (window.localStorage) {
+      try {
+        localStorage.removeItem(PLANS_STORAGE_KEY);
+        localStorage.removeItem(CUSTOMER_PLANS_STORAGE_KEY);
+      } catch (err) {
+        console.warn('[Storage Purge] Error removing legacy localStorage keys:', err);
+      }
+    }
   }
 }
-
-async function setIDBItem<T>(storeName: string, key: string, value: T): Promise<void> {
-  try {
-    const db = await openPaymentPlansDB();
-    if (!db) return;
-    return new Promise((resolve) => {
-      const tx = db.transaction(storeName, 'readwrite');
-      const store = tx.objectStore(storeName);
-      const req = store.put(value, key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => resolve();
-    });
-  } catch {
-    // Fail silently
-  }
-}
-
-// ── 1. PAYMENT PLANS PERSISTENCE ────────────────────────────────────────────
 
 export function getStoredPaymentPlans(): PaymentPlan[] {
   try {
     const raw = localStorage.getItem(PLANS_STORAGE_KEY);
-    if (!raw) {
-      // Background check IndexedDB in case localStorage was recently cleared
-      getIDBItem<PaymentPlan[]>(IDB_STORE_PLANS, PLANS_STORAGE_KEY).then((idbPlans) => {
-        if (Array.isArray(idbPlans) && idbPlans.length > 0) {
-          localStorage.setItem(PLANS_STORAGE_KEY, JSON.stringify(idbPlans));
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent(SCHEDULE_CHANGE_EVENT));
-          }
-        }
-      });
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.warn('[PaymentPlans Storage] Failed to parse stored payment plans:', err);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch {
     return [];
   }
 }
+
+export { exportLegacyLocalStoreData, downloadLegacyStoreExportFile } from './legacyStorageExport';
+export type { LegacyStoreExport } from './legacyStorageExport';
 
 export async function saveStoredPaymentPlan(plan: PaymentPlan): Promise<void> {
   try {
@@ -129,8 +104,6 @@ export async function saveStoredPaymentPlan(plan: PaymentPlan): Promise<void> {
       window.dispatchEvent(new CustomEvent(SCHEDULE_CHANGE_EVENT));
     }
 
-    // Multi-tier backup to IndexedDB & Backend Server Settings
-    await setIDBItem(IDB_STORE_PLANS, PLANS_STORAGE_KEY, next);
     updateAppSettings({ paymentPlans: next }).catch(() => {});
   } catch (err) {
     console.warn('[PaymentPlans Storage] Failed to save payment plan:', err);
@@ -143,7 +116,6 @@ export async function saveStoredPaymentPlans(plans: PaymentPlan[]): Promise<void
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(SCHEDULE_CHANGE_EVENT));
     }
-    await setIDBItem(IDB_STORE_PLANS, PLANS_STORAGE_KEY, plans);
     updateAppSettings({ paymentPlans: plans }).catch(() => {});
   } catch (err) {
     console.warn('[PaymentPlans Storage] Failed to batch save payment plans:', err);
@@ -158,7 +130,6 @@ export async function deleteStoredPaymentPlan(id: string): Promise<void> {
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(SCHEDULE_CHANGE_EVENT));
     }
-    await setIDBItem(IDB_STORE_PLANS, PLANS_STORAGE_KEY, next);
     updateAppSettings({ paymentPlans: next }).catch(() => {});
   } catch (err) {
     console.warn('[PaymentPlans Storage] Failed to delete payment plan:', err);
@@ -173,15 +144,6 @@ export function getStoredPaymentOverrides(): OverridesMap {
   try {
     const raw = localStorage.getItem(OVERRIDES_STORAGE_KEY);
     if (!raw) {
-      // Background check IndexedDB in case localStorage was cleared
-      getIDBItem<OverridesMap>(IDB_STORE_OVERRIDES, OVERRIDES_STORAGE_KEY).then((idbOverrides) => {
-        if (idbOverrides && typeof idbOverrides === 'object') {
-          localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(idbOverrides));
-          if (typeof window !== 'undefined') {
-            window.dispatchEvent(new CustomEvent(SCHEDULE_CHANGE_EVENT));
-          }
-        }
-      });
       return {};
     }
     return JSON.parse(raw);
@@ -197,8 +159,6 @@ export async function saveStoredPaymentOverrides(map: OverridesMap): Promise<voi
       window.dispatchEvent(new CustomEvent(SCHEDULE_CHANGE_EVENT));
     }
 
-    // Multi-tier backup to IndexedDB & Backend Server Settings
-    await setIDBItem(IDB_STORE_OVERRIDES, OVERRIDES_STORAGE_KEY, map);
     updateAppSettings({ paymentPlanOverrides: map }).catch(() => {});
   } catch (err) {
     console.warn('[PaymentPlans Storage] Failed to save overrides:', err);
@@ -217,11 +177,6 @@ export function getAllCustomerPlanDefinitions(): Record<string, any> {
   try {
     const raw = localStorage.getItem(CUSTOMER_PLANS_STORAGE_KEY);
     if (!raw) {
-      getIDBItem<Record<string, any>>(IDB_STORE_CUSTOMER_PLANS, CUSTOMER_PLANS_STORAGE_KEY).then((idbCust) => {
-        if (idbCust && typeof idbCust === 'object') {
-          localStorage.setItem(CUSTOMER_PLANS_STORAGE_KEY, JSON.stringify(idbCust));
-        }
-      });
       return {};
     }
     return JSON.parse(raw);
@@ -246,7 +201,6 @@ export async function saveCustomerPlanDefinition(customerId: string, planData: a
       updatedAt: new Date().toISOString(),
     };
     localStorage.setItem(CUSTOMER_PLANS_STORAGE_KEY, JSON.stringify(current));
-    await setIDBItem(IDB_STORE_CUSTOMER_PLANS, CUSTOMER_PLANS_STORAGE_KEY, current);
     updateAppSettings({ customerPlans: current }).catch(() => {});
   } catch (err) {
     console.warn('[PaymentPlans Storage] Failed to save customer plan definition:', err);
@@ -281,7 +235,6 @@ export async function rehydrateAllPaymentPlansData(): Promise<{
     if (apiPlans.length > 0) {
       loadedPlans = apiPlans;
       localStorage.setItem(PLANS_STORAGE_KEY, JSON.stringify(loadedPlans));
-      await setIDBItem(IDB_STORE_PLANS, PLANS_STORAGE_KEY, loadedPlans);
 
       // Identify plans that have recorded payments or are completed
       const plansWithPayments = apiPlans.filter(
@@ -293,7 +246,7 @@ export async function rehydrateAllPaymentPlansData(): Promise<{
       // Reconstruct overrides and transaction ledger directly from server database records
       await Promise.all(
         plansWithPayments.slice(0, 20).map(async (p) => {
-          if (!p.id || !UUID_REGEX.test(p.id)) return;
+          if (!p.id || !isValidServerId(p.id)) return;
           try {
             const detailRes = await apiClient.get<ApiResponse<any>>(`/payment-plans/${p.id}`);
             const detail = unwrapData(detailRes) || (detailRes?.data as any)?.data || detailRes?.data;
@@ -339,7 +292,6 @@ export async function rehydrateAllPaymentPlansData(): Promise<{
 
       if (Object.keys(loadedOverrides).length > 0) {
         localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(loadedOverrides));
-        await setIDBItem(IDB_STORE_OVERRIDES, OVERRIDES_STORAGE_KEY, loadedOverrides);
       }
     }
   } catch (err) {
@@ -353,52 +305,20 @@ export async function rehydrateAllPaymentPlansData(): Promise<{
       if (Array.isArray(settings.paymentPlans) && settings.paymentPlans.length > 0) {
         loadedPlans = settings.paymentPlans;
         localStorage.setItem(PLANS_STORAGE_KEY, JSON.stringify(loadedPlans));
-        await setIDBItem(IDB_STORE_PLANS, PLANS_STORAGE_KEY, loadedPlans);
       }
 
       if (settings.paymentPlanOverrides && typeof settings.paymentPlanOverrides === 'object') {
         loadedOverrides = settings.paymentPlanOverrides;
         localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(loadedOverrides));
-        await setIDBItem(IDB_STORE_OVERRIDES, OVERRIDES_STORAGE_KEY, loadedOverrides);
       }
 
       if (settings.customerPlans && typeof settings.customerPlans === 'object') {
         loadedCustomerPlans = settings.customerPlans;
         localStorage.setItem(CUSTOMER_PLANS_STORAGE_KEY, JSON.stringify(loadedCustomerPlans));
-        await setIDBItem(IDB_STORE_CUSTOMER_PLANS, CUSTOMER_PLANS_STORAGE_KEY, loadedCustomerPlans);
       }
     }
   } catch (err) {
     console.warn('[PaymentPlans Rehydration] Server settings fetch warning:', err);
-  }
-
-  // Tier 2: Check IndexedDB for any items missing from server response
-  try {
-    if (loadedPlans.length === 0) {
-      const idbPlans = await getIDBItem<PaymentPlan[]>(IDB_STORE_PLANS, PLANS_STORAGE_KEY);
-      if (Array.isArray(idbPlans) && idbPlans.length > 0) {
-        loadedPlans = idbPlans;
-        localStorage.setItem(PLANS_STORAGE_KEY, JSON.stringify(loadedPlans));
-      }
-    }
-
-    if (Object.keys(loadedOverrides).length === 0) {
-      const idbOverrides = await getIDBItem<OverridesMap>(IDB_STORE_OVERRIDES, OVERRIDES_STORAGE_KEY);
-      if (idbOverrides && typeof idbOverrides === 'object') {
-        loadedOverrides = idbOverrides;
-        localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(loadedOverrides));
-      }
-    }
-
-    if (Object.keys(loadedCustomerPlans).length === 0) {
-      const idbCust = await getIDBItem<Record<string, any>>(IDB_STORE_CUSTOMER_PLANS, CUSTOMER_PLANS_STORAGE_KEY);
-      if (idbCust && typeof idbCust === 'object') {
-        loadedCustomerPlans = idbCust;
-        localStorage.setItem(CUSTOMER_PLANS_STORAGE_KEY, JSON.stringify(loadedCustomerPlans));
-      }
-    }
-  } catch (err) {
-    console.warn('[PaymentPlans Rehydration] IndexedDB fetch warning:', err);
   }
 
   // If we have local plans or overrides in memory/localStorage not yet on server, sync up

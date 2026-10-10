@@ -59,7 +59,9 @@ import {
   LineChartOutlined,
   BarChartOutlined,
   FileProtectOutlined,
+  CloudDownloadOutlined,
 } from '@ant-design/icons';
+import { downloadLegacyStoreExportFile } from '@/utils/legacyStorageExport';
 import { LandPurchaseAgreementModal } from '@/components/paymentPlan/LandPurchaseAgreementModal';
 import { RecordPaymentModal } from '@/components/paymentPlan/RecordPaymentModal';
 import { useAuth } from '@/contexts/AuthContext';
@@ -84,7 +86,6 @@ import {
   type CreatePaymentPlanPayload,
 } from '@/api/paymentPlans';
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
 import { PaymentPlanScheduleTable } from '@/components/paymentPlan/PaymentPlanScheduleTable';
@@ -99,6 +100,7 @@ import {
   saveStoredPaymentPlan,
   getCustomerPlanDefinition,
   saveCustomerPlanDefinition,
+  isValidServerId,
 } from '@/utils/paymentPlansStorage';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery } from '@/api/properties';
@@ -134,7 +136,7 @@ export const PaymentPlansPage: React.FC = () => {
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
 
   const selectedPlanId = selectedPlan?.id || '';
-  const isRealSelectedBackendPlan = Boolean(viewDrawerOpen && selectedPlanId && UUID_REGEX.test(selectedPlanId));
+  const isRealSelectedBackendPlan = Boolean(viewDrawerOpen && selectedPlanId && isValidServerId(selectedPlanId));
   const { data: liveSelectedPlanData } = usePaymentPlanQuery(isRealSelectedBackendPlan ? selectedPlanId : undefined);
 
   const effectiveSelectedPlan = useMemo(() => {
@@ -275,15 +277,25 @@ export const PaymentPlansPage: React.FC = () => {
     }
   }, [rawCustomers]);
 
-  // ── Merge All Payment Plans (Active, Completed & Defaulted) ───────────────
-  // Resolves the issue where only backend-seeded defaulters were returned,
-  // making sure every customer on a payment plan is represented with their true status.
+  // ── Merge & De-duplicate Payment Plans by Server Plan ID ───────────────
+  // Server data is authoritative. Rows with no real server plan ID must not be shown as payable plans.
   const allRawPaymentPlans = useMemo(() => {
-    const plansMap = new Map<string, PaymentPlan>();
+    const plansByServerId = new Map<string, PaymentPlan>();
 
-    // 1. Process payment plans from the live API response
+    // 1. Process payment plans from the live API response (primary server authority)
     rawPaymentPlans.forEach(p => {
-      const overrides = getPlanPaymentOverrides(p.id);
+      const planServerId = (p.id || (p as any)._id || '').toString().trim();
+      if (!isValidServerId(planServerId)) {
+        return; // Exclude plans without a valid server plan ID
+      }
+
+      const normalizedPlanId = planServerId.toLowerCase();
+      // Server data wins; if duplicate returned from multi-status API queries, keep first
+      if (plansByServerId.has(normalizedPlanId)) {
+        return;
+      }
+
+      const overrides = getPlanPaymentOverrides(planServerId);
       let adjustedBalanceMinor = p.balanceMinor;
       let adjustedProgressPercent = p.progressPercent;
       let adjustedStatus = p.status;
@@ -307,48 +319,86 @@ export const PaymentPlansPage: React.FC = () => {
         }
       }
 
-      const updatedPlan: PaymentPlan = {
+      const custId = (
+        p.customerId ||
+        (p as any).customer_id ||
+        (typeof (p as any).customer === 'string' ? (p as any).customer : ((p as any).customer?.id || (p as any).customer?._id)) ||
+        ''
+      ).toString().trim();
+
+      const customer = customerMap[custId];
+      const property = propertyMap[p.propertyId || (customer?.propertyId ?? '')];
+
+      const finalizedPlan: PaymentPlan = {
         ...p,
+        id: planServerId,
+        customerId: custId || p.customerId,
+        propertyId: p.propertyId || customer?.propertyId || '',
         balanceMinor: adjustedBalanceMinor,
         progressPercent: adjustedProgressPercent,
         progressBand: getProgressBand(adjustedProgressPercent),
         status: adjustedStatus,
+        customerName: p.customerName || (customer ? `${customer.firstName} ${customer.lastName}` : undefined),
+        customerPhone: p.customerPhone || customer?.phoneNumber,
+        propertyName: p.propertyName || property?.houseNumber,
       };
 
-      plansMap.set(p.customerId, updatedPlan);
+      plansByServerId.set(normalizedPlanId, finalizedPlan);
     });
 
-    // 2. Include all customers registered under type === 'payment_plan' or who have a plan
+    // 2. Customers source: check if any customer has an attached real server plan not in rawPaymentPlans
+    // "Server data must win, and rows with no server plan ID must not be shown as payable plans."
     rawCustomers.forEach(c => {
-      if (plansMap.has(c.id)) return; // Already present from API
-      if (c.type !== 'payment_plan' && !(c as any).plan) return; // Only payment plan customers
+      const embeddedPlan = (c as any).plan || (c as any).paymentPlan || (c as any).payment_plan;
+      let serverPlanId = '';
 
-      const cached = getCachedCustomer(c.id);
-      const customPlanDef = getCustomerPlanDefinition(c.id);
-      const embeddedPlan = (c as any).plan || customPlanDef || cached?.paymentPlan;
+      if (embeddedPlan && typeof embeddedPlan === 'object') {
+        serverPlanId = (embeddedPlan.id || embeddedPlan._id || '').toString().trim();
+      } else if (typeof embeddedPlan === 'string' && isValidServerId(embeddedPlan)) {
+        serverPlanId = embeddedPlan.trim();
+      } else if ((c as any).planId && isValidServerId((c as any).planId)) {
+        serverPlanId = String((c as any).planId).trim();
+      } else if ((c as any).paymentPlanId && isValidServerId((c as any).paymentPlanId)) {
+        serverPlanId = String((c as any).paymentPlanId).trim();
+      }
+
+      // If customer has NO valid server plan ID, do NOT add them as a payable plan!
+      if (!isValidServerId(serverPlanId)) {
+        return;
+      }
+
+      const normalizedPlanId = serverPlanId.toLowerCase();
+      // If already present from API, server API data wins!
+      if (plansByServerId.has(normalizedPlanId)) {
+        return;
+      }
+
+      // Check if this customer ID is already represented by another server plan
+      const existingCustomerPlan = Array.from(plansByServerId.values()).find(
+        ep => ep.customerId && ep.customerId.toLowerCase() === c.id.toLowerCase()
+      );
+      if (existingCustomerPlan) {
+        return;
+      }
+
       const prop = propertyMap[c.propertyId];
-
-      const totalAmountMinor = embeddedPlan?.totalAmountMinor || prop?.priceMinor || 35000000;
-      const downPaymentMinor = embeddedPlan?.downPaymentMinor !== undefined 
+      const totalAmountMinor = (typeof embeddedPlan === 'object' && embeddedPlan?.totalAmountMinor) || prop?.priceMinor || 35000000;
+      const downPaymentMinor = (typeof embeddedPlan === 'object' && embeddedPlan?.downPaymentMinor !== undefined)
         ? embeddedPlan.downPaymentMinor 
         : Math.round(totalAmountMinor * 0.2);
-      const balanceMinor = embeddedPlan?.balanceMinor !== undefined 
+      const balanceMinor = (typeof embeddedPlan === 'object' && embeddedPlan?.balanceMinor !== undefined)
         ? embeddedPlan.balanceMinor 
         : Math.max(totalAmountMinor - downPaymentMinor, 0);
-      const numMonths = embeddedPlan?.numMonths || 6;
-      const monthlyAmountMinor = embeddedPlan?.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1));
+      const numMonths = (typeof embeddedPlan === 'object' && embeddedPlan?.numMonths) || 6;
+      const monthlyAmountMinor = (typeof embeddedPlan === 'object' && embeddedPlan?.monthlyAmountMinor) || Math.round(balanceMinor / Math.max(numMonths, 1));
       
       const isDefaulter = secretaryDefaulterCustomerIds.has(c.id) || defaulterNotificationCustomerIds.has(c.id);
-      const status: PaymentPlanStatus = embeddedPlan?.status || (isDefaulter ? 'defaulted' : (balanceMinor <= 0 ? 'completed' : 'active'));
+      const status: PaymentPlanStatus = (typeof embeddedPlan === 'object' && embeddedPlan?.status) || (isDefaulter ? 'defaulted' : (balanceMinor <= 0 ? 'completed' : 'active'));
 
       const paidSoFar = totalAmountMinor - balanceMinor;
       const progressPercent = totalAmountMinor > 0 ? Math.min(Math.round((paidSoFar / totalAmountMinor) * 100), 100) : 0;
-      const progressBand = getProgressBand(progressPercent);
 
-      const planId = embeddedPlan?.id || `plan-${c.id}`;
-
-      // Check local payment overrides
-      const overrides = getPlanPaymentOverrides(planId);
+      const overrides = getPlanPaymentOverrides(serverPlanId);
       let finalBalance = balanceMinor;
       let finalPercent = progressPercent;
       let finalStatus = status;
@@ -367,8 +417,8 @@ export const PaymentPlansPage: React.FC = () => {
         }
       }
 
-      const syntheticPlan: PaymentPlan = {
-        id: planId,
+      const resolvedCustomerPlan: PaymentPlan = {
+        id: serverPlanId,
         customerId: c.id,
         propertyId: c.propertyId || '',
         totalAmountMinor,
@@ -376,23 +426,23 @@ export const PaymentPlansPage: React.FC = () => {
         balanceMinor: finalBalance,
         numMonths,
         monthlyAmountMinor,
-        currency: embeddedPlan?.currency || prop?.currency || 'GHS',
-        startDate: embeddedPlan?.startDate || (c.createdAt ? dayjs(c.createdAt).format('YYYY-MM-DD') : dayjs().subtract(1, 'month').format('YYYY-MM-DD')),
+        currency: (typeof embeddedPlan === 'object' && embeddedPlan?.currency) || prop?.currency || 'GHS',
+        startDate: (typeof embeddedPlan === 'object' && embeddedPlan?.startDate) || (c.createdAt ? dayjs(c.createdAt).format('YYYY-MM-DD') : dayjs().subtract(1, 'month').format('YYYY-MM-DD')),
         status: finalStatus,
         progressPercent: finalPercent,
         progressBand: getProgressBand(finalPercent),
         createdAt: c.createdAt || new Date().toISOString(),
         updatedAt: c.updatedAt || new Date().toISOString(),
+        customerName: `${c.firstName} ${c.lastName}`,
+        customerPhone: c.phoneNumber,
+        propertyName: prop?.houseNumber,
       };
 
-      // Ensure customer plan details are permanently preserved across cache clears
-      saveCustomerPlanDefinition(c.id, syntheticPlan);
-
-      plansMap.set(c.id, syntheticPlan);
+      plansByServerId.set(normalizedPlanId, resolvedCustomerPlan);
     });
 
-    return Array.from(plansMap.values());
-  }, [rawPaymentPlans, rawCustomers, propertyMap, secretaryDefaulterCustomerIds, defaulterNotificationCustomerIds]);
+    return Array.from(plansByServerId.values());
+  }, [rawPaymentPlans, rawCustomers, customerMap, propertyMap, secretaryDefaulterCustomerIds, defaulterNotificationCustomerIds]);
 
   const paymentPlans: PaymentPlan[] = filterEntitiesByBranch(allRawPaymentPlans, user, branches);
   const customers: Customer[] = filterEntitiesByBranch(rawCustomers, user, branches);
@@ -614,6 +664,21 @@ export const PaymentPlansPage: React.FC = () => {
     }, 1000);
   };
 
+  // ── Prompt 2 Read-Only Export of Legacy Local Store ───────────────────────
+  const handleExportLegacyStore = async () => {
+    try {
+      setExportLoading(true);
+      const res = await downloadLegacyStoreExportFile();
+      message.success(
+        `Legacy store exported: ${res.filename} (${res.summary.totalPaymentPlansCount} plans, ${res.summary.totalOverridesCount} overrides, ${res.summary.totalIndexedDBRecordsCount} IDB records).`
+      );
+    } catch (err: any) {
+      message.error(`Failed to export legacy store: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setExportLoading(false);
+    }
+  };
+
   // ── Print Schedule Statement ──────────────────────────────────────────────
   const handlePrintPlan = (plan: PaymentPlan) => {
     const customer = customerMap[plan.customerId];
@@ -817,7 +882,11 @@ export const PaymentPlansPage: React.FC = () => {
               icon={<DollarOutlined />}
               style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
               onClick={() => {
-                setRecordPaymentPlan(record);
+                const realServerId = (record.id || (record as any)._id || '').toString().trim();
+                setRecordPaymentPlan({
+                  ...record,
+                  id: realServerId,
+                });
                 setRecordPaymentModalOpen(true);
               }}
             />
@@ -963,7 +1032,11 @@ export const PaymentPlansPage: React.FC = () => {
               icon={<DollarOutlined />}
               style={{ backgroundColor: '#10b981', borderColor: '#10b981' }}
               onClick={() => {
-                setRecordPaymentPlan(activePlan);
+                const realServerId = (activePlan.id || (activePlan as any)._id || '').toString().trim();
+                setRecordPaymentPlan({
+                  ...activePlan,
+                  id: realServerId,
+                });
                 setRecordPaymentModalOpen(true);
               }}
             >
@@ -1094,6 +1167,11 @@ export const PaymentPlansPage: React.FC = () => {
             label: 'Export',
             onClick: () => setExportModal(true),
             icon: <ExportOutlined />,
+          },
+          {
+            label: 'Backup Legacy Store',
+            onClick: handleExportLegacyStore,
+            icon: <CloudDownloadOutlined />,
           },
           {
             label: 'Refresh',
@@ -1580,6 +1658,26 @@ export const PaymentPlansPage: React.FC = () => {
             </Radio>
           </Space>
         </Radio.Group>
+        <Divider />
+        <Card size="small" style={{ background: '#fafafa', border: '1px solid #d9d9d9', borderRadius: 6 }}>
+          <Space direction="vertical" style={{ width: '100%' }}>
+            <Space>
+              <CloudDownloadOutlined style={{ color: tokens.primary, fontSize: 16 }} />
+              <Text strong>Legacy Local Store Backup (Prompt 2)</Text>
+            </Space>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              Non-destructive, read-only backup of legacy localStorage (omark_payment_plans_store, omark_payment_plan_overrides, omark_customer_plans_store) and IndexedDB records before any purge or replay.
+            </Text>
+            <Button
+              icon={<CloudDownloadOutlined />}
+              onClick={handleExportLegacyStore}
+              loading={exportLoading}
+              style={{ marginTop: 4 }}
+            >
+              Export Legacy Local Store (JSON)
+            </Button>
+          </Space>
+        </Card>
 
         <Divider />
         <div style={{ padding: 12, background: '#f5f5f5', borderRadius: 6 }}>

@@ -33,9 +33,8 @@ import {
   type ScheduleInstallmentRow,
 } from '@/utils/paymentPlanSchedule';
 import { usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
+import { isValidServerId } from '@/api/paymentPlansPersistence';
 import { tokens } from '@/constants/tokens';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -59,7 +58,7 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
   const printRef = useRef<HTMLDivElement>(null);
 
   const planId = plan?.id || '';
-  const isRealBackendPlan = Boolean(open && planId && UUID_REGEX.test(planId));
+  const isRealBackendPlan = Boolean(open && planId && isValidServerId(planId));
 
   const { data: livePlanData } = usePaymentPlanQuery(isRealBackendPlan ? planId : undefined);
   const { data: liveInstallmentsData } = useInstallmentsQuery(isRealBackendPlan ? planId : undefined);

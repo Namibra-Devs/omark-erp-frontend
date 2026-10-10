@@ -12,7 +12,26 @@ import {
   saveStoredPaymentOverrides,
 } from '@/utils/paymentPlansStorage';
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isValidServerId(id: any): boolean {
+  if (!id || typeof id !== 'string') return false;
+  const trimmed = id.trim();
+  if (
+    trimmed.startsWith('plan-') ||
+    trimmed.startsWith('synth-') ||
+    trimmed.startsWith('mock-') ||
+    trimmed.startsWith('temp-') ||
+    trimmed.startsWith('local-')
+  ) {
+    return false;
+  }
+  // MongoDB 24-character hex ObjectId
+  if (/^[0-9a-f]{24}$/i.test(trimmed)) return true;
+  // Standard UUID format (hyphenated)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) return true;
+  // General server alphanumeric ID of 8+ characters
+  if (/^[a-zA-Z0-9_-]{8,}$/.test(trimmed)) return true;
+  return false;
+}
 
 function getOrdinal(n: number): string {
   const s = ['th', 'st', 'nd', 'rd'];
@@ -23,6 +42,7 @@ function getOrdinal(n: number): string {
 export interface PlanIdentifier {
   id: string;
   customerId?: string;
+  propertyId?: string;
   totalAmountMinor?: number;
   downPaymentMinor?: number;
   numMonths?: number;
@@ -33,6 +53,7 @@ export interface PlanIdentifier {
 }
 
 export interface CustomerInfo {
+  customerId?: string;
   name?: string;
   phone?: string;
   propertyName?: string;
@@ -49,165 +70,288 @@ export interface RecordPaymentParams {
   notes?: string;
 }
 
+function extractPlanCustomerId(p: any): string {
+  if (!p) return '';
+  const raw =
+    p.customerId ||
+    p.customer_id ||
+    (typeof p.customer === 'string' ? p.customer : (p.customer?.id || p.customer?._id)) ||
+    p.clientId ||
+    p.client_id ||
+    (typeof p.client === 'string' ? p.client : (p.client?.id || p.client?._id)) ||
+    '';
+  return String(raw).trim();
+}
+
+function extractPlanPropertyId(p: any): string {
+  if (!p) return '';
+  const raw =
+    p.propertyId ||
+    p.property_id ||
+    (typeof p.property === 'string' ? p.property : (p.property?.id || p.property?._id)) ||
+    '';
+  return String(raw).trim();
+}
+
+function extractPlanId(p: any): string {
+  if (!p) return '';
+  return (p.id || p._id || '').toString().trim();
+}
+
 /**
- * Resolves the real backend payment plan UUID for a given plan object or customer ID.
- * If the plan ID is already a valid UUID, returns it.
- * If it's a synthetic ID ('plan-...'), it checks the backend for an existing plan
- * for this customer, or creates one via POST /payment-plans.
+ * Queries the backend database to locate any existing payment plan for a customer.
+ * Checks customer query endpoint, direct customer detail endpoint, and paginated lists across all statuses.
+ * Logs raw responses and field comparisons.
+ */
+export async function findBackendPlanForCustomer(
+  customerId: string,
+  propertyId?: string
+): Promise<PaymentPlan | null> {
+  if (!customerId) return null;
+  const cleanCustId = customerId.trim();
+  const cleanPropId = propertyId ? propertyId.trim() : '';
+
+  // Candidate evaluator: strictly requires customerId equality. Never matches on property alone.
+  const evaluatePlanCandidate = (p: any): boolean => {
+    if (!p) return false;
+    const candidatePlanId = extractPlanId(p);
+    const candidateCustId = extractPlanCustomerId(p);
+    const hasValidServerPlanId = isValidServerId(candidatePlanId);
+
+    // Mandatory: customerId must strictly match. Property alone is NEVER accepted.
+    const matchesCustomer = Boolean(
+      candidateCustId && candidateCustId.toLowerCase() === cleanCustId.toLowerCase()
+    );
+
+    return matchesCustomer && hasValidServerPlanId;
+  };
+
+  // Helper to prioritize matching propertyId among plans belonging to this customer
+  const pickBestPlan = (items: any[]): PaymentPlan | null => {
+    const validCustomerPlans = items.filter(evaluatePlanCandidate);
+    if (validCustomerPlans.length === 0) return null;
+
+    if (cleanPropId) {
+      const propMatch = validCustomerPlans.find((item) => {
+        const pId = extractPlanPropertyId(item);
+        return pId && pId.toLowerCase() === cleanPropId.toLowerCase();
+      });
+      if (propMatch) {
+        const realId = extractPlanId(propMatch);
+        return { ...(propMatch as any), id: realId, customerId: cleanCustId };
+      }
+    }
+
+    const first = validCustomerPlans[0];
+    const realId = extractPlanId(first);
+    return { ...(first as any), id: realId, customerId: cleanCustId };
+  };
+
+  // 1. Direct query: GET /payment-plans?customerId={cleanCustId}
+  try {
+    const listByCustRes = await apiClient.get<ApiResponse<any>>('/payment-plans', {
+      params: { customerId: cleanCustId },
+    });
+    const unwrapResult = unwrapList(listByCustRes);
+    const items: any[] = unwrapResult.items || (Array.isArray(listByCustRes?.data) ? listByCustRes.data : []);
+    const match = pickBestPlan(items);
+    if (match) return match;
+  } catch {
+    // continue to next strategy
+  }
+
+  // Fallback query: GET /payment-plans?customer_id={cleanCustId}
+  try {
+    const listByCustUnderscoreRes = await apiClient.get<ApiResponse<any>>('/payment-plans', {
+      params: { customer_id: cleanCustId },
+    });
+    const items: any[] = unwrapList(listByCustUnderscoreRes).items || [];
+    const match = pickBestPlan(items);
+    if (match) return match;
+  } catch {
+    // continue to next strategy
+  }
+
+  // 2. Direct customer detail endpoint: GET /customers/{cleanCustId}
+  try {
+    const custRes = await apiClient.get<ApiResponse<any>>(`/customers/${cleanCustId}`);
+    const rawData = unwrapData(custRes) || (custRes?.data as any)?.data || custRes?.data;
+    const custData = rawData?.customer || rawData;
+
+    if (custData) {
+      // Check custData.plan
+      if (custData.plan) {
+        if (typeof custData.plan === 'object') {
+          const pid = extractPlanId(custData.plan);
+          if (isValidServerId(pid)) {
+            return { ...custData.plan, id: pid, customerId: cleanCustId };
+          }
+        } else if (typeof custData.plan === 'string' && isValidServerId(custData.plan)) {
+          return { id: custData.plan.trim(), customerId: cleanCustId } as any;
+        }
+      }
+
+      // Check custData.paymentPlan
+      if (custData.paymentPlan) {
+        if (typeof custData.paymentPlan === 'object') {
+          const pid = extractPlanId(custData.paymentPlan);
+          if (isValidServerId(pid)) {
+            return { ...custData.paymentPlan, id: pid, customerId: cleanCustId };
+          }
+        } else if (typeof custData.paymentPlan === 'string' && isValidServerId(custData.paymentPlan)) {
+          return { id: custData.paymentPlan.trim(), customerId: cleanCustId } as any;
+        }
+      }
+
+      // Check custData.payment_plan
+      if (custData.payment_plan) {
+        if (typeof custData.payment_plan === 'object') {
+          const pid = extractPlanId(custData.payment_plan);
+          if (isValidServerId(pid)) {
+            return { ...custData.payment_plan, id: pid, customerId: cleanCustId };
+          }
+        } else if (typeof custData.payment_plan === 'string' && isValidServerId(custData.payment_plan)) {
+          return { id: custData.payment_plan.trim(), customerId: cleanCustId } as any;
+        }
+      }
+
+      // Check plain scalar ID fields
+      const scalarPlanId = custData.planId || custData.paymentPlanId || custData.plan_id || custData.payment_plan_id;
+      if (scalarPlanId && isValidServerId(String(scalarPlanId))) {
+        return { id: String(scalarPlanId).trim(), customerId: cleanCustId } as any;
+      }
+
+      // Check custData.plans array
+      if (Array.isArray(custData.plans)) {
+        const match = pickBestPlan(custData.plans);
+        if (match) return match;
+      }
+
+      // Check custData.paymentPlans array
+      if (Array.isArray(custData.paymentPlans)) {
+        const match = pickBestPlan(custData.paymentPlans);
+        if (match) return match;
+      }
+
+      // Check installments array
+      if (Array.isArray(custData.installments)) {
+        for (const inst of custData.installments) {
+          const instPlanId = inst?.planId || inst?.paymentPlanId || inst?.plan_id;
+          if (instPlanId && isValidServerId(String(instPlanId))) {
+            return { id: String(instPlanId).trim(), customerId: cleanCustId } as any;
+          }
+        }
+      }
+
+      // Check payments array
+      if (Array.isArray(custData.payments)) {
+        for (const pmt of custData.payments) {
+          const pmtPlanId = pmt?.planId || pmt?.paymentPlanId || pmt?.plan_id;
+          if (pmtPlanId && isValidServerId(String(pmtPlanId))) {
+            return { id: String(pmtPlanId).trim(), customerId: cleanCustId } as any;
+          }
+        }
+      }
+    }
+  } catch {
+    // continue to next strategy
+  }
+
+  // 3. Traversal of general /payment-plans pages
+  try {
+    let page = 1;
+    let hasMore = true;
+    while (hasMore && page <= 10) {
+      const listRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
+        params: { page, pageSize: 100 },
+      });
+      const listData = unwrapList(listRes);
+      const items = listData.items || [];
+      const match = pickBestPlan(items);
+      if (match) return match;
+
+      if (items.length < 100 || (listData.totalPages && page >= listData.totalPages)) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+    }
+  } catch {
+    // continue to next strategy
+  }
+
+  // 4. Status-filtered lists (defaulted, completed, active, cancelled)
+  for (const st of ['defaulted', 'completed', 'active', 'cancelled'] as const) {
+    try {
+      let page = 1;
+      let hasMore = true;
+      while (hasMore && page <= 5) {
+        const filteredRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
+          params: { status: st, page, pageSize: 100 },
+        });
+        const listData = unwrapList(filteredRes);
+        const items = listData.items || [];
+        const match = pickBestPlan(items);
+        if (match) return match;
+
+        if (items.length < 100 || (listData.totalPages && page >= listData.totalPages)) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+      }
+    } catch {
+      // continue
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Resolves the real backend payment plan server ID for a given plan object or customer ID.
+ * If the plan ID is already a valid server ID, returns it immediately.
+ * If it's a synthetic ID ('plan-...'), it searches the backend database for an existing plan for this customer.
+ * MUST NEVER call POST /payment-plans. If no plan is found, throws "Could not find this customer's payment plan".
  */
 export async function resolveOrCreateBackendPlan(
   plan: PlanIdentifier
 ): Promise<string> {
-  // If it's already a real UUID
-  if (plan.id && UUID_REGEX.test(plan.id)) {
-    return plan.id;
+  const rawId = (plan.id || '').toString().trim();
+
+  // If already a valid server ID (MongoDB 24-hex or UUID), return immediately
+  if (isValidServerId(rawId)) {
+    return rawId;
   }
 
   let customerId = plan.customerId;
-  if (!customerId && plan.id) {
-    const stored = getStoredPaymentPlans().find((p) => p.id === plan.id);
-    if (stored?.customerId) {
-      customerId = stored.customerId;
-    } else {
-      const raw = plan.id.replace(/^plan-/, '');
-      const match = raw.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
-      customerId = match ? match[1] : raw;
-    }
+  if (!customerId && rawId) {
+    const raw = rawId.replace(/^plan-/, '');
+    const hexMatch = raw.match(/^([0-9a-f]{24})/i);
+    const uuidMatch = raw.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    customerId = hexMatch ? hexMatch[1] : (uuidMatch ? uuidMatch[1] : raw);
   }
 
   if (!customerId) {
-    return plan.id;
+    throw new Error("Could not find this customer's payment plan");
   }
 
-  const onPlanResolved = (resolvedId: string, resolvedPlanObj?: any) => {
-    if (resolvedId && UUID_REGEX.test(resolvedId) && resolvedId !== plan.id) {
-      const currentStored = getStoredPaymentPlans();
-      const existing = currentStored.find((p) => p.id === plan.id || p.id === resolvedId);
-      if (existing) {
-        saveStoredPaymentPlan({
-          ...existing,
-          ...resolvedPlanObj,
-          id: resolvedId,
-          updatedAt: new Date().toISOString(),
-        }).catch(() => {});
-      } else if (resolvedPlanObj) {
-        saveStoredPaymentPlan(resolvedPlanObj).catch(() => {});
-      }
-
-      // Mirror any local overrides from synthetic ID to real UUID
-      const overrides = getStoredPaymentOverrides();
-      if (overrides[plan.id] && !overrides[resolvedId]) {
-        overrides[resolvedId] = { ...overrides[plan.id] };
-        saveStoredPaymentOverrides(overrides).catch(() => {});
-      }
+  // Search server database for existing plan for this customer
+  const existingPlan = await findBackendPlanForCustomer(customerId, plan.propertyId);
+  const foundServerId = existingPlan ? extractPlanId(existingPlan) : null;
+  if (foundServerId && isValidServerId(foundServerId)) {
+    const realId = foundServerId;
+    // Mirror local overrides from synthetic ID to real server plan ID
+    const overrides = getStoredPaymentOverrides();
+    if (overrides[rawId] && !overrides[realId]) {
+      overrides[realId] = { ...overrides[rawId] };
+      saveStoredPaymentOverrides(overrides).catch(() => {});
     }
-  };
-
-  // 1. Check customer detail endpoint directly (returns customer.plan or paymentPlan)
-  try {
-    const custRes = await apiClient.get<ApiResponse<any>>(`/customers/${customerId}`);
-    const custData = unwrapData(custRes) || (custRes?.data as any)?.data || custRes?.data;
-    const planCandidate =
-      custData?.plan?.id ||
-      custData?.paymentPlan?.id ||
-      (typeof custData?.plan === 'string' ? custData.plan : undefined) ||
-      custData?.planId ||
-      custData?.paymentPlanId;
-    if (planCandidate && UUID_REGEX.test(planCandidate)) {
-      onPlanResolved(planCandidate, custData?.plan || custData?.paymentPlan);
-      return planCandidate;
-    }
-  } catch (custErr) {
-    console.warn('[resolveOrCreateBackendPlan] Warning fetching customer detail:', custErr);
+    return realId;
   }
 
-  // 2. Check if backend already has a plan for this customer in list (using safe pageSize: 100)
-  try {
-    const listRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
-      params: { pageSize: 100 },
-    });
-    const listData = unwrapList(listRes);
-    const existing = listData.items.find((p: any) => p.customerId === customerId);
-    if (existing?.id && UUID_REGEX.test(existing.id)) {
-      onPlanResolved(existing.id, existing);
-      saveStoredPaymentPlan(existing).catch(() => {});
-      return existing.id;
-    }
-
-    // If there are more pages in the list, search remaining pages (up to 5 pages)
-    if (listData.totalPages > 1) {
-      for (let p = 2; p <= Math.min(listData.totalPages, 5); p++) {
-        try {
-          const nextRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
-            params: { page: p, pageSize: 100 },
-          });
-          const nextItems = unwrapList(nextRes).items;
-          const match = nextItems.find((item: any) => item.customerId === customerId);
-          if (match?.id && UUID_REGEX.test(match.id)) {
-            onPlanResolved(match.id, match);
-            return match.id;
-          }
-        } catch {
-          // ignore secondary lookup error
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('[resolveOrCreateBackendPlan] Warning checking existing plans:', e);
-  }
-
-  // 3. If not found, create a real plan on the backend database
-  try {
-    const totalAmountMinor = plan.totalAmountMinor || 35000000;
-    const downPaymentMinor = plan.downPaymentMinor !== undefined 
-      ? plan.downPaymentMinor 
-      : Math.round(totalAmountMinor * 0.2);
-    const numMonths = plan.numMonths || 6;
-    const startDate = plan.startDate && dayjs(plan.startDate).isValid()
-      ? dayjs(plan.startDate).format('YYYY-MM-DD')
-      : dayjs().format('YYYY-MM-DD');
-
-    const createRes = await apiClient.post<ApiResponse<PaymentPlan>>('/payment-plans', {
-      customerId,
-      totalAmountMinor,
-      downPaymentMinor,
-      planBasis: 'months',
-      numMonths,
-      startDate,
-    });
-    const created = unwrapData(createRes) || (createRes?.data as any)?.data || createRes?.data;
-    if (created?.id && UUID_REGEX.test(created.id)) {
-      onPlanResolved(created.id, created);
-      saveStoredPaymentPlan(created).catch(() => {});
-      saveCustomerPlanDefinition(customerId, created).catch(() => {});
-      return created.id;
-    }
-  } catch (createErr: any) {
-    console.warn('[resolveOrCreateBackendPlan] Creation response:', createErr?.response?.data || createErr);
-    // In case creation failed because one already exists, check error response or retry fetch with pageSize 100
-    const errData = createErr?.response?.data;
-    const errPlanId = errData?.plan?.id || errData?.data?.id || errData?.planId || errData?.id;
-    if (errPlanId && UUID_REGEX.test(errPlanId)) {
-      onPlanResolved(errPlanId);
-      return errPlanId;
-    }
-
-    try {
-      const listRes = await apiClient.get<ApiResponse<PaymentPlan[]>>('/payment-plans', {
-        params: { pageSize: 100 },
-      });
-      const items = unwrapList(listRes).items;
-      const existing = items.find((p: any) => p.customerId === customerId);
-      if (existing?.id && UUID_REGEX.test(existing.id)) {
-        onPlanResolved(existing.id, existing);
-        return existing.id;
-      }
-    } catch {
-      // ignore
-    }
-  }
-
-  return plan.id;
+  // MUST NEVER call POST /payment-plans!
+  throw new Error("Could not find this customer's payment plan");
 }
 
 export interface RecordPaymentResult {
@@ -228,9 +372,9 @@ export interface RecordPaymentResult {
 
 /**
  * Universal payment recorder:
- * 1. Resolves/creates real backend payment plan UUID
+ * 1. Resolves/verifies real backend payment plan UUID
  * 2. Permanently persists payment to backend database (POST /payment-plans/{planId}/payments)
- *    Strictly throws error if backend reject, ensuring data is never silently dropped
+ *    Strictly throws error if backend rejects, ensuring data is never silently dropped
  * 3. Saves locally for instantaneous 0ms UI reactivity with dynamic amortization recalculation
  * 4. Automatically dispatches customer receipt SMS prompting them of payment via contact number
  * 5. Returns dynamic schedule recalculation details for immediate receipt and statement generation
@@ -285,9 +429,52 @@ export async function recordPlanPaymentWithBackend(
     effect,
   };
 
-  // 1. Resolve real backend plan ID and persist to backend database first
+  // 1. Resolve real backend plan ID and require valid server ID
   const realPlanId = await resolveOrCreateBackendPlan(plan);
-  const isRealBackendId = Boolean(realPlanId && UUID_REGEX.test(realPlanId));
+  if (!realPlanId || !isValidServerId(realPlanId)) {
+    throw new Error('Cannot record payment: No valid server payment plan found for this customer.');
+  }
+
+  // 1b. Verify plan ownership against customer in the modal before posting
+  const expectedCustomerId = (
+    customerInfo?.customerId ||
+    plan.customerId ||
+    extractPlanCustomerId(plan) ||
+    ''
+  ).trim();
+
+  if (!expectedCustomerId) {
+    throw new Error('Cannot record payment: Customer identity is missing. Please select a valid customer.');
+  }
+
+  let serverPlanDetail: any = null;
+  try {
+    const planRes = await apiClient.get<ApiResponse<any>>(`/payment-plans/${realPlanId}`);
+    serverPlanDetail = unwrapData(planRes) || (planRes?.data as any)?.data || planRes?.data;
+  } catch (fetchErr: any) {
+    const errMsg =
+      fetchErr?.response?.data?.message ||
+      fetchErr?.message ||
+      'Failed to fetch plan from server';
+    throw new Error(`Cannot record payment: Unable to verify plan ${realPlanId} on server (${errMsg}).`);
+  }
+
+  if (!serverPlanDetail) {
+    throw new Error(`Cannot record payment: Payment plan ${realPlanId} was not found on server.`);
+  }
+
+  const serverPlanCustomerId = extractPlanCustomerId(serverPlanDetail);
+  if (!serverPlanCustomerId) {
+    throw new Error(
+      `Cannot record payment: Server plan ${realPlanId} does not have an associated customer ID on record.`
+    );
+  }
+
+  if (serverPlanCustomerId.toLowerCase() !== expectedCustomerId.toLowerCase()) {
+    throw new Error(
+      `Cannot record payment: Customer mismatch! Server plan (${realPlanId}) is owned by customer "${serverPlanCustomerId}", but payment is being recorded for customer "${expectedCustomerId}". Payment aborted.`
+    );
+  }
 
   const validMethods: PaymentMethod[] = ['cash', 'bank_transfer', 'mobile_money', 'cheque', 'other'];
   const cleanMethod: PaymentMethod = validMethods.includes(method as any)
@@ -300,67 +487,6 @@ export async function recordPlanPaymentWithBackend(
 
   const cleanAmountMinor = Math.round(payment.amountMinor);
   const cleanRef = (reference || `REC-${Date.now().toString().slice(-6)}`).trim();
-
-  // If plan is not linked to a verified backend UUID (e.g. offline or demo synthetic plan), record to local ledger & dispatch SMS
-  if (!isRealBackendId) {
-    console.warn(
-      `[recordPlanPaymentWithBackend] Storing payment in local ledger for plan ${plan.id} (not a backend database UUID)`
-    );
-
-    recordLocalInstallmentPayment(
-      plan.id,
-      sequence,
-      cleanAmountMinor,
-      cleanMethod,
-      cleanRef,
-      paidOnDate,
-      dynamicNote,
-      customerInfo?.recordedBy,
-      ledgerMeta
-    );
-
-    const updatedSchedule = buildPaymentPlanSchedule(plan);
-    const targetRow = updatedSchedule.rows.find((r: any) => r.sequence === sequence);
-    const isPartialPayment = Boolean(targetRow?.isPartiallyPaid) || isUnder;
-    const deficitRolledOverMinor = targetRow?.deficitMinor || deficitMinor;
-    const surplusAppliedMinor = surplusMinor;
-    const isOverpayment = surplusMinor > 0;
-    const newBalanceMinor = updatedSchedule.currentBalanceMinor;
-
-    const targetPhone = customerInfo?.phone?.trim();
-    const targetName = customerInfo?.name?.trim();
-
-    try {
-      await dispatchPaymentReceiptSMS({
-        customerPhone: targetPhone,
-        customerName: targetName,
-        amountMinor: cleanAmountMinor,
-        remainingBalanceMinor: newBalanceMinor,
-        propertyName: customerInfo?.propertyName,
-        reference: cleanRef,
-        method: String(cleanMethod),
-        installmentOrdinal: ordinal,
-        recordedBy: customerInfo?.recordedBy,
-      });
-    } catch (smsErr) {
-      console.warn('[recordPlanPaymentWithBackend] SMS dispatch error:', smsErr);
-    }
-
-    return {
-      success: true,
-      persistedToBackend: false,
-      realPlanId: plan.id,
-      receiptNumber: cleanRef,
-      sequence,
-      installmentOrdinal: ordinal,
-      isPartialPayment,
-      isOverpayment,
-      deficitRolledOverMinor,
-      surplusAppliedMinor,
-      newBalanceMinor,
-      updatedSchedule,
-    };
-  }
 
   let result: any = null;
 
@@ -381,7 +507,7 @@ export async function recordPlanPaymentWithBackend(
         : null) ||
       apiErr?.message ||
       'Backend database rejected payment recording';
-    console.error('[recordPlanPaymentWithBackend] Backend save failed:', backendMsg, apiErr);
+    console.error('[recordPlanPaymentWithBackend] Backend save failed:', backendMsg);
     throw new Error(`Database save failed: ${backendMsg}`);
   }
 

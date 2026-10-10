@@ -109,6 +109,7 @@ import { PaymentReceiptModal, type PaymentReceiptData } from '@/components/payme
 import { CustomerStatementModal } from '@/components/paymentPlan/CustomerStatementModal';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
+import { isValidServerId } from '@/api/paymentPlansPersistence';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -326,11 +327,34 @@ export const SecretaryDashboardPage: React.FC = () => {
         status: adjustedStatus,
       };
 
-      plansMap.set(p.customerId, updatedPlan);
+      const custIdKey = (
+        p.customerId ||
+        (p as any).customer_id ||
+        (typeof (p as any).customer === 'string' ? (p as any).customer : (p as any).customer?.id) ||
+        ''
+      )?.toString().trim().toLowerCase();
+      if (custIdKey) {
+        plansMap.set(custIdKey, updatedPlan);
+      }
+      if (p.id) {
+        plansMap.set(p.id.toLowerCase(), updatedPlan);
+      }
     });
 
     rawCustomers.forEach((c: any) => {
-      if (plansMap.has(c.id)) return;
+      const cleanCId = (c.id || '').trim().toLowerCase();
+      if (cleanCId && plansMap.has(cleanCId)) return;
+      const directMatch = rawPaymentPlans.find((p: any) => {
+        const pCustId = (
+          p.customerId ||
+          (p as any).customer_id ||
+          (typeof (p as any).customer === 'string' ? (p as any).customer : (p as any).customer?.id) ||
+          ''
+        )?.toString().trim().toLowerCase();
+        return pCustId && pCustId === cleanCId;
+      });
+      if (directMatch) return;
+
       if (c.type !== 'payment_plan' && !c.plan) return;
 
       const prop = propertyMap[c.propertyId];
@@ -345,7 +369,9 @@ export const SecretaryDashboardPage: React.FC = () => {
       const numMonths = embeddedPlan?.numMonths || 6;
       const monthlyAmountMinor = embeddedPlan?.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1));
       
-      const planId = embeddedPlan?.id || `plan-${c.id}`;
+      const planId = (embeddedPlan?.id && isValidServerId(embeddedPlan.id))
+        ? embeddedPlan.id
+        : (embeddedPlan?.id || `plan-${c.id}`);
       const overrides = getPlanPaymentOverrides(planId);
       let finalBalance = balanceMinor;
       let finalPercent = totalAmountMinor > 0 ? Math.min(Math.round(((totalAmountMinor - balanceMinor) / totalAmountMinor) * 100), 100) : 0;
@@ -2183,6 +2209,7 @@ export const SecretaryDashboardPage: React.FC = () => {
           setSelectedCustomer(null);
         }}
         customer={selectedCustomer}
+        plan={selectedPlan}
         onSuccess={() => {
           refetchPaymentPlans();
           refetchDashboard();

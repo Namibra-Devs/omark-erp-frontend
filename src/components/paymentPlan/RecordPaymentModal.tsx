@@ -30,9 +30,9 @@ import {
 import dayjs from 'dayjs';
 import { useQueryClient } from '@tanstack/react-query';
 import { paymentPlansKeys, usePaymentPlansQuery, usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
-import { useCustomersQuery } from '@/api/customers';
+import { useCustomersQuery, useCustomerQuery } from '@/api/customers';
 import { usePropertiesQuery } from '@/api/properties';
-import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
+import { recordPlanPaymentWithBackend, isValidServerId } from '@/api/paymentPlansPersistence';
 import {
   buildPaymentPlanSchedule,
   getOrdinal,
@@ -41,8 +41,6 @@ import {
 import { PaymentReceiptModal, type PaymentReceiptData } from './PaymentReceiptModal';
 import { tokens } from '@/constants/tokens';
 import type { PaymentPlan, PaymentMethod } from '@/types';
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const { Text, Title } = Typography;
 const { Option } = Select;
@@ -83,6 +81,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [customAmountEntered, setCustomAmountEntered] = useState<number | null>(null);
 
   // Receipt modal state
@@ -93,6 +92,10 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
   const { data: plansData } = usePaymentPlansQuery({ pageSize: 100 });
   const { data: customersData } = useCustomersQuery({ pageSize: 100 });
   const { data: propertiesData } = usePropertiesQuery({ pageSize: 100 });
+
+  const custId = customer?.customerId || customer?.id;
+  const isCustValidServerId = Boolean(open && custId && isValidServerId(custId));
+  const { data: customerDetail } = useCustomerQuery(isCustValidServerId ? custId : '');
 
   const propertyMap = useMemo(() => {
     const map: Record<string, any> = {};
@@ -108,15 +111,26 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
 
     if (!customer) return null;
 
-    // Check if customer already has a rawPlan attached
-    if (customer.rawPlan) return customer.rawPlan;
+    // Check if customer already has a plan object attached
+    if (customer.plan && typeof customer.plan === 'object') return customer.plan;
+    if (customer.paymentPlan && typeof customer.paymentPlan === 'object') return customer.paymentPlan;
+    if (customerDetail?.plan && typeof customerDetail.plan === 'object') return customerDetail.plan;
+    if (customer.rawPlan && typeof customer.rawPlan === 'object') return customer.rawPlan;
 
-    const custId = customer.customerId || customer.id;
-    if (!custId) return null;
+    const currentCustId = customer.customerId || customer.id;
+    if (!currentCustId) return null;
 
     // Find in plans query
-    const found = (plansData?.items || []).find((p) => p.customerId === custId || p.id === customer.planId);
+    const found = (plansData?.items || []).find(
+      (p) => p.customerId === currentCustId || (customer.planId && p.id === customer.planId)
+    );
     if (found) return found;
+
+    // If customer has a real backend planId, prioritize it over synthetic ID
+    const explicitPlanId =
+      (customer.planId && isValidServerId(customer.planId) ? customer.planId : null) ||
+      (typeof customer.plan === 'string' && isValidServerId(customer.plan) ? customer.plan : null) ||
+      (typeof customer.paymentPlan === 'string' && isValidServerId(customer.paymentPlan) ? customer.paymentPlan : null);
 
     // Synthetic fallback plan for isolated customer records
     const totalAmountMinor = customer.totalAmountMinor || customer.overdueAmountMinor || 35000000;
@@ -127,8 +141,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     const monthlyAmountMinor = customer.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1));
 
     return {
-      id: customer.planId || `plan-${custId}`,
-      customerId: custId,
+      id: explicitPlanId || customer.planId || `plan-${currentCustId}`,
+      customerId: currentCustId,
       propertyId: customer.propertyId || '',
       totalAmountMinor,
       downPaymentMinor: customer.downPaymentMinor || 0,
@@ -143,10 +157,10 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       createdAt: customer.createdAt || new Date().toISOString(),
       updatedAt: customer.updatedAt || new Date().toISOString(),
     };
-  }, [propPlan, customer, plansData]);
+  }, [propPlan, customer, customerDetail, plansData]);
 
   const resolvedPlanId = resolvedPlan?.id || '';
-  const isRealBackendPlan = Boolean(open && resolvedPlanId && UUID_REGEX.test(resolvedPlanId));
+  const isRealBackendPlan = Boolean(open && resolvedPlanId && isValidServerId(resolvedPlanId));
 
   const { data: livePlanData } = usePaymentPlanQuery(isRealBackendPlan ? resolvedPlanId : undefined);
   const { data: liveInstallmentsData } = useInstallmentsQuery(isRealBackendPlan ? resolvedPlanId : undefined);
@@ -208,6 +222,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       customer?.name ||
       customer?.customerName ||
       (customer?.firstName ? `${customer.firstName} ${customer.lastName || ''}`.trim() : null) ||
+      (customerDetail?.firstName ? `${customerDetail.firstName} ${customerDetail.lastName || ''}`.trim() : null) ||
       (matchedCustomer ? `${matchedCustomer.firstName} ${matchedCustomer.lastName}`.trim() : null) ||
       (resolvedPlan as any)?.customerName ||
       'Valued Customer';
@@ -216,11 +231,12 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       propCustomerPhone ||
       customer?.phone ||
       customer?.phoneNumber ||
+      customerDetail?.phoneNumber ||
       matchedCustomer?.phoneNumber ||
       (resolvedPlan as any)?.customerPhone ||
       '';
 
-    const propId = resolvedPlan?.propertyId || customer?.propertyId || matchedCustomer?.propertyId;
+    const propId = resolvedPlan?.propertyId || customer?.propertyId || customerDetail?.propertyId || matchedCustomer?.propertyId;
     const prop = propId ? propertyMap[propId] : null;
     const propertyName =
       propPropertyName ||
@@ -230,8 +246,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       (resolvedPlan as any)?.propertyName ||
       'Assigned Property';
 
-    return { name, phone, propertyName };
-  }, [resolvedPlan, customer, propCustomerName, propCustomerPhone, propPropertyName, customersData, propertyMap]);
+    return { customerId: custId, name, phone, propertyName };
+  }, [resolvedPlan, customer, customerDetail, propCustomerName, propCustomerPhone, propPropertyName, customersData, propertyMap]);
 
   // Compute expected amount
   const expectedGHS = useMemo(() => {
@@ -247,6 +263,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     if (open && targetRow) {
       const defaultAmt = Number(expectedGHS.toFixed(2));
       setCustomAmountEntered(defaultAmt);
+      setSubmitError(null);
       form.setFieldsValue({
         amountGHS: defaultAmt,
         paidOn: dayjs(),
@@ -257,6 +274,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     } else if (!open) {
       form.resetFields();
       setCustomAmountEntered(null);
+      setSubmitError(null);
     }
   }, [open, targetRow, expectedGHS, form]);
 
@@ -272,6 +290,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
     const planToRecord = activePlan || resolvedPlan;
     if (!planToRecord || !targetRow) return;
     setSubmitting(true);
+    setSubmitError(null);
     try {
       const amountGHS = values.amountGHS !== undefined && values.amountGHS !== null ? values.amountGHS : expectedGHS;
       const amountMinor = Math.round(amountGHS * 100);
@@ -291,6 +310,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
           notes: values.notes,
         },
         {
+          customerId: customerInfo.customerId,
           name: customerInfo.name,
           phone: customerInfo.phone,
           propertyName: customerInfo.propertyName,
@@ -349,9 +369,16 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       onClose();
       form.resetFields();
       setCustomAmountEntered(null);
+      setSubmitError(null);
       setReceiptModalOpen(true);
     } catch (err: any) {
-      message.error(err?.message || 'Failed to record payment');
+      const errorMsg =
+        err?.response?.data?.error?.message ||
+        err?.response?.data?.message ||
+        err?.message ||
+        'Failed to record payment';
+      setSubmitError(errorMsg);
+      message.error(errorMsg);
     } finally {
       setSubmitting(false);
     }
@@ -369,16 +396,32 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
           </Space>
         }
         open={open}
+        maskClosable={!submitting}
+        closable={!submitting}
         onCancel={() => {
-          onClose();
-          form.resetFields();
-          setCustomAmountEntered(null);
+          if (!submitting) {
+            onClose();
+            form.resetFields();
+            setCustomAmountEntered(null);
+            setSubmitError(null);
+          }
         }}
         footer={null}
         width={580}
         style={{ maxWidth: '95%', top: 24 }}
         destroyOnClose
       >
+        {submitError && (
+          <Alert
+            type="error"
+            showIcon
+            message="Payment Failed"
+            description={submitError}
+            style={{ marginBottom: 16 }}
+            closable
+            onClose={() => setSubmitError(null)}
+          />
+        )}
         {targetRow && (
           <Form
             form={form}
@@ -651,10 +694,12 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
               <Space wrap style={{ width: '100%', justifyContent: 'flex-end' }}>
                 <Button
+                  disabled={submitting}
                   onClick={() => {
                     onClose();
                     form.resetFields();
                     setCustomAmountEntered(null);
+                    setSubmitError(null);
                   }}
                 >
                   Cancel
@@ -663,6 +708,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                   type="primary"
                   htmlType="submit"
                   loading={submitting}
+                  disabled={submitting}
                   style={{ backgroundColor: '#1677ff', fontWeight: 600 }}
                 >
                   Confirm & Record Payment

@@ -1,5 +1,5 @@
 // src/components/paymentPlan/PaymentPlanScheduleTable.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Table,
   Tag,
@@ -41,7 +41,7 @@ import dayjs from 'dayjs';
 import { useQueryClient } from '@tanstack/react-query';
 import apiClient from '@/api/client';
 import { paymentPlansKeys, usePaymentPlanQuery, useInstallmentsQuery } from '@/api/paymentPlans';
-import { recordPlanPaymentWithBackend } from '@/api/paymentPlansPersistence';
+import { recordPlanPaymentWithBackend, findBackendPlanForCustomer, isValidServerId } from '@/api/paymentPlansPersistence';
 import { dispatchPaymentReceiptSMS } from '@/utils/paymentNotificationService';
 import type { PaymentPlan, Installment, PaymentMethod } from '@/types';
 import {
@@ -57,8 +57,6 @@ import { tokens } from '@/constants/tokens';
 
 const { Text, Title, Paragraph } = Typography;
 const { Option } = Select;
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface PaymentPlanScheduleTableProps {
   plan: Partial<PaymentPlan> & { id: string };
@@ -93,9 +91,30 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
   // Listen for local updates so all instances stay in sync
   usePaymentPlanScheduleListener();
 
-  const isRealUuid = Boolean(plan?.id && UUID_REGEX.test(plan.id));
-  const { data: planDetail, refetch: refetchPlanDetail } = usePaymentPlanQuery(isRealUuid ? plan.id : undefined);
-  const { data: fetchedInstallments, refetch: refetchInstallments } = useInstallmentsQuery(isRealUuid ? plan.id : undefined);
+  const isRealServerPlanId = Boolean(plan?.id && isValidServerId(plan.id));
+  const [resolvedPlanId, setResolvedPlanId] = useState<string | null>(isRealServerPlanId ? plan.id : null);
+
+  useEffect(() => {
+    if (isRealServerPlanId) {
+      setResolvedPlanId(plan.id);
+    } else {
+      const custId = plan.customerId || plan.id?.replace(/^plan-/, '');
+      if (custId) {
+        findBackendPlanForCustomer(custId, (plan as any).propertyId)
+          .then((backendPlan) => {
+            const bId = backendPlan?.id || (backendPlan as any)?._id;
+            if (bId && isValidServerId(bId)) {
+              setResolvedPlanId(bId);
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  }, [plan.id, plan.customerId, isRealServerPlanId]);
+
+  const activePlanId = resolvedPlanId || (isRealServerPlanId ? plan.id : undefined);
+  const { data: planDetail, refetch: refetchPlanDetail } = usePaymentPlanQuery(activePlanId);
+  const { data: fetchedInstallments, refetch: refetchInstallments } = useInstallmentsQuery(activePlanId);
 
   const resolvedInstallments = useMemo(() => {
     if (installments && installments.length > 0) return installments;
@@ -115,13 +134,18 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
   }, [planDetail, plan]);
 
   const mergedPlan = useMemo(() => {
-    return planDetail ? { ...plan, ...planDetail } : plan;
-  }, [plan, planDetail]);
+    const base = planDetail ? { ...plan, ...planDetail } : plan;
+    if (resolvedPlanId && !isValidServerId(base.id)) {
+      return { ...base, id: resolvedPlanId };
+    }
+    return base;
+  }, [plan, planDetail, resolvedPlanId]);
 
   const [activeTab, setActiveTab] = useState<'schedule' | 'ledger'>('schedule');
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [selectedRow, setSelectedRow] = useState<ScheduleInstallmentRow | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [customAmountEntered, setCustomAmountEntered] = useState<number | null>(null);
   const [receiptModalOpen, setReceiptModalOpen] = useState(false);
   const [receiptData, setReceiptData] = useState<PaymentReceiptData | null>(null);
@@ -155,6 +179,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
 
   const openRecordModal = (row: ScheduleInstallmentRow) => {
     setSelectedRow(row);
+    setSubmitError(null);
     const defaultAmount = row.isPartiallyPaid && row.deficitGHS > 0 ? row.deficitGHS : row.installmentGHS;
     setCustomAmountEntered(defaultAmount);
     form.setFieldsValue({
@@ -175,9 +200,11 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       const method = 'bank_transfer';
       const reference = `QUICK-${row.sequence}-${Date.now().toString().slice(-4)}`;
 
+      const planToRecord = mergedPlan || plan;
+
       // 1. Persist permanently to backend database, save local override, and dispatch SMS prompt
       const result = await recordPlanPaymentWithBackend(
-        plan,
+        planToRecord,
         {
           amountMinor,
           paidOn,
@@ -187,6 +214,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
           installmentOrdinal: row.ordinal,
         },
         {
+          customerId: (planToRecord as any).customerId || (plan as any).customerId,
           name: customerName || (plan as any).customerName || (plan as any).name,
           phone: customerPhone || (plan as any).customerPhone || (plan as any).phone,
           propertyName: propertyName || (plan as any).propertyName,
@@ -235,6 +263,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
   const handleSubmitPayment = async (values: any) => {
     if (!selectedRow) return;
     setSubmitting(true);
+    setSubmitError(null);
     try {
       const defaultAmt = selectedRow.isPartiallyPaid && selectedRow.deficitGHS > 0 ? selectedRow.deficitGHS : selectedRow.installmentGHS;
       const amountGHS = values.amountGHS !== undefined && values.amountGHS !== null ? values.amountGHS : defaultAmt;
@@ -243,9 +272,11 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       const method = values.method || 'bank_transfer';
       const reference = values.reference || `REC-${Date.now().toString().slice(-6)}`;
 
+      const planToRecord = mergedPlan || plan;
+
       // 1. Persist permanently to backend database, save local override, and dispatch SMS prompt
       const result = await recordPlanPaymentWithBackend(
-        plan,
+        planToRecord,
         {
           amountMinor,
           paidOn,
@@ -256,6 +287,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
           notes: values.notes,
         },
         {
+          customerId: (planToRecord as any).customerId || (plan as any).customerId,
           name: customerName || (plan as any).customerName || (plan as any).name,
           phone: customerPhone || (plan as any).customerPhone || (plan as any).phone,
           propertyName: propertyName || (plan as any).propertyName,
@@ -324,7 +356,9 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       setCustomAmountEntered(null);
       setReceiptModalOpen(true);
     } catch (err: any) {
-      message.error(err?.message || 'Failed to record payment');
+      const errorMsg = err?.message || 'Failed to record payment';
+      setSubmitError(errorMsg);
+      message.error(errorMsg);
     } finally {
       setSubmitting(false);
     }
@@ -830,15 +864,19 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
         }
         open={recordModalOpen}
         onCancel={() => {
+          if (submitting) return;
           setRecordModalOpen(false);
           form.resetFields();
           setSelectedRow(null);
           setCustomAmountEntered(null);
+          setSubmitError(null);
         }}
         footer={null}
         width={560}
         style={{ maxWidth: '95%', top: 24 }}
         destroyOnClose
+        maskClosable={!submitting}
+        closable={!submitting}
       >
         {selectedRow && (() => {
           const expectedGHS = selectedRow.isPartiallyPaid && selectedRow.deficitGHS > 0
@@ -863,6 +901,17 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
                 reference: `INST-${selectedRow.sequence}-${Date.now().toString().slice(-4)}`,
               }}
             >
+              {submitError && (
+                <Alert
+                  type="error"
+                  message="Payment Record Failed"
+                  description={submitError}
+                  showIcon
+                  closable
+                  onClose={() => setSubmitError(null)}
+                  style={{ marginBottom: 14 }}
+                />
+              )}
               <div
                 style={{
                   background: selectedRow.isOverdue ? '#fff2f0' : '#f8fafc',
@@ -1079,16 +1128,25 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
               <Form.Item style={{ marginBottom: 0, marginTop: 16 }}>
                 <Space wrap style={{ width: '100%', justifyContent: 'flex-end' }}>
                   <Button
+                    disabled={submitting}
                     onClick={() => {
+                      if (submitting) return;
                       setRecordModalOpen(false);
                       form.resetFields();
                       setSelectedRow(null);
                       setCustomAmountEntered(null);
+                      setSubmitError(null);
                     }}
                   >
                     Cancel
                   </Button>
-                  <Button type="primary" htmlType="submit" loading={submitting} style={{ background: '#1677ff', fontWeight: 600 }}>
+                  <Button
+                    type="primary"
+                    htmlType="submit"
+                    loading={submitting}
+                    disabled={submitting}
+                    style={{ background: '#1677ff', fontWeight: 600 }}
+                  >
                     Confirm & Record Payment
                   </Button>
                 </Space>
