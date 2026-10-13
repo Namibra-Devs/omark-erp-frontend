@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import type { Prospect } from '@/types';
 import { fetchAppSettings, updateAppSettings } from '@/api/settings';
 import apiClient from '@/api/client';
+import { isProspectAssignedOrCreatedByStaff } from '@/utils/prospectAssignment';
 
 export type MarketingChannel =
   | 'billboard'
@@ -719,7 +720,8 @@ export function calculateMarketingMetrics(
     marketingProspects?: number;
     csProspects?: number;
     totalConverted?: number;
-  }
+  },
+  directorUserObj?: any
 ): MarketingMetricsSummary {
   const activeCampaigns = campaigns.filter((c) => c.status === 'active');
   const activeCampaignsCount = activeCampaigns.length;
@@ -741,7 +743,17 @@ export function calculateMarketingMetrics(
     externalTotals?.totalProspects ?? 0
   );
 
+  const targetDirector = directorUserObj || (directorUserId || directorUserName ? {
+    id: directorUserId,
+    name: directorUserName,
+    firstName: directorUserName,
+    role: 'marketing_director',
+  } : null);
+
   const directorProspects = allProspects.filter((p) => {
+    if (targetDirector && isProspectAssignedOrCreatedByStaff(p, targetDirector)) {
+      return true;
+    }
     if (directorUserId && (p.assignedUserId === directorUserId || p.createdByUserId === directorUserId)) {
       return true;
     }

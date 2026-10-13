@@ -484,38 +484,65 @@ export const UserManagement: React.FC<UserManagementProps> = ({
       ),
     },
     {
-      title: 'Prospects',
+      title: 'Prospects Added',
       key: 'prospects',
-      width: 180,
+      width: 190,
       align: 'left' as const,
       render: (_: any, record: User) => {
         const info = getStaffProspectCount(record.id, record.role, record);
+        const sName =
+          record.name ||
+          `${record.firstName || ''} ${record.lastName || ''}`.trim() ||
+          getUserFullName(record as any) ||
+          '';
+
         if (info.isDirector) {
           return (
-            <Tooltip title={`Marketing Director Pipeline: ${info.count} Total Marketing Prospects (${info.directCount} direct). Click to view director overview.`}>
+            <Tooltip
+              title={`Prospects Added: ${info.directCount} direct records. (Marketing Pipeline Oversight: ${info.pipelineCount} leads). Click to inspect records.`}
+            >
               <Tag
-                color="gold"
-                style={{ cursor: 'pointer', borderRadius: 12, padding: '2px 8px', fontWeight: 600 }}
-                onClick={() => navigate('/marketing/overview')}
+                color={info.directCount > 0 ? 'purple' : 'default'}
+                style={{
+                  cursor: info.directCount > 0 ? 'pointer' : 'default',
+                  borderRadius: 12,
+                  padding: '2px 8px',
+                  fontWeight: 600,
+                }}
+                onClick={() => {
+                  if (info.directCount > 0) {
+                    navigate(
+                      `/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(sName)}`
+                    );
+                  } else {
+                    navigate('/marketing/overview');
+                  }
+                }}
               >
-                📊 {info.count} Mkt Prospects &rarr;
+                👥 {info.directCount} Prospects Added
               </Tag>
             </Tooltip>
           );
         }
         return (
-          <Tooltip title={`Assigned Prospects: ${info.count}. Click to inspect records.`}>
+          <Tooltip title={`Prospects Added: ${info.count}. Click to inspect records.`}>
             <Tag
               color={info.count > 0 ? 'blue' : 'default'}
-              style={{ cursor: info.count > 0 ? 'pointer' : 'default', borderRadius: 12, padding: '2px 8px', fontWeight: 600 }}
+              style={{
+                cursor: info.count > 0 ? 'pointer' : 'default',
+                borderRadius: 12,
+                padding: '2px 8px',
+                fontWeight: 600,
+              }}
               onClick={() => {
                 if (info.count > 0) {
-                  const sName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || getUserFullName(record as any) || '';
-                  navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(sName)}`);
+                  navigate(
+                    `/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(sName)}`
+                  );
                 }
               }}
             >
-              👥 {info.count} Prospects
+              👥 {info.count} Prospects Added
             </Tag>
           </Tooltip>
         );

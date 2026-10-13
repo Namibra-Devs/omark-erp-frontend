@@ -806,7 +806,7 @@ export const StaffProfilePage: React.FC = () => {
                       title={
                         <Space>
                           <Text strong style={{ color: '#1d39c4' }}>
-                            {isMarketingDirector ? 'Marketing Pipeline' : 'Total Prospects'}
+                            Prospects Added
                           </Text>
                           <EyeOutlined style={{ color: '#2f54eb' }} />
                         </Space>
@@ -830,6 +830,11 @@ export const StaffProfilePage: React.FC = () => {
                         </Button>
                       }
                     />
+                    {isMarketingDirector && (
+                      <div style={{ marginTop: 4, fontSize: 11, color: '#64748b' }}>
+                        Overseeing {allConsolidatedProspects.filter((p) => p.source === 'marketing' || !p.source).length} Pipeline Leads
+                      </div>
+                    )}
                   </Card>
                 </Col>
               </Row>
@@ -936,8 +941,13 @@ export const StaffProfilePage: React.FC = () => {
                             {staffProspects.length}
                           </div>
                           <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                            {isMarketingDirector ? 'Marketing Pipeline' : 'Assigned Prospects'}
+                            Prospects Added
                           </Text>
+                          {isMarketingDirector && (
+                            <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+                              Pipeline: {allConsolidatedProspects.filter((p) => p.source === 'marketing' || !p.source).length}
+                            </div>
+                          )}
                           <Tag color="green" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
                             View List &rarr;
                           </Tag>
@@ -1278,14 +1288,14 @@ export const StaffProfilePage: React.FC = () => {
           },
           {
             key: 'prospects',
-            label: <span><TeamOutlined /> Prospects & Interactions ({staffProspects.length})</span>,
+            label: <span><TeamOutlined /> Prospects Added ({staffProspects.length})</span>,
             children: (
               <div>
                 <Card
                   title={
                     <Space>
                       <TeamOutlined style={{ color: tokens.primary }} />
-                      <span>{fullName} — Prospects Portfolio ({staffProspects.length})</span>
+                      <span>{fullName} — Prospects Added Portfolio ({staffProspects.length})</span>
                     </Space>
                   }
                   extra={
@@ -1810,7 +1820,7 @@ export const StaffProfilePage: React.FC = () => {
             {summaryModalType === 'bonuses' && <TrophyOutlined style={{ color: '#16a34a' }} />}
             {summaryModalType === 'payroll' && <DollarOutlined style={{ color: '#2563eb' }} />}
             <span style={{ textTransform: 'capitalize' }}>
-              {summaryModalType === 'prospects' && (isMarketingDirector ? 'Marketing Pipeline Prospects' : 'Assigned Prospects & Leads')}
+              {summaryModalType === 'prospects' && (isMarketingDirector ? 'Director Added Prospects & Leads' : 'Assigned Prospects & Leads')}
               {summaryModalType === 'appointments' && 'Scheduled Appointments & Meetings'}
               {summaryModalType === 'attendance' && 'Verified Shifts & Attendance Punches'}
               {summaryModalType === 'leaves' && 'Staff Leave Applications'}
@@ -2188,7 +2198,7 @@ export const StaffProfilePage: React.FC = () => {
                 {fullName} — Prospects & Interaction History
               </Title>
               <Text type="secondary" style={{ fontSize: 12 }}>
-                {roleName} • {branchTitle} • {staffProspects.length} Total Prospects
+                {roleName} • {branchTitle} • {staffProspects.length} Prospects Added
               </Text>
             </div>
           </Space>
@@ -2218,7 +2228,7 @@ export const StaffProfilePage: React.FC = () => {
           items={[
             {
               key: 'prospects',
-              label: <span><TeamOutlined /> Prospect Portfolio ({staffProspects.length})</span>,
+              label: <span><TeamOutlined /> Prospects Added Portfolio ({staffProspects.length})</span>,
               children: (
                 <div>
                   <Row gutter={[12, 12]} style={{ marginBottom: 16 }}>

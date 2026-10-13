@@ -10,8 +10,14 @@ import {
   customerKeys,
 } from '@/api/customers';
 import { useProspectsQuery } from '@/api/prospects';
-import { usePaymentPlansQuery, useCreatePaymentPlanMutation } from '@/api/paymentPlans';
-import { saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
+import {
+  usePaymentPlansQuery,
+  usePaymentPlanQuery,
+  useCreatePaymentPlanMutation,
+  useUpdatePaymentPlanMutation,
+} from '@/api/paymentPlans';
+import { PaymentPlanChangeHistoryView } from '@/components/paymentPlan/PaymentPlanChangeHistoryView';
+import { saveCustomerPlanDefinition, isValidServerId } from '@/utils/paymentPlansStorage';
 import {
   createDuplicatePhoneRule,
   createDuplicateNameRule,
@@ -160,6 +166,7 @@ export const CustomersPage: React.FC = () => {
   const updateCustomer = useUpdateCustomerMutation();
   const deleteCustomer = useDeleteCustomerMutation();
   const createPaymentPlan = useCreatePaymentPlanMutation();
+  const updatePaymentPlan = useUpdatePaymentPlanMutation();
   const createAppointment = useCreateAppointmentMutation();
   const { data: appointmentsResponse } = useAppointmentsQuery({ pageSize: 500 });
   const allAppointments = appointmentsResponse?.items ?? [];
@@ -375,8 +382,15 @@ export const CustomersPage: React.FC = () => {
   const [editModal, setEditModal] = useState(false);
   const [addModal, setAddModal] = useState(false);
   const [editPaymentPlan, setEditPaymentPlan] = useState<PaymentPlan | null>(null);
+  const [activeEditTab, setActiveEditTab] = useState<'customer' | 'payment' | 'history'>('customer');
   const [form] = Form.useForm();
   const [addForm] = Form.useForm();
+
+  // Fetch full server payment plan details (with paidMinor, hasPayments, installmentsPaidCount) when edit modal is open
+  const { data: serverEditPlanDetails } = usePaymentPlanQuery(
+    editModal && editPaymentPlan?.id && isValidServerId(editPaymentPlan.id) ? editPaymentPlan.id : undefined
+  );
+  const effectiveEditPlan = serverEditPlanDetails || editPaymentPlan;
 
   // Export states
   const [exportModal, setExportModal] = useState(false);
@@ -902,11 +916,7 @@ const handleAddCustomer = async (values: any) => {
   }
 };
 
-  // ── Update Customer ──────────────────────────────────────────────────────
-  // Note: the real API's PATCH /customers/{id} only accepts firstName, lastName,
-  // phoneNumber, and address. Customer type, property, and payment plan are all
-  // fixed at creation time and cannot be changed afterwards (there is no
-  // update/delete payment-plan endpoint either).
+  // ── Update Customer & Payment Plan ─────────────────────────────────────────
   const handleUpdateCustomer = async (values: any) => {
     if (!selectedCustomer) return;
 
@@ -931,8 +941,65 @@ const handleAddCustomer = async (values: any) => {
           lastName: values.lastName,
           phoneNumber: values.phoneNumber,
           address: values.address,
+          type: values.type,
+          propertyId: values.propertyId,
         },
       });
+
+      // Update or create payment plan if customer type is payment_plan and plan details provided
+      if (values.type === 'payment_plan' && values.plan_totalAmountGHS !== undefined) {
+        const totalAmountMinor = Math.round(Number(values.plan_totalAmountGHS || 0) * 100);
+        const downPaymentMinor = Math.round(Number(values.plan_downPaymentGHS || 0) * 100);
+        const planBasis: 'months' | 'monthly_amount' = values.planBasis || 'months';
+        const numMonths = Number(values.plan_numMonths || 1);
+        const balanceMinor = Math.max(0, totalAmountMinor - downPaymentMinor);
+        const monthlyAmountMinor = values.plan_monthlyAmountGHS !== undefined
+          ? Math.round(Number(values.plan_monthlyAmountGHS) * 100)
+          : Math.round(balanceMinor / Math.max(numMonths, 1));
+        const startDate = values.plan_startDate
+          ? (dayjs.isDayjs(values.plan_startDate) ? values.plan_startDate.format('YYYY-MM-DD') : values.plan_startDate)
+          : (effectiveEditPlan?.startDate || dayjs().format('YYYY-MM-DD'));
+        const status = values.plan_status || effectiveEditPlan?.status || 'active';
+        const reason = (values.plan_reason || '').trim();
+
+        let planUpdateResult: any = null;
+
+        if (effectiveEditPlan?.id) {
+          planUpdateResult = await updatePaymentPlan.mutateAsync({
+            id: effectiveEditPlan.id,
+            reason: reason || 'Customer payment plan terms updated',
+            customerId: selectedCustomer.id,
+            propertyId: values.propertyId || selectedCustomer.propertyId,
+            totalAmountMinor,
+            downPaymentMinor,
+            planBasis,
+            numMonths: planBasis === 'months' ? numMonths : undefined,
+            monthlyAmountMinor: planBasis === 'monthly_amount' ? monthlyAmountMinor : undefined,
+            startDate,
+            status,
+          });
+        } else {
+          await createPaymentPlan.mutateAsync({
+            customerId: selectedCustomer.id,
+            totalAmountMinor,
+            downPaymentMinor,
+            planBasis,
+            numMonths: planBasis === 'months' ? numMonths : undefined,
+            monthlyAmountMinor: planBasis === 'monthly_amount' ? monthlyAmountMinor : undefined,
+            startDate,
+          });
+        }
+
+        if (planUpdateResult && (planUpdateResult.installmentsRegenerated !== undefined || planUpdateResult.installmentsPreserved !== undefined)) {
+          message.success(
+            `Plan updated. ${planUpdateResult.installmentsPreserved || 0} paid instalments preserved, ${planUpdateResult.installmentsRegenerated || 0} rescheduled.`
+          );
+        } else {
+          message.success('Customer and payment plan updated successfully!');
+        }
+      } else {
+        message.success('Customer updated successfully!');
+      }
 
       // Update cache immediately for realtime UI responsiveness
       queryClient.setQueriesData({ queryKey: customerKeys.all }, (oldData: any) => {
@@ -949,17 +1016,26 @@ const handleAddCustomer = async (values: any) => {
         return oldData;
       });
 
-      message.success('Customer updated successfully!');
-
       setEditModal(false);
       setSelectedCustomer(null);
       setEditPaymentPlan(null);
+      setActiveEditTab('customer');
       form.resetFields();
 
-      await refetchCustomers();
+      await Promise.all([
+        refetchCustomers(),
+        refetchPaymentPlans(),
+      ]);
     } catch (error: any) {
       console.error('Error updating customer:', error);
-      message.error(error?.message || 'Failed to update customer');
+      if (error?.response?.status === 403 || error?.message?.includes('permission')) {
+        message.error('You do not have permission to change payment plans.');
+      } else if (error?.response?.status === 404) {
+        message.error('Payment plan not found on server.');
+        setEditModal(false);
+      } else {
+        message.error(error?.message || 'Failed to update customer and payment plan');
+      }
     } finally {
       setLoading(false);
     }
@@ -1342,7 +1418,7 @@ const handleAddCustomer = async (values: any) => {
               onClick={() => handleOpenScheduleModal(record)}
             />
           </Tooltip>
-          {hasRole(['admin', 'secretary']) && (
+          {hasRole(['admin', 'secretary', 'accounts']) && (
             <Tooltip title="Edit">
               <Button
                 icon={<EditOutlined />}
@@ -1350,15 +1426,26 @@ const handleAddCustomer = async (values: any) => {
                   setSelectedCustomer(record);
                   const plan = getPaymentPlan(record.id);
                   setEditPaymentPlan(plan || null);
+                  const planBasis = (plan as any)?.planBasis || 'months';
 
-                  // Only the fields the real PATCH /customers/{id} endpoint accepts
                   form.setFieldsValue({
                     firstName: record.firstName,
                     lastName: record.lastName,
                     phoneNumber: record.phoneNumber,
                     address: record.address,
+                    type: record.type,
+                    propertyId: record.propertyId,
+                    planBasis: planBasis,
+                    plan_reason: '',
+                    plan_totalAmountGHS: plan ? plan.totalAmountMinor / 100 : undefined,
+                    plan_downPaymentGHS: plan ? plan.downPaymentMinor / 100 : 0,
+                    plan_numMonths: plan ? plan.numMonths : 12,
+                    plan_monthlyAmountGHS: plan ? plan.monthlyAmountMinor / 100 : undefined,
+                    plan_startDate: plan?.startDate ? dayjs(plan.startDate) : dayjs(),
+                    plan_status: plan?.status || 'active',
                   });
 
+                  setActiveEditTab('customer');
                   setEditModal(true);
                 }}
               />
@@ -2036,6 +2123,8 @@ const handleAddCustomer = async (values: any) => {
           onFinish={handleUpdateCustomer}
         >
           <Tabs
+            activeKey={activeEditTab}
+            onChange={(key) => setActiveEditTab(key as any)}
             items={[
               {
                 key: 'customer',
@@ -2112,25 +2201,70 @@ const handleAddCustomer = async (values: any) => {
                       <TextArea rows={2} placeholder="Full address" />
                     </Form.Item>
 
-                    <Alert
-                      message="Property and customer type are set when the customer is created and cannot be changed afterwards."
-                      type="info"
-                      showIcon
-                      style={{ marginBottom: 16 }}
-                    />
-
                     <Row gutter={[8, 0]}>
                       <Col xs={24} sm={12}>
-                        <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Property</Text>
-                        <Text strong>
-                          {selectedCustomer ? (getPropertyDetails(selectedCustomer.propertyId)?.houseNumber || 'N/A') : 'N/A'}
-                        </Text>
+                        <Form.Item
+                          name="type"
+                          label="Customer Type"
+                          rules={[{ required: true, message: 'Customer type is required' }]}
+                        >
+                          <Select
+                            placeholder="Select customer type"
+                            onChange={(val) => {
+                              if (val === 'payment_plan' && !form.getFieldValue('plan_totalAmountGHS')) {
+                                const prop = properties.find((p: any) => p.id === form.getFieldValue('propertyId'));
+                                if (prop) {
+                                  const total = prop.priceMinor / 100;
+                                  const down = total * 0.2;
+                                  const months = 12;
+                                  form.setFieldsValue({
+                                    plan_totalAmountGHS: total,
+                                    plan_downPaymentGHS: down,
+                                    plan_numMonths: months,
+                                    plan_monthlyAmountGHS: Math.round(((total - down) / months) * 100) / 100,
+                                    plan_startDate: dayjs(),
+                                    plan_status: 'active',
+                                  });
+                                }
+                              }
+                            }}
+                          >
+                            <Option value="payment_plan">Payment Plan</Option>
+                            <Option value="outright">Outright (Fully Paid)</Option>
+                          </Select>
+                        </Form.Item>
                       </Col>
                       <Col xs={24} sm={12}>
-                        <Text type="secondary" style={{ display: 'block', fontSize: 12 }}>Customer Type</Text>
-                        <Tag color={selectedCustomer ? getCustomerTypeColor(selectedCustomer.type) : 'default'}>
-                          {selectedCustomer ? getCustomerTypeDisplay(selectedCustomer.type) : 'N/A'}
-                        </Tag>
+                        <Form.Item
+                          name="propertyId"
+                          label="Assigned Property"
+                          rules={[{ required: true, message: 'Property is required' }]}
+                        >
+                          <Select
+                            showSearch
+                            optionFilterProp="children"
+                            placeholder="Select property"
+                            onChange={(propId) => {
+                              const prop = properties.find((p: any) => p.id === propId);
+                              if (prop && form.getFieldValue('type') === 'payment_plan') {
+                                const total = prop.priceMinor / 100;
+                                const down = total * 0.2;
+                                const months = Number(form.getFieldValue('plan_numMonths') || 12);
+                                form.setFieldsValue({
+                                  plan_totalAmountGHS: total,
+                                  plan_downPaymentGHS: down,
+                                  plan_monthlyAmountGHS: Math.round(((total - down) / months) * 100) / 100,
+                                });
+                              }
+                            }}
+                          >
+                            {properties.map((prop: any) => (
+                              <Option key={prop.id} value={prop.id}>
+                                {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
+                              </Option>
+                            ))}
+                          </Select>
+                        </Form.Item>
                       </Col>
                     </Row>
                   </>
@@ -2139,63 +2273,364 @@ const handleAddCustomer = async (values: any) => {
               {
                 key: 'payment',
                 label: 'Payment Plan',
-                children: (() => {
-                  if (!selectedCustomer || selectedCustomer.type !== 'payment_plan') {
-                    return (
-                      <div style={{ textAlign: 'center', padding: '40px 0' }}>
-                        <CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a' }} />
-                        <Title level={4} style={{ marginTop: 16 }}>Fully Paid Customer</Title>
-                        <Text type="secondary">No payment plan for fully paid customers</Text>
-                      </div>
-                    );
-                  }
+                children: (
+                  <Form.Item noStyle shouldUpdate={(prev, curr) => prev.type !== curr.type}>
+                    {({ getFieldValue }) => {
+                      const type = getFieldValue('type');
+                      if (type !== 'payment_plan') {
+                        return (
+                          <div style={{ textAlign: 'center', padding: '40px 0' }}>
+                            <CheckCircleOutlined style={{ fontSize: 48, color: '#52c41a' }} />
+                            <Title level={4} style={{ marginTop: 16 }}>Fully Paid Customer</Title>
+                            <Text type="secondary">
+                              This customer is marked as Outright (Fully Paid). Change Customer Type to "Payment Plan" in the Customer Information tab to configure an installment plan.
+                            </Text>
+                          </div>
+                        );
+                      }
 
-                  if (!editPaymentPlan) {
-                    return <Empty description="No payment plan found for this customer" />;
-                  }
+                      const hasRecordedPayments = Boolean(
+                        effectiveEditPlan?.hasPayments ||
+                        (effectiveEditPlan?.paymentCount && effectiveEditPlan.paymentCount > 0)
+                      );
 
-                  const plan = editPaymentPlan;
+                      return (
+                        <>
+                          {/* Payments Protection Warning Banner */}
+                          {hasRecordedPayments && (
+                            <Alert
+                              type="info"
+                              showIcon
+                              style={{ marginBottom: 16, borderRadius: 8 }}
+                              message="Existing Payments Protected"
+                              description={
+                                <span>
+                                  This plan has <strong>{effectiveEditPlan?.paymentCount} recorded payment(s) totalling GHS {((effectiveEditPlan?.paidMinor || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>. Those payments and the <strong>{effectiveEditPlan?.installmentsPaidCount || 0} instalment(s)</strong> they cover <strong>will not be changed</strong>. The remaining schedule will be recalculated against the new terms.
+                                </span>
+                              }
+                            />
+                          )}
 
-                  return (
-                    <>
-                      <Alert
-                        message="Payment plans are read-only"
-                        description="The API does not support editing or deleting a payment plan once it has been created."
-                        type="info"
-                        showIcon
-                        style={{ marginBottom: 16 }}
-                      />
+                          {effectiveEditPlan && (
+                            <div style={{ marginBottom: 16 }}>
+                              <Text type="secondary" style={{ display: 'block', marginBottom: 4, fontSize: 12 }}>
+                                Current Plan Progress
+                              </Text>
+                              <ProgressCell percent={effectiveEditPlan.progressPercent} band={effectiveEditPlan.progressBand} />
+                            </div>
+                          )}
 
-                      <div style={{ marginBottom: 16 }}>
-                        <ProgressCell percent={plan.progressPercent} band={plan.progressBand} />
-                      </div>
+                          {/* Plan Based On Toggle */}
+                          <Form.Item name="planBasis" label="Plan Duration Basis" initialValue="months">
+                            <Radio.Group
+                              onChange={(e) => {
+                                const basis = e.target.value;
+                                const total = Number(form.getFieldValue('plan_totalAmountGHS') || 0);
+                                const down = Number(form.getFieldValue('plan_downPaymentGHS') || 0);
+                                const balance = Math.max(0, total - down);
+                                if (basis === 'months') {
+                                  const months = Number(form.getFieldValue('plan_numMonths') || 12);
+                                  form.setFieldsValue({
+                                    plan_monthlyAmountGHS: Math.round((balance / Math.max(months, 1)) * 100) / 100,
+                                  });
+                                } else {
+                                  const monthly = Number(form.getFieldValue('plan_monthlyAmountGHS') || (balance / 12));
+                                  if (monthly > 0) {
+                                    form.setFieldsValue({
+                                      plan_numMonths: Math.max(1, Math.ceil(balance / monthly)),
+                                    });
+                                  }
+                                }
+                              }}
+                            >
+                              <Radio value="months">Fixed Number of Months</Radio>
+                              <Radio value="monthly_amount">Fixed Monthly Amount</Radio>
+                            </Radio.Group>
+                          </Form.Item>
 
-                      <Descriptions column={2} size="small" bordered>
-                        <Descriptions.Item label="Total Amount">
-                          <MoneyText minor={plan.totalAmountMinor} />
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Down Payment">
-                          <MoneyText minor={plan.downPaymentMinor} />
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Balance">
-                          <MoneyText minor={plan.balanceMinor} />
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Monthly Amount">
-                          <MoneyText minor={plan.monthlyAmountMinor} />
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Duration">
-                          {plan.numMonths} months
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Start Date">
-                          {dayjs(plan.startDate).format('MMMM DD, YYYY')}
-                        </Descriptions.Item>
-                        <Descriptions.Item label="Status" span={2}>
-                          <StatusTag status={plan.status} type="paymentPlan" />
-                        </Descriptions.Item>
-                      </Descriptions>
-                    </>
-                  );
-                })(),
+                          <Row gutter={[8, 0]}>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                name="plan_totalAmountGHS"
+                                label="Total Property Price (GHS)"
+                                rules={[
+                                  { required: true, message: 'Total amount is required' },
+                                  { type: 'number', min: 0.01, message: 'Total amount must be greater than 0' },
+                                ]}
+                              >
+                                <InputNumber
+                                  style={{ width: '100%' }}
+                                  prefix="GHS"
+                                  precision={2}
+                                  placeholder="e.g. 150000"
+                                  min={0}
+                                  onChange={(val) => {
+                                    const total = Number(val || 0);
+                                    const down = Number(form.getFieldValue('plan_downPaymentGHS') || 0);
+                                    const basis = form.getFieldValue('planBasis') || 'months';
+                                    const balance = Math.max(0, total - down);
+                                    if (basis === 'months') {
+                                      const months = Number(form.getFieldValue('plan_numMonths') || 1);
+                                      form.setFieldsValue({
+                                        plan_monthlyAmountGHS: Math.round((balance / Math.max(months, 1)) * 100) / 100,
+                                      });
+                                    } else {
+                                      const monthly = Number(form.getFieldValue('plan_monthlyAmountGHS') || 1);
+                                      if (monthly > 0) {
+                                        form.setFieldsValue({
+                                          plan_numMonths: Math.max(1, Math.ceil(balance / monthly)),
+                                        });
+                                      }
+                                    }
+                                  }}
+                                />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                name="plan_downPaymentGHS"
+                                label="Down Payment (GHS)"
+                                rules={[
+                                  { required: true, message: 'Down payment is required' },
+                                  ({ getFieldValue }) => ({
+                                    validator(_, val) {
+                                      const total = Number(getFieldValue('plan_totalAmountGHS') || 0);
+                                      if (val !== undefined && Number(val) > total) {
+                                        return Promise.reject(new Error('Down payment cannot exceed total property price'));
+                                      }
+                                      return Promise.resolve();
+                                    },
+                                  }),
+                                ]}
+                              >
+                                <InputNumber
+                                  style={{ width: '100%' }}
+                                  prefix="GHS"
+                                  precision={2}
+                                  placeholder="e.g. 30000"
+                                  min={0}
+                                  onChange={(val) => {
+                                    const total = Number(form.getFieldValue('plan_totalAmountGHS') || 0);
+                                    const down = Number(val || 0);
+                                    const basis = form.getFieldValue('planBasis') || 'months';
+                                    const balance = Math.max(0, total - down);
+                                    if (basis === 'months') {
+                                      const months = Number(form.getFieldValue('plan_numMonths') || 1);
+                                      form.setFieldsValue({
+                                        plan_monthlyAmountGHS: Math.round((balance / Math.max(months, 1)) * 100) / 100,
+                                      });
+                                    } else {
+                                      const monthly = Number(form.getFieldValue('plan_monthlyAmountGHS') || 1);
+                                      if (monthly > 0) {
+                                        form.setFieldsValue({
+                                          plan_numMonths: Math.max(1, Math.ceil(balance / monthly)),
+                                        });
+                                      }
+                                    }
+                                  }}
+                                />
+                              </Form.Item>
+                            </Col>
+                          </Row>
+
+                          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.planBasis !== curr.planBasis}>
+                            {({ getFieldValue: getFieldVal }) => {
+                              const basis = getFieldVal('planBasis') || 'months';
+                              return (
+                                <Row gutter={[8, 0]}>
+                                  <Col xs={24} sm={12}>
+                                    <Form.Item
+                                      name="plan_numMonths"
+                                      label="Duration (Total Months)"
+                                      rules={[
+                                        { required: true, message: 'Duration is required' },
+                                        () => ({
+                                          validator(_, val) {
+                                            const paidCount = effectiveEditPlan?.installmentsPaidCount || 0;
+                                            if (val !== undefined && Number(val) < paidCount) {
+                                              return Promise.reject(
+                                                new Error(`Duration cannot be less than already settled instalments (${paidCount})`)
+                                              );
+                                            }
+                                            return Promise.resolve();
+                                          },
+                                        }),
+                                      ]}
+                                      extra={basis === 'monthly_amount' ? 'Derived from balance and monthly amount' : 'Total duration of the plan'}
+                                    >
+                                      <InputNumber
+                                        style={{ width: '100%' }}
+                                        min={Math.max(1, effectiveEditPlan?.installmentsPaidCount || 1)}
+                                        max={360}
+                                        placeholder="e.g. 12"
+                                        disabled={basis === 'monthly_amount'}
+                                        onChange={(val) => {
+                                          if (basis === 'months') {
+                                            const total = Number(form.getFieldValue('plan_totalAmountGHS') || 0);
+                                            const down = Number(form.getFieldValue('plan_downPaymentGHS') || 0);
+                                            const months = Number(val || 1);
+                                            const balance = Math.max(0, total - down);
+                                            form.setFieldsValue({
+                                              plan_monthlyAmountGHS: Math.round((balance / Math.max(months, 1)) * 100) / 100,
+                                            });
+                                          }
+                                        }}
+                                      />
+                                    </Form.Item>
+                                  </Col>
+                                  <Col xs={24} sm={12}>
+                                    <Form.Item
+                                      name="plan_monthlyAmountGHS"
+                                      label="Monthly Installment (GHS)"
+                                      rules={[{ required: true, message: 'Monthly installment is required' }]}
+                                      extra={basis === 'months' ? 'Derived from balance and duration' : 'Fixed installment amount'}
+                                    >
+                                      <InputNumber
+                                        style={{ width: '100%' }}
+                                        prefix="GHS"
+                                        precision={2}
+                                        placeholder="e.g. 10000"
+                                        min={0}
+                                        disabled={basis === 'months'}
+                                        onChange={(val) => {
+                                          if (basis === 'monthly_amount') {
+                                            const total = Number(form.getFieldValue('plan_totalAmountGHS') || 0);
+                                            const down = Number(form.getFieldValue('plan_downPaymentGHS') || 0);
+                                            const monthly = Number(val || 0);
+                                            const balance = Math.max(0, total - down);
+                                            if (monthly > 0) {
+                                              form.setFieldsValue({
+                                                plan_numMonths: Math.max(1, Math.ceil(balance / monthly)),
+                                              });
+                                            }
+                                          }
+                                        }}
+                                      />
+                                    </Form.Item>
+                                  </Col>
+                                </Row>
+                              );
+                            }}
+                          </Form.Item>
+
+                          <Row gutter={[8, 0]}>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                name="plan_startDate"
+                                label="Start Date"
+                                rules={[{ required: true, message: 'Start date is required' }]}
+                              >
+                                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                              </Form.Item>
+                            </Col>
+                            <Col xs={24} sm={12}>
+                              <Form.Item
+                                name="plan_status"
+                                label="Plan Status"
+                                rules={[{ required: true, message: 'Status is required' }]}
+                              >
+                                <Select>
+                                  <Option value="active">Active</Option>
+                                  <Option value="completed">Completed</Option>
+                                  <Option value="defaulted">Defaulted</Option>
+                                  <Option value="cancelled">Cancelled</Option>
+                                </Select>
+                              </Form.Item>
+                            </Col>
+                          </Row>
+
+                          {/* Mandatory Reason with Audit Trail hint */}
+                          <Form.Item
+                            name="plan_reason"
+                            label="Reason for Change"
+                            extra="Required — this is recorded in the change history."
+                            rules={[
+                              ({ getFieldValue }) => ({
+                                validator(_, value) {
+                                  const custType = getFieldValue('type');
+                                  if (custType !== 'payment_plan') return Promise.resolve();
+
+                                  const total = Math.round(Number(getFieldValue('plan_totalAmountGHS') || 0) * 100);
+                                  const down = Math.round(Number(getFieldValue('plan_downPaymentGHS') || 0) * 100);
+                                  const months = Number(getFieldValue('plan_numMonths') || 1);
+                                  const monthly = Math.round(Number(getFieldValue('plan_monthlyAmountGHS') || 0) * 100);
+                                  const status = getFieldValue('plan_status') || 'active';
+                                  const basis = getFieldValue('planBasis') || 'months';
+
+                                  const hasChanged = effectiveEditPlan ? (
+                                    total !== effectiveEditPlan.totalAmountMinor ||
+                                    down !== effectiveEditPlan.downPaymentMinor ||
+                                    (basis === 'months' && months !== effectiveEditPlan.numMonths) ||
+                                    (basis === 'monthly_amount' && monthly !== effectiveEditPlan.monthlyAmountMinor) ||
+                                    status !== effectiveEditPlan.status ||
+                                    Boolean(value)
+                                  ) : true;
+
+                                  if (hasChanged) {
+                                    if (!value || value.trim().length < 3) {
+                                      return Promise.reject(new Error('Reason is required (3–500 characters) when updating payment plan'));
+                                    }
+                                    if (value.trim().length > 500) {
+                                      return Promise.reject(new Error('Reason cannot exceed 500 characters'));
+                                    }
+                                  }
+                                  return Promise.resolve();
+                                },
+                              }),
+                            ]}
+                          >
+                            <Input.TextArea
+                              rows={3}
+                              placeholder="e.g. Customer renegotiated price after second instalment"
+                              showCount
+                              maxLength={500}
+                            />
+                          </Form.Item>
+
+                          <Form.Item noStyle shouldUpdate={(prev, curr) =>
+                            prev.plan_totalAmountGHS !== curr.plan_totalAmountGHS ||
+                            prev.plan_downPaymentGHS !== curr.plan_downPaymentGHS
+                          }>
+                            {({ getFieldValue: getField }) => {
+                              const total = Number(getField('plan_totalAmountGHS') || 0);
+                              const down = Number(getField('plan_downPaymentGHS') || 0);
+                              const bal = Math.max(0, total - down);
+                              const pct = total > 0 ? Math.min(100, Math.round((down / total) * 100)) : 0;
+                              return (
+                                <div style={{ background: '#f5f7fa', padding: 12, borderRadius: 8, marginTop: 4 }}>
+                                  <Row gutter={16}>
+                                    <Col span={8}>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>Down Payment</Text>
+                                      <div><Text strong>GHS {down.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text></div>
+                                    </Col>
+                                    <Col span={8}>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>Remaining Balance</Text>
+                                      <div><Text strong style={{ color: bal > 0 ? '#ff4d4f' : '#52c41a' }}>GHS {bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text></div>
+                                    </Col>
+                                    <Col span={8}>
+                                      <Text type="secondary" style={{ fontSize: 12 }}>Initial Progress</Text>
+                                      <div><Text strong>{pct}%</Text></div>
+                                    </Col>
+                                  </Row>
+                                </div>
+                              );
+                            }}
+                          </Form.Item>
+                        </>
+                      );
+                    }}
+                  </Form.Item>
+                ),
+              },
+              {
+                key: 'history',
+                label: 'Change History',
+                children: (
+                  <PaymentPlanChangeHistoryView
+                    planId={effectiveEditPlan?.id}
+                    active={activeEditTab === 'history'}
+                  />
+                ),
               },
             ]}
           />
@@ -2412,7 +2847,7 @@ const handleAddCustomer = async (values: any) => {
             {/* Quick Actions */}
             <div style={{ marginBottom: 24 }}>
               <Space wrap>
-                {hasRole(['admin', 'secretary']) && (
+                {hasRole(['admin', 'secretary', 'accounts']) && (
                   <Button
                     type="primary"
                     icon={<EditOutlined />}
@@ -2420,12 +2855,25 @@ const handleAddCustomer = async (values: any) => {
                       setEditModal(true);
                       const plan = getPaymentPlan(selectedCustomer.id);
                       setEditPaymentPlan(plan || null);
+                      const planBasis = (plan as any)?.planBasis || 'months';
+
                       form.setFieldsValue({
                         firstName: selectedCustomer.firstName,
                         lastName: selectedCustomer.lastName,
                         phoneNumber: selectedCustomer.phoneNumber,
                         address: selectedCustomer.address,
+                        type: selectedCustomer.type,
+                        propertyId: selectedCustomer.propertyId,
+                        planBasis: planBasis,
+                        plan_reason: '',
+                        plan_totalAmountGHS: plan ? plan.totalAmountMinor / 100 : undefined,
+                        plan_downPaymentGHS: plan ? plan.downPaymentMinor / 100 : 0,
+                        plan_numMonths: plan ? plan.numMonths : 12,
+                        plan_monthlyAmountGHS: plan ? plan.monthlyAmountMinor / 100 : undefined,
+                        plan_startDate: plan?.startDate ? dayjs(plan.startDate) : dayjs(),
+                        plan_status: plan?.status || 'active',
                       });
+                      setActiveEditTab('customer');
                       setViewDrawerOpen(false);
                     }}
                   >

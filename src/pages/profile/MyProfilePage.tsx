@@ -562,8 +562,13 @@ export const MyProfilePage: React.FC = () => {
                 {myProspects.length}
               </div>
               <Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                {isMarketingDirector ? 'Marketing Pipeline' : 'Assigned Prospects'}
+                Prospects Added
               </Text>
+              {isMarketingDirector && (
+                <div style={{ fontSize: 10, color: '#64748b', marginTop: 2 }}>
+                  Pipeline: {allConsolidatedProspects.filter((p) => p.source === 'marketing' || !p.source).length}
+                </div>
+              )}
               <Tag color="green" style={{ marginTop: 6, fontSize: 10, borderRadius: 4 }}>
                 View List &rarr;
               </Tag>
@@ -1030,7 +1035,7 @@ export const MyProfilePage: React.FC = () => {
             {summaryModalType === 'bonuses' && <TrophyOutlined style={{ color: '#16a34a' }} />}
             {summaryModalType === 'payroll' && <DollarOutlined style={{ color: '#2563eb' }} />}
             <span style={{ textTransform: 'capitalize' }}>
-              {summaryModalType === 'prospects' && (isMarketingDirector ? 'Marketing Pipeline Prospects' : 'Assigned Prospects & Leads')}
+              {summaryModalType === 'prospects' && (isMarketingDirector ? 'Director Added Prospects & Leads' : 'Assigned Prospects & Leads')}
               {summaryModalType === 'appointments' && 'Scheduled Appointments & Meetings'}
               {summaryModalType === 'attendance' && 'Verified Shifts & Attendance Punches'}
               {summaryModalType === 'leaves' && 'Staff Leave Applications'}

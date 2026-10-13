@@ -50,6 +50,8 @@ export interface UpdateCustomerPayload {
   lastName?: string;
   phoneNumber?: string;
   address?: string;
+  type?: CustomerType;
+  propertyId?: string;
 }
 
 export interface CustomerDetail extends Customer {
@@ -194,6 +196,14 @@ export const useUpdateCustomerMutation = () => {
         const response = await apiClient.patch<ApiResponse<Customer>>(`/customers/${id}`, data);
         return unwrapData(response);
       } catch (error) {
+        if (error instanceof AxiosError && error.response?.status === 405) {
+          try {
+            const putRes = await apiClient.put<ApiResponse<Customer>>(`/customers/${id}`, data);
+            return unwrapData(putRes);
+          } catch (putErr) {
+            console.error('Error in PUT fallback updating customer:', putErr);
+          }
+        }
         if (error instanceof AxiosError) {
           console.error('Error updating customer:', {
             status: error.response?.status,

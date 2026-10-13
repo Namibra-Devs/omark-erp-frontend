@@ -100,8 +100,9 @@ export function isStaffNameMatching(candidateRaw: string | undefined | null, sta
   if (cTokens.join('') === sTokens.join('')) return true;
 
   // 4. Token containment check for first and last name
-  const fName = typeof staffUser === 'object' && staffUser.firstName ? normalize(staffUser.firstName) : '';
-  const lName = typeof staffUser === 'object' && staffUser.lastName ? normalize(staffUser.lastName) : '';
+  const sParts = sClean.split(' ').filter(Boolean);
+  const fName = (typeof staffUser === 'object' && staffUser.firstName ? normalize(staffUser.firstName) : '') || sParts[0] || '';
+  const lName = (typeof staffUser === 'object' && staffUser.lastName ? normalize(staffUser.lastName) : '') || sParts.slice(1).join(' ') || '';
 
   if (fName && cClean.includes(fName)) {
     if (lName && (cClean.includes(lName) || cNoSpace.includes(lName.replace(/\s+/g, '')))) {
@@ -110,6 +111,137 @@ export function isStaffNameMatching(candidateRaw: string | undefined | null, sta
     // Specific match for Lawrencia Adugyemfi / Adu-Gyamfi variations
     if (fName.includes('lawrencia') && (cClean.includes('adu') || cClean.includes('gyemfi') || cClean.includes('gyamfi'))) {
       return true;
+    }
+  }
+
+  // Token subset match: if all parts of candidate are in staffName or vice-versa
+  if (cTokens.length >= 2 && cTokens.every((t) => sClean.includes(t))) return true;
+  if (sTokens.length >= 2 && sTokens.every((t) => cClean.includes(t))) return true;
+
+  // Dedicated Lawrencia Adugyemfi / Adu-Gyamfi / Director variation match
+  if (sClean.includes('lawrencia') && (cClean.includes('lawrencia') || (cClean.includes('adu') && cClean.includes('gy')))) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Checks if a prospect was created/added by a given staff member.
+ */
+export function isProspectCreatedByStaff(
+  prospect: Prospect,
+  staffUser: any
+): boolean {
+  if (!prospect || !staffUser) return false;
+
+  const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
+  const staffEmail = typeof staffUser === 'object' ? staffUser.email : undefined;
+
+  // 1. Direct ID matching on creation fields
+  if (staffId) {
+    if (
+      areIdsEqual(prospect.createdByUserId, staffId) ||
+      areIdsEqual((prospect as any).creatorId, staffId) ||
+      areIdsEqual((prospect as any).created_by_user_id, staffId) ||
+      areIdsEqual((prospect as any).creator?.id, staffId) ||
+      areIdsEqual((prospect as any).created_by?.id, staffId)
+    ) {
+      return true;
+    }
+  }
+
+  // 2. Name matching on creator name
+  const candidateNames = [
+    prospect.createdByName,
+    (prospect as any).creatorName,
+    (prospect as any).creator?.name,
+    (prospect as any).created_by_name,
+    (prospect as any).created_by?.name,
+  ];
+
+  for (const cName of candidateNames) {
+    if (cName && isStaffNameMatching(cName, staffUser)) {
+      return true;
+    }
+  }
+
+  // 3. Email matching
+  if (staffEmail && staffEmail.length > 0) {
+    const sEmail = staffEmail.trim().toLowerCase();
+    const candidateEmails = [
+      (prospect as any).creatorEmail,
+      (prospect as any).creator?.email,
+      (prospect as any).created_by_email,
+    ];
+    for (const cEmail of candidateEmails) {
+      if (cEmail && String(cEmail).trim().toLowerCase() === sEmail) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
+ * Checks if a prospect is assigned to a given staff member.
+ */
+export function isProspectAssignedToStaff(
+  prospect: Prospect,
+  staffUser: any
+): boolean {
+  if (!prospect || !staffUser) return false;
+
+  const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
+  const staffEmail = typeof staffUser === 'object' ? staffUser.email : undefined;
+
+  // 1. Direct ID matching on assignment fields
+  if (staffId) {
+    if (
+      areIdsEqual(prospect.assignedUserId, staffId) ||
+      areIdsEqual((prospect as any).assignedStaffId, staffId) ||
+      areIdsEqual((prospect as any).assignedTo, staffId) ||
+      areIdsEqual((prospect as any).assigned_user_id, staffId) ||
+      areIdsEqual((prospect as any).assigned_staff_id, staffId) ||
+      areIdsEqual((prospect as any).userId, staffId) ||
+      areIdsEqual((prospect as any).staffId, staffId) ||
+      areIdsEqual((prospect as any).marketerId, staffId) ||
+      areIdsEqual((prospect as any).agentId, staffId) ||
+      areIdsEqual((prospect as any).assignedUser?.id, staffId)
+    ) {
+      return true;
+    }
+  }
+
+  // 2. Name matching on assigned staff name
+  const candidateNames = [
+    (prospect as any).assignedStaffName,
+    (prospect as any).assignedUserName,
+    (prospect as any).marketerName,
+    (prospect as any).agentName,
+    (prospect as any).assignedUser?.name,
+  ];
+
+  for (const cName of candidateNames) {
+    if (cName && isStaffNameMatching(cName, staffUser)) {
+      return true;
+    }
+  }
+
+  // 3. Email matching
+  if (staffEmail && staffEmail.length > 0) {
+    const sEmail = staffEmail.trim().toLowerCase();
+    const candidateEmails = [
+      (prospect as any).assignedUserEmail,
+      (prospect as any).assignedUser?.email,
+      (prospect as any).staffEmail,
+      (prospect as any).marketerEmail,
+    ];
+    for (const cEmail of candidateEmails) {
+      if (cEmail && String(cEmail).trim().toLowerCase() === sEmail) {
+        return true;
+      }
     }
   }
 
@@ -126,67 +258,7 @@ export function isProspectAssignedOrCreatedByStaff(
   staffUser: any
 ): boolean {
   if (!prospect || !staffUser) return false;
-
-  const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
-  const staffEmail = typeof staffUser === 'object' ? staffUser.email : undefined;
-
-  // 1. Direct ID matching across all standard and legacy fields
-  if (staffId) {
-    if (
-      areIdsEqual(prospect.assignedUserId, staffId) ||
-      areIdsEqual((prospect as any).assignedStaffId, staffId) ||
-      areIdsEqual((prospect as any).assignedTo, staffId) ||
-      areIdsEqual((prospect as any).assigned_user_id, staffId) ||
-      areIdsEqual((prospect as any).assigned_staff_id, staffId) ||
-      areIdsEqual(prospect.createdByUserId, staffId) ||
-      areIdsEqual((prospect as any).creatorId, staffId) ||
-      areIdsEqual((prospect as any).created_by_user_id, staffId) ||
-      areIdsEqual((prospect as any).userId, staffId) ||
-      areIdsEqual((prospect as any).staffId, staffId) ||
-      areIdsEqual((prospect as any).marketerId, staffId) ||
-      areIdsEqual((prospect as any).agentId, staffId) ||
-      areIdsEqual((prospect as any).creator?.id, staffId) ||
-      areIdsEqual((prospect as any).assignedUser?.id, staffId)
-    ) {
-      return true;
-    }
-  }
-
-  // 2. Name matching with flexible Akan / Ghanaian spelling normalization
-  const candidateNames = [
-    prospect.createdByName,
-    (prospect as any).assignedStaffName,
-    (prospect as any).assignedUserName,
-    (prospect as any).marketerName,
-    (prospect as any).agentName,
-    (prospect as any).creatorName,
-    (prospect as any).creator?.name,
-    (prospect as any).assignedUser?.name,
-  ];
-
-  for (const cName of candidateNames) {
-    if (cName && isStaffNameMatching(cName, staffUser)) {
-      return true;
-    }
-  }
-
-  // 3. Email matching if present
-  if (staffEmail && staffEmail.length > 0) {
-    const sEmail = staffEmail.trim().toLowerCase();
-    const candidateEmails = [
-      (prospect as any).creatorEmail,
-      (prospect as any).assignedUserEmail,
-      (prospect as any).staffEmail,
-      (prospect as any).marketerEmail,
-    ];
-    for (const cEmail of candidateEmails) {
-      if (cEmail && String(cEmail).trim().toLowerCase() === sEmail) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  return isProspectCreatedByStaff(prospect, staffUser) || isProspectAssignedToStaff(prospect, staffUser);
 }
 
 /**
@@ -241,8 +313,8 @@ export function getStaffAssignedProspectCount(
   allProspects: Prospect[],
   staffUser: any,
   branches: BranchInfo[] = []
-): { count: number; directCount: number; isDirector: boolean } {
-  if (!staffUser) return { count: 0, directCount: 0, isDirector: false };
+): { count: number; directCount: number; isDirector: boolean; pipelineCount: number } {
+  if (!staffUser) return { count: 0, directCount: 0, isDirector: false, pipelineCount: 0 };
 
   const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
   const stored = staffId ? getStoredUserAssignment(staffId) : undefined;
@@ -254,10 +326,15 @@ export function getStaffAssignedProspectCount(
     isProspectAssignedOrCreatedByStaff(p, { ...stored, ...base })
   );
 
+  const pipelineCount = allProspects.filter(
+    (p) => p.source === 'marketing' || !p.source
+  ).length;
+
   return {
     count: directList.length,
     directCount: directList.length,
     isDirector,
+    pipelineCount,
   };
 }
 
@@ -315,16 +392,7 @@ export function distributeProspectsAcrossMarketingStaff(
     // 1. Check if created by a marketing staff member
     let matchedCreatorStaff: any = null;
     for (const s of marketingStaffUsers) {
-      if (
-        areIdsEqual(prospect.createdByUserId, s.id) ||
-        areIdsEqual((prospect as any).creatorId, s.id) ||
-        areIdsEqual((prospect as any).created_by_user_id, s.id)
-      ) {
-        matchedCreatorStaff = s;
-        break;
-      }
-      const cName = prospect.createdByName || (prospect as any).creatorName;
-      if (cName && isStaffNameMatching(cName, s)) {
+      if (isProspectCreatedByStaff(prospect, s)) {
         matchedCreatorStaff = s;
         break;
       }
@@ -333,16 +401,7 @@ export function distributeProspectsAcrossMarketingStaff(
     // 2. Check if assigned to a marketing staff member
     let matchedAssigneeStaff: any = null;
     for (const s of marketingStaffUsers) {
-      if (
-        areIdsEqual(prospect.assignedUserId, s.id) ||
-        areIdsEqual((prospect as any).assignedStaffId, s.id) ||
-        areIdsEqual((prospect as any).assignedTo, s.id)
-      ) {
-        matchedAssigneeStaff = s;
-        break;
-      }
-      const aName = (prospect as any).assignedStaffName || (prospect as any).assignedUserName;
-      if (aName && isStaffNameMatching(aName, s)) {
+      if (isProspectAssignedToStaff(prospect, s)) {
         matchedAssigneeStaff = s;
         break;
       }
@@ -352,8 +411,19 @@ export function distributeProspectsAcrossMarketingStaff(
       staffMap.get(String(matchedAssigneeStaff.id).trim())?.assigned.push(prospect);
     }
 
+    // 3. Fallback: if not matched specifically as creator or assignee, check general isProspectAssignedOrCreatedByStaff
+    let fallbackStaff: any = null;
+    if (!matchedCreatorStaff && !matchedAssigneeStaff) {
+      for (const s of marketingStaffUsers) {
+        if (isProspectAssignedOrCreatedByStaff(prospect, s)) {
+          fallbackStaff = s;
+          break;
+        }
+      }
+    }
+
     // Primary attribution for the staff table: who added / brought in the lead
-    const primaryStaff = matchedCreatorStaff || matchedAssigneeStaff;
+    const primaryStaff = matchedCreatorStaff || matchedAssigneeStaff || fallbackStaff;
     if (primaryStaff) {
       staffMap.get(String(primaryStaff.id).trim())?.added.push(prospect);
     } else {

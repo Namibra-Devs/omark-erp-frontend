@@ -79,6 +79,7 @@ import {
   usePaymentPlansQuery,
   usePaymentPlanQuery,
   useCreatePaymentPlanMutation,
+  useUpdatePaymentPlanMutation,
   getProgressBand,
   type PaymentPlan,
   type PaymentPlanStatus,
@@ -89,6 +90,7 @@ import {
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
 import { PaymentPlanScheduleTable } from '@/components/paymentPlan/PaymentPlanScheduleTable';
+import { PaymentPlanChangeHistoryView } from '@/components/paymentPlan/PaymentPlanChangeHistoryView';
 import {
   buildPaymentPlanSchedule,
   getPlanPaymentOverrides,
@@ -155,6 +157,9 @@ export const PaymentPlansPage: React.FC = () => {
   const [recordPaymentModalOpen, setRecordPaymentModalOpen] = useState(false);
   const [addModal, setAddModal] = useState(false);
   const [addForm] = Form.useForm();
+  const [editPlanModalOpen, setEditPlanModalOpen] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<PaymentPlan | null>(null);
+  const [editPlanForm] = Form.useForm();
 
   // Rehydrate multi-tier payment plans & overrides from server settings & IndexedDB
   useEffect(() => {
@@ -228,6 +233,7 @@ export const PaymentPlansPage: React.FC = () => {
 
   // ── API Mutations ──────────────────────────────────────────────────────────
   const createPaymentPlan = useCreatePaymentPlanMutation();
+  const updatePaymentPlan = useUpdatePaymentPlanMutation();
 
   // ── Data Mapping with Branch Isolation ────────────────────────────────────
   const { data: branches = [] } = useBranchesQuery();
@@ -580,6 +586,76 @@ export const PaymentPlansPage: React.FC = () => {
     }
   };
 
+  const openEditPlanModal = (plan: PaymentPlan) => {
+    setEditingPlan(plan);
+    const planBasis = (plan as any)?.planBasis || 'months';
+    editPlanForm.setFieldsValue({
+      totalAmountGHS: plan.totalAmountMinor ? plan.totalAmountMinor / 100 : 0,
+      downPaymentGHS: plan.downPaymentMinor ? plan.downPaymentMinor / 100 : 0,
+      planBasis: planBasis,
+      numMonths: plan.numMonths || 12,
+      monthlyAmountGHS: plan.monthlyAmountMinor ? plan.monthlyAmountMinor / 100 : 0,
+      startDate: plan.startDate ? dayjs(plan.startDate) : dayjs(),
+      status: plan.status || 'active',
+      reason: '',
+    });
+    setEditPlanModalOpen(true);
+  };
+
+  const handleUpdatePlanSubmit = async (values: any) => {
+    if (!editingPlan) return;
+    try {
+      const totalAmountMinor = Math.round(Number(values.totalAmountGHS || 0) * 100);
+      const downPaymentMinor = Math.round(Number(values.downPaymentGHS || 0) * 100);
+      const planBasis: 'months' | 'monthly_amount' = values.planBasis || 'months';
+      const numMonths = Number(values.numMonths || 1);
+      const balanceMinor = Math.max(0, totalAmountMinor - downPaymentMinor);
+      const monthlyAmountMinor = values.monthlyAmountGHS !== undefined
+        ? Math.round(Number(values.monthlyAmountGHS) * 100)
+        : Math.round(balanceMinor / Math.max(numMonths, 1));
+      const startDate = values.startDate
+        ? (dayjs.isDayjs(values.startDate) ? values.startDate.format('YYYY-MM-DD') : values.startDate)
+        : (editingPlan.startDate || dayjs().format('YYYY-MM-DD'));
+      const status = values.status || editingPlan.status || 'active';
+      const reason = (values.reason || '').trim();
+
+      const result: any = await updatePaymentPlan.mutateAsync({
+        id: editingPlan.id,
+        reason: reason || 'Payment plan updated',
+        customerId: editingPlan.customerId,
+        propertyId: editingPlan.propertyId,
+        totalAmountMinor,
+        downPaymentMinor,
+        planBasis,
+        numMonths: planBasis === 'months' ? numMonths : undefined,
+        monthlyAmountMinor: planBasis === 'monthly_amount' ? monthlyAmountMinor : undefined,
+        startDate,
+        status,
+      });
+
+      if (result?.installmentsRegenerated !== undefined || result?.installmentsPreserved !== undefined) {
+        message.success(
+          `Plan updated. ${result.installmentsPreserved || 0} paid instalments preserved, ${result.installmentsRegenerated || 0} rescheduled.`
+        );
+      } else {
+        message.success('Payment plan updated successfully!');
+      }
+      setEditPlanModalOpen(false);
+      setEditingPlan(null);
+      refetchPaymentPlans();
+    } catch (err: any) {
+      console.error('Error updating payment plan:', err);
+      if (err?.response?.status === 403 || err?.message?.includes('permission')) {
+        message.error('You do not have permission to change payment plans.');
+      } else if (err?.response?.status === 404) {
+        message.error('Payment plan not found on server.');
+        setEditPlanModalOpen(false);
+      } else {
+        message.error(err?.message || 'Failed to update payment plan');
+      }
+    }
+  };
+
   // ── Export function ──────────────────────────────────────────────────────
   const handleExport = () => {
     setExportLoading(true);
@@ -872,10 +948,16 @@ export const PaymentPlansPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 195,
+      width: 235,
       fixed: 'right' as const,
       render: (_: any, record: PaymentPlan) => (
         <Space>
+          <Tooltip title="Edit Payment Plan">
+            <Button
+              icon={<EditOutlined />}
+              onClick={() => openEditPlanModal(record)}
+            />
+          </Tooltip>
           <Tooltip title="Record Payment">
             <Button
               type="primary"
@@ -1050,6 +1132,12 @@ export const PaymentPlansPage: React.FC = () => {
             >
               Generate Statement PDF
             </Button>
+            <Button
+              icon={<EditOutlined />}
+              onClick={() => openEditPlanModal(activePlan)}
+            >
+              Edit Plan
+            </Button>
           </Space>
         </div>
 
@@ -1130,6 +1218,15 @@ export const PaymentPlansPage: React.FC = () => {
                   <Text>Last updated {dayjs(activePlan.updatedAt).fromNow()}</Text>
                 </Timeline.Item>
               </Timeline>
+            </Card>
+          </Col>
+        </Row>
+
+        {/* Change History (Server Audit Trail) */}
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col span={24}>
+            <Card size="small" title="Change History" bordered={false} style={{ background: '#fafafa' }}>
+              <PaymentPlanChangeHistoryView planId={activePlan.id} active={viewDrawerOpen} />
             </Card>
           </Col>
         </Row>
@@ -1555,6 +1652,341 @@ export const PaymentPlansPage: React.FC = () => {
                 addForm.resetFields();
               }}>
                 Cancel
+              </Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      {/* Edit Payment Plan Modal */}
+      <Modal
+        title={
+          <Space>
+            <EditOutlined style={{ color: tokens.primary }} />
+            <Text strong>Edit Payment Plan</Text>
+          </Space>
+        }
+        open={editPlanModalOpen}
+        onCancel={() => {
+          setEditPlanModalOpen(false);
+          setEditingPlan(null);
+          editPlanForm.resetFields();
+        }}
+        footer={null}
+        width={600}
+        style={{ maxWidth: '95%', top: 20 }}
+        bodyStyle={{ padding: '16px', maxHeight: '70vh', overflowY: 'auto' }}
+      >
+        <Form
+          form={editPlanForm}
+          layout="vertical"
+          onFinish={handleUpdatePlanSubmit}
+        >
+          {editingPlan && (
+            <div style={{ marginBottom: 16 }}>
+              <Descriptions size="small" column={2}>
+                <Descriptions.Item label="Customer">
+                  <Text strong>{getCustomerName(editingPlan.customerId)}</Text>
+                </Descriptions.Item>
+                <Descriptions.Item label="Property">
+                  <Text strong>{getCustomerProperty(editingPlan.customerId)}</Text>
+                </Descriptions.Item>
+              </Descriptions>
+            </div>
+          )}
+
+          {/* Payments Protection Warning Banner */}
+          {(editingPlan?.hasPayments || (editingPlan?.paymentCount && editingPlan.paymentCount > 0)) && (
+            <Alert
+              type="info"
+              showIcon
+              style={{ marginBottom: 16, borderRadius: 8 }}
+              message="Existing Payments Protected"
+              description={
+                <span>
+                  This plan has <strong>{editingPlan.paymentCount} recorded payment(s) totalling GHS {((editingPlan.paidMinor || 0) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>. Those payments and the <strong>{editingPlan.installmentsPaidCount || 0} instalment(s)</strong> they cover <strong>will not be changed</strong>. The remaining schedule will be recalculated against the new terms.
+                </span>
+              }
+            />
+          )}
+
+          {/* Plan Duration Basis Toggle */}
+          <Form.Item name="planBasis" label="Plan Duration Basis" initialValue="months">
+            <Radio.Group
+              onChange={(e) => {
+                const basis = e.target.value;
+                const total = Number(editPlanForm.getFieldValue('totalAmountGHS') || 0);
+                const down = Number(editPlanForm.getFieldValue('downPaymentGHS') || 0);
+                const balance = Math.max(0, total - down);
+                if (basis === 'months') {
+                  const months = Number(editPlanForm.getFieldValue('numMonths') || 12);
+                  editPlanForm.setFieldsValue({
+                    monthlyAmountGHS: Math.round((balance / Math.max(months, 1)) * 100) / 100,
+                  });
+                } else {
+                  const monthly = Number(editPlanForm.getFieldValue('monthlyAmountGHS') || (balance / 12));
+                  if (monthly > 0) {
+                    editPlanForm.setFieldsValue({
+                      numMonths: Math.max(1, Math.ceil(balance / monthly)),
+                    });
+                  }
+                }
+              }}
+            >
+              <Radio value="months">Fixed Number of Months</Radio>
+              <Radio value="monthly_amount">Fixed Monthly Amount</Radio>
+            </Radio.Group>
+          </Form.Item>
+
+          <Row gutter={[12, 0]}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="totalAmountGHS"
+                label="Total Amount (GHS)"
+                rules={[
+                  { required: true, message: 'Total amount is required' },
+                  { type: 'number', min: 0.01, message: 'Total amount must be greater than 0' },
+                ]}
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  prefix="GHS"
+                  precision={2}
+                  min={0}
+                  onChange={(val) => {
+                    const total = Number(val || 0);
+                    const down = Number(editPlanForm.getFieldValue('downPaymentGHS') || 0);
+                    const basis = editPlanForm.getFieldValue('planBasis') || 'months';
+                    const bal = Math.max(0, total - down);
+                    if (basis === 'months') {
+                      const months = Number(editPlanForm.getFieldValue('numMonths') || 1);
+                      editPlanForm.setFieldsValue({
+                        monthlyAmountGHS: Math.round((bal / Math.max(months, 1)) * 100) / 100,
+                      });
+                    } else {
+                      const monthly = Number(editPlanForm.getFieldValue('monthlyAmountGHS') || 1);
+                      if (monthly > 0) {
+                        editPlanForm.setFieldsValue({
+                          numMonths: Math.max(1, Math.ceil(bal / monthly)),
+                        });
+                      }
+                    }
+                  }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="downPaymentGHS"
+                label="Down Payment (GHS)"
+                rules={[
+                  { required: true, message: 'Down payment is required' },
+                  ({ getFieldValue }) => ({
+                    validator(_, val) {
+                      const total = Number(getFieldValue('totalAmountGHS') || 0);
+                      if (val !== undefined && Number(val) > total) {
+                        return Promise.reject(new Error('Down payment cannot exceed total amount'));
+                      }
+                      return Promise.resolve();
+                    },
+                  }),
+                ]}
+              >
+                <InputNumber
+                  style={{ width: '100%' }}
+                  prefix="GHS"
+                  precision={2}
+                  min={0}
+                  onChange={(val) => {
+                    const total = Number(editPlanForm.getFieldValue('totalAmountGHS') || 0);
+                    const down = Number(val || 0);
+                    const basis = editPlanForm.getFieldValue('planBasis') || 'months';
+                    const bal = Math.max(0, total - down);
+                    if (basis === 'months') {
+                      const months = Number(editPlanForm.getFieldValue('numMonths') || 1);
+                      editPlanForm.setFieldsValue({
+                        monthlyAmountGHS: Math.round((bal / Math.max(months, 1)) * 100) / 100,
+                      });
+                    } else {
+                      const monthly = Number(editPlanForm.getFieldValue('monthlyAmountGHS') || 1);
+                      if (monthly > 0) {
+                        editPlanForm.setFieldsValue({
+                          numMonths: Math.max(1, Math.ceil(bal / monthly)),
+                        });
+                      }
+                    }
+                  }}
+                />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item noStyle shouldUpdate={(prev, curr) => prev.planBasis !== curr.planBasis}>
+            {({ getFieldValue }) => {
+              const basis = getFieldValue('planBasis') || 'months';
+              return (
+                <Row gutter={[12, 0]}>
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      name="numMonths"
+                      label="Duration (Total Months)"
+                      rules={[
+                        { required: true, message: 'Duration is required' },
+                        () => ({
+                          validator(_, val) {
+                            const paidCount = editingPlan?.installmentsPaidCount || 0;
+                            if (val !== undefined && Number(val) < paidCount) {
+                              return Promise.reject(
+                                new Error(`Duration cannot be less than already settled instalments (${paidCount})`)
+                              );
+                            }
+                            return Promise.resolve();
+                          },
+                        }),
+                      ]}
+                      extra={basis === 'monthly_amount' ? 'Derived from balance and monthly installment' : 'Total duration of the plan'}
+                    >
+                      <InputNumber
+                        style={{ width: '100%' }}
+                        min={Math.max(1, editingPlan?.installmentsPaidCount || 1)}
+                        max={360}
+                        disabled={basis === 'monthly_amount'}
+                        onChange={(val) => {
+                          if (basis === 'months') {
+                            const total = Number(editPlanForm.getFieldValue('totalAmountGHS') || 0);
+                            const down = Number(editPlanForm.getFieldValue('downPaymentGHS') || 0);
+                            const months = Number(val || 1);
+                            const bal = Math.max(0, total - down);
+                            editPlanForm.setFieldsValue({
+                              monthlyAmountGHS: Math.round((bal / Math.max(months, 1)) * 100) / 100,
+                            });
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                  </Col>
+                  <Col xs={24} sm={12}>
+                    <Form.Item
+                      name="monthlyAmountGHS"
+                      label="Monthly Installment (GHS)"
+                      rules={[{ required: true, message: 'Monthly installment is required' }]}
+                      extra={basis === 'months' ? 'Derived from balance and duration' : 'Fixed installment amount'}
+                    >
+                      <InputNumber
+                        style={{ width: '100%' }}
+                        prefix="GHS"
+                        precision={2}
+                        min={0}
+                        disabled={basis === 'months'}
+                        onChange={(val) => {
+                          if (basis === 'monthly_amount') {
+                            const total = Number(editPlanForm.getFieldValue('totalAmountGHS') || 0);
+                            const down = Number(editPlanForm.getFieldValue('downPaymentGHS') || 0);
+                            const monthly = Number(val || 0);
+                            const bal = Math.max(0, total - down);
+                            if (monthly > 0) {
+                              editPlanForm.setFieldsValue({
+                                numMonths: Math.max(1, Math.ceil(bal / monthly)),
+                              });
+                            }
+                          }
+                        }}
+                      />
+                    </Form.Item>
+                  </Col>
+                </Row>
+              );
+            }}
+          </Form.Item>
+
+          <Row gutter={[12, 0]}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="startDate"
+                label="Start Date"
+                rules={[{ required: true, message: 'Start date is required' }]}
+              >
+                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="status"
+                label="Plan Status"
+                rules={[{ required: true, message: 'Status is required' }]}
+              >
+                <Select>
+                  <Select.Option value="active">Active</Select.Option>
+                  <Select.Option value="completed">Completed</Select.Option>
+                  <Select.Option value="defaulted">Defaulted</Select.Option>
+                  <Select.Option value="cancelled">Cancelled</Select.Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          {/* Mandatory Reason with Audit Trail hint */}
+          <Form.Item
+            name="reason"
+            label="Reason for Change"
+            extra="Required — this is recorded in the change history."
+            rules={[
+              { required: true, message: 'Please provide a reason (3–500 characters) for the audit trail' },
+              { min: 3, message: 'Reason must be at least 3 characters' },
+              { max: 500, message: 'Reason cannot exceed 500 characters' },
+            ]}
+          >
+            <Input.TextArea
+              rows={3}
+              placeholder="e.g. Customer renegotiated price after second instalment"
+              showCount
+              maxLength={500}
+            />
+          </Form.Item>
+
+          <Form.Item noStyle shouldUpdate={(prev, curr) =>
+            prev.totalAmountGHS !== curr.totalAmountGHS ||
+            prev.downPaymentGHS !== curr.downPaymentGHS
+          }>
+            {({ getFieldValue: getField }) => {
+              const total = Number(getField('totalAmountGHS') || 0);
+              const down = Number(getField('downPaymentGHS') || 0);
+              const bal = Math.max(0, total - down);
+              const pct = total > 0 ? Math.min(100, Math.round((down / total) * 100)) : 0;
+              return (
+                <div style={{ background: '#f5f7fa', padding: 12, borderRadius: 8, marginTop: 4, marginBottom: 16 }}>
+                  <Row gutter={16}>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Down Payment</Text>
+                      <div><Text strong>GHS {down.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text></div>
+                    </Col>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Remaining Balance</Text>
+                      <div><Text strong style={{ color: bal > 0 ? '#ff4d4f' : '#52c41a' }}>GHS {bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</Text></div>
+                    </Col>
+                    <Col span={8}>
+                      <Text type="secondary" style={{ fontSize: 12 }}>Progress</Text>
+                      <div><Text strong>{pct}%</Text></div>
+                    </Col>
+                  </Row>
+                </div>
+              );
+            }}
+          </Form.Item>
+
+          <Divider />
+
+          <Form.Item style={{ marginBottom: 0 }}>
+            <Space style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <Button onClick={() => {
+                setEditPlanModalOpen(false);
+                setEditingPlan(null);
+                editPlanForm.resetFields();
+              }}>
+                Cancel
+              </Button>
+              <Button type="primary" htmlType="submit" loading={updatePaymentPlan.isPending}>
+                Save Changes
               </Button>
             </Space>
           </Form.Item>

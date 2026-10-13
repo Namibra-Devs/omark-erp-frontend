@@ -135,6 +135,30 @@ export interface Property {
   updatedAt: string;
 }
 
+export interface PlanFieldDiff {
+  field: string;
+  from: any;
+  to: any;
+}
+
+export interface PaymentPlanChange {
+  id: string;
+  changes: PlanFieldDiff[];
+  reason: string;
+  changedBy?: {
+    firstName?: string;
+    lastName?: string;
+    email?: string;
+    role?: string;
+  };
+  changedByUserId?: string;
+  paymentsAtChange?: number;
+  paidMinorAtChange?: number;
+  installmentsPreserved?: number;
+  installmentsRegenerated?: number;
+  createdAt: string;
+}
+
 export interface PaymentPlan {
   id: string;
   customerId: string;
@@ -154,6 +178,14 @@ export interface PaymentPlan {
   customerName?: string;
   customerPhone?: string;
   propertyName?: string;
+  paidMinor?: number;
+  paymentCount?: number;
+  hasPayments?: boolean;
+  outstandingMinor?: number;
+  installmentsPaidCount?: number;
+  installmentsPreserved?: number;
+  installmentsRegenerated?: number;
+  change?: PaymentPlanChange | null;
 }
 
 export interface Installment {

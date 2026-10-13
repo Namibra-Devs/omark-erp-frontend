@@ -2,9 +2,23 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
-import type { PaymentPlan, PaymentPlanStatus, ProgressBand, Installment, Payment, ApiResponse } from '@/types';
+import type {
+  PaymentPlan,
+  PaymentPlanStatus,
+  ProgressBand,
+  Installment,
+  Payment,
+  ApiResponse,
+  PaymentPlanChange,
+  PlanFieldDiff,
+} from '@/types';
 
-export type { PaymentPlan, PaymentPlanStatus, ProgressBand, Installment };
+export type { PaymentPlan, PaymentPlanStatus, ProgressBand, Installment, PaymentPlanChange, PlanFieldDiff };
+
+export interface PaymentPlanChangesResult {
+  total: number;
+  changes: PaymentPlanChange[];
+}
 
 export interface PaymentPlansListParams {
   page?: number;
@@ -30,6 +44,22 @@ export interface CreatePaymentPlanPayload {
   startDate: string;
 }
 
+export interface UpdatePaymentPlanPayload {
+  id: string;
+  reason: string;
+  totalAmountMinor?: number;
+  downPaymentMinor?: number;
+  balanceMinor?: number;
+  planBasis?: 'months' | 'monthly_amount';
+  numMonths?: number;
+  monthlyAmountMinor?: number;
+  startDate?: string;
+  status?: PaymentPlanStatus;
+  customerId?: string;
+  propertyId?: string;
+  currency?: string;
+}
+
 // --- Query Keys ---
 
 export const paymentPlansKeys = {
@@ -39,6 +69,7 @@ export const paymentPlansKeys = {
   details: () => [...paymentPlansKeys.all, 'detail'] as const,
   detail: (id: string) => [...paymentPlansKeys.details(), id] as const,
   installments: (planId: string) => [...paymentPlansKeys.all, 'installments', planId] as const,
+  changes: (planId: string) => [...paymentPlansKeys.all, 'changes', planId] as const,
 };
 
 // --- Payment Plan Queries ---
@@ -46,6 +77,7 @@ export const paymentPlansKeys = {
 import {
   getStoredPaymentPlans,
   saveStoredPaymentPlan,
+  saveCustomerPlanDefinition,
   getStoredPaymentOverrides,
   isValidServerId,
 } from '@/utils/paymentPlansStorage';
@@ -233,6 +265,39 @@ export function useInstallmentsQuery(planId: string | undefined) {
   });
 }
 
+export function usePaymentPlanChangesQuery(planId: string | undefined, enabled: boolean = true) {
+  return useQuery({
+    queryKey: paymentPlansKeys.changes(planId ?? ''),
+    queryFn: async (): Promise<PaymentPlanChangesResult> => {
+      if (!planId) return { total: 0, changes: [] };
+      try {
+        const res = await apiClient.get<ApiResponse<{ total: number; changes: PaymentPlanChange[] } | PaymentPlanChange[]>>(
+          `/payment-plans/${planId}/changes`,
+          { params: { limit: 50 } }
+        );
+        const data = unwrapData(res) as any;
+        if (Array.isArray(data)) {
+          return { total: data.length, changes: data };
+        }
+        if (data && Array.isArray(data.changes)) {
+          return { total: data.total ?? data.changes.length, changes: data.changes };
+        }
+        return { total: 0, changes: [] };
+      } catch (error) {
+        if (error instanceof AxiosError) {
+          console.warn(`Error fetching change history for plan ${planId}:`, {
+            status: error.response?.status,
+            message: error.response?.data?.message || error.message,
+          });
+        }
+        return { total: 0, changes: [] };
+      }
+    },
+    enabled: Boolean(planId) && enabled,
+    staleTime: 1000 * 30,
+  });
+}
+
 // --- Payment Plan Mutations ---
 
 export function useCreatePaymentPlanMutation() {
@@ -287,6 +352,124 @@ export function useCreatePaymentPlanMutation() {
   });
 }
 
+export function useUpdatePaymentPlanMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (payload: UpdatePaymentPlanPayload) => {
+      const requestBody: Record<string, any> = {
+        reason: payload.reason,
+      };
+      if (payload.totalAmountMinor !== undefined) requestBody.totalAmountMinor = payload.totalAmountMinor;
+      if (payload.downPaymentMinor !== undefined) requestBody.downPaymentMinor = payload.downPaymentMinor;
+      if (payload.planBasis) requestBody.planBasis = payload.planBasis;
+      if (payload.numMonths !== undefined) requestBody.numMonths = payload.numMonths;
+      if (payload.monthlyAmountMinor !== undefined) requestBody.monthlyAmountMinor = payload.monthlyAmountMinor;
+      if (payload.startDate) requestBody.startDate = payload.startDate;
+      if (payload.status) requestBody.status = payload.status;
+
+      let serverUpdated: (PaymentPlan & {
+        installmentsPreserved?: number;
+        installmentsRegenerated?: number;
+        change?: PaymentPlanChange | null;
+      }) | null = null;
+
+      if (payload.id && isValidServerId(payload.id)) {
+        try {
+          const res = await apiClient.patch<ApiResponse<PaymentPlan>>(`/payment-plans/${payload.id}`, requestBody);
+          serverUpdated = unwrapData(res) as any;
+        } catch (err: any) {
+          if (err instanceof AxiosError) {
+            if (err.response?.status === 403) {
+              const forbiddenErr = new Error('You do not have permission to change payment plans.');
+              (forbiddenErr as any).response = err.response;
+              throw forbiddenErr;
+            }
+            if (err.response?.status === 400) {
+              const validationMsg =
+                err.response?.data?.message ||
+                err.response?.data?.error?.message ||
+                (err.response?.data?.error?.details?.[0]?.message) ||
+                'Validation error while updating payment plan.';
+              const valErr = new Error(validationMsg);
+              (valErr as any).response = err.response;
+              throw valErr;
+            }
+            if (err.response?.status === 405) {
+              try {
+                const putRes = await apiClient.put<ApiResponse<PaymentPlan>>(`/payment-plans/${payload.id}`, requestBody);
+                serverUpdated = unwrapData(putRes) as any;
+              } catch (putErr) {
+                console.warn('[useUpdatePaymentPlanMutation] PUT fallback failed:', putErr);
+                throw err;
+              }
+            } else {
+              throw err;
+            }
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      const storedPlans = getStoredPaymentPlans();
+      const existing = storedPlans.find(
+        (p) => p.id === payload.id || (payload.customerId && p.customerId === payload.customerId)
+      );
+
+      const totalAmountMinor = payload.totalAmountMinor ?? existing?.totalAmountMinor ?? 0;
+      const downPaymentMinor = payload.downPaymentMinor ?? existing?.downPaymentMinor ?? 0;
+      const numMonths = payload.numMonths ?? existing?.numMonths ?? 1;
+      const balanceMinor =
+        payload.balanceMinor !== undefined
+          ? payload.balanceMinor
+          : (serverUpdated?.balanceMinor !== undefined ? serverUpdated.balanceMinor : Math.max(0, totalAmountMinor - downPaymentMinor));
+      const monthlyAmountMinor =
+        payload.monthlyAmountMinor ??
+        (serverUpdated?.monthlyAmountMinor !== undefined
+          ? serverUpdated.monthlyAmountMinor
+          : (existing?.monthlyAmountMinor || Math.round(balanceMinor / Math.max(numMonths, 1))));
+      const paidMinor = Math.max(0, totalAmountMinor - balanceMinor);
+      const progressPercent = totalAmountMinor > 0 ? Math.min(100, Math.round((paidMinor / totalAmountMinor) * 100)) : 0;
+
+      const updatedRecord: PaymentPlan = {
+        ...(existing || {}),
+        ...(serverUpdated || {}),
+        id: payload.id || existing?.id || `plan_${Date.now()}`,
+        customerId: payload.customerId || existing?.customerId || '',
+        propertyId: payload.propertyId || existing?.propertyId || '',
+        totalAmountMinor,
+        downPaymentMinor,
+        balanceMinor,
+        numMonths,
+        monthlyAmountMinor,
+        currency: payload.currency || existing?.currency || 'GHS',
+        startDate: payload.startDate || existing?.startDate || new Date().toISOString().split('T')[0],
+        status: payload.status || existing?.status || 'active',
+        progressPercent: serverUpdated?.progressPercent ?? progressPercent,
+        progressBand: serverUpdated?.progressBand ?? getProgressBand(progressPercent),
+        createdAt: existing?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      await saveStoredPaymentPlan(updatedRecord);
+      if (updatedRecord.customerId) {
+        await saveCustomerPlanDefinition(updatedRecord.customerId, updatedRecord);
+      }
+      return serverUpdated || updatedRecord;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: paymentPlansKeys.all });
+      if (data?.id) {
+        queryClient.invalidateQueries({ queryKey: paymentPlansKeys.detail(data.id) });
+        queryClient.invalidateQueries({ queryKey: paymentPlansKeys.changes(data.id) });
+        queryClient.invalidateQueries({ queryKey: paymentPlansKeys.installments(data.id) });
+      }
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+    },
+  });
+}
+
 // --- Utility Functions ---
 
 export const getProgressBand = (percent: number): ProgressBand => {
@@ -324,5 +507,10 @@ export const usePaymentPlans = usePaymentPlansQuery;
 export const usePaymentPlan = usePaymentPlanQuery;
 /** @deprecated Use useInstallmentsQuery instead */
 export const useInstallments = useInstallmentsQuery;
+/** @deprecated Use usePaymentPlanChangesQuery instead */
+export const usePaymentPlanChanges = usePaymentPlanChangesQuery;
 /** @deprecated Use useCreatePaymentPlanMutation instead */
 export const useCreatePaymentPlan = useCreatePaymentPlanMutation;
+/** @deprecated Use useUpdatePaymentPlanMutation instead */
+export const useUpdatePaymentPlan = useUpdatePaymentPlanMutation;
+

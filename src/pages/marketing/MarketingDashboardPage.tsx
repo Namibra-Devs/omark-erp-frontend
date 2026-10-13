@@ -317,10 +317,25 @@ export const MarketingDashboardPage: React.FC = () => {
     );
   }, [allUsers]);
 
+  const marketingDirectorUser = useMemo(() => {
+    return (
+      marketingStaffUsers.find((u) => u.role === 'marketing_director') ||
+      (user?.role === 'marketing_director' ? user : undefined)
+    );
+  }, [marketingStaffUsers, user]);
+
   // Overall Marketing Metrics
   const metrics = useMemo(() => {
-    return calculateMarketingMetrics(campaigns, tasks, allMarketingProspects);
-  }, [campaigns, tasks, allMarketingProspects]);
+    return calculateMarketingMetrics(
+      campaigns,
+      tasks,
+      allMarketingProspects,
+      marketingDirectorUser?.id,
+      marketingDirectorUser ? getUserFullName(marketingDirectorUser) : undefined,
+      undefined,
+      marketingDirectorUser
+    );
+  }, [campaigns, tasks, allMarketingProspects, marketingDirectorUser]);
 
   // ── ITEM 1: Financial Return & Pipeline Valuation Metrics ──────────────
   const avgPlotPriceGHS = useMemo(() => {
@@ -1222,6 +1237,12 @@ export const MarketingDashboardPage: React.FC = () => {
                 showInfo={false}
               />
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12 }}>
+                <Text type="secondary">Director Added:</Text>
+                <Tag color="purple" style={{ margin: 0, fontWeight: 600 }}>
+                  {metrics.directorProspectsCount} Leads
+                </Tag>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 12 }}>
                 <Text type="secondary">Direct / Walk-ins:</Text>
                 <Tag color="geekblue" style={{ margin: 0, fontWeight: 600 }}>
                   {Math.max(0, liveMarketingProspectsCount - metrics.totalCampaignLeads)} Leads

@@ -593,11 +593,19 @@ export const DirectorOverviewPage: React.FC = () => {
   };
 
   const marketingMetrics = useMemo(() => {
-    return calculateMarketingMetrics(campaigns, tasks, allProspects, user?.id, user?.firstName, {
-      totalProspects: liveMarketingProspectsCount,
-      marketingProspects: liveMarketingProspectsCount,
-      totalConverted: summary.totalConverted,
-    });
+    return calculateMarketingMetrics(
+      campaigns,
+      tasks,
+      allProspects,
+      user?.id,
+      user ? getUserFullName(user) : undefined,
+      {
+        totalProspects: liveMarketingProspectsCount,
+        marketingProspects: liveMarketingProspectsCount,
+        totalConverted: summary.totalConverted,
+      },
+      user
+    );
   }, [campaigns, tasks, allProspects, user, liveMarketingProspectsCount, summary.totalConverted]);
 
   const handleRefresh = () => {
@@ -1353,7 +1361,7 @@ export const DirectorOverviewPage: React.FC = () => {
         <Col xs={24} sm={12} lg={4}>
           <Card>
             <Statistic
-              title="Director Portfolio"
+              title="Prospects Added (Director)"
               value={marketingMetrics.directorProspectsCount}
               prefix={<CrownOutlined />}
               valueStyle={{ color: '#722ed1', fontSize: 24 }}
