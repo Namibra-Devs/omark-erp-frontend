@@ -31,6 +31,7 @@ import {
   Popconfirm,
   Segmented,
   Drawer,
+  Radio,
 } from 'antd';
 import {
   RocketOutlined,
@@ -277,6 +278,10 @@ export const MarketingDashboardPage: React.FC = () => {
 
   const { data: allProspectsData, refetch: refetchAllProspects } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData, refetch: refetchMktProspects } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: directorProspectsData, refetch: refetchDirectorProspects } = useProspectsQuery(
+    { assignedUserId: user?.id, pageSize: 10000 },
+    Boolean(user?.id)
+  );
   const { data: allCustomersData, refetch: refetchCustomers } = useCustomersQuery({ pageSize: 10000 });
   const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 1000 });
   const { data: branches = [] } = useBranchesQuery();
@@ -286,36 +291,21 @@ export const MarketingDashboardPage: React.FC = () => {
   const allCustomers = allCustomersData?.items ?? [];
   const properties = propertiesData?.items ?? [];
 
-  // Consolidate live marketing prospects pool
-  const allMarketingProspects = useMemo(() => {
-    const prospectMap = new Map<string, any>();
-    (mktProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    (allProspectsData?.items || []).forEach((p) => {
-      if (p.source === 'marketing' || !p.source) {
-        prospectMap.set(p.id, p);
-      }
-    });
-    getStoredProspects().forEach((p) => {
-      if (p.source === 'marketing' || !p.source) {
-        if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
-      }
-    });
-    return Array.from(prospectMap.values());
-  }, [allProspectsData, mktProspectsData]);
-
-  const liveMarketingProspectsCount = useMemo(() => {
-    return Math.max(allMarketingProspects.length, mktProspectsData?.total ?? 0);
-  }, [allMarketingProspects.length, mktProspectsData?.total]);
-
   // Marketing staff users across all branches
   const marketingStaffUsers = useMemo(() => {
-    return allUsers.filter(
+    const list = allUsers.filter(
       (u) =>
         u.role === 'marketing_staff' ||
         u.role === 'marketing_director' ||
         (u.department && u.department.toLowerCase().includes('market'))
     );
-  }, [allUsers]);
+    if (user && (user.role === 'marketing_director' || user.role === 'marketing_staff')) {
+      if (!list.some((u) => u.id === user.id)) {
+        list.unshift(user as any);
+      }
+    }
+    return list;
+  }, [allUsers, user]);
 
   const marketingDirectorUser = useMemo(() => {
     return (
@@ -323,6 +313,34 @@ export const MarketingDashboardPage: React.FC = () => {
       (user?.role === 'marketing_director' ? user : undefined)
     );
   }, [marketingStaffUsers, user]);
+
+  // Consolidate live marketing prospects pool
+  const allMarketingProspects = useMemo(() => {
+    const list = consolidateAllProspects(
+      allProspectsData?.items,
+      mktProspectsData?.items,
+      directorProspectsData?.items
+    );
+    return list.filter((p) => {
+      if (p.source === 'marketing' || !p.source) return true;
+      if (marketingDirectorUser && isProspectAssignedOrCreatedByStaff(p, marketingDirectorUser)) return true;
+      return false;
+    });
+  }, [allProspectsData, mktProspectsData, directorProspectsData, marketingDirectorUser]);
+
+  const liveMarketingProspectsCount = useMemo(() => {
+    return Math.max(allMarketingProspects.length, mktProspectsData?.total ?? 0);
+  }, [allMarketingProspects.length, mktProspectsData?.total]);
+
+  useEffect(() => {
+    const handleProspectsChanged = () => {
+      refetchAllProspects();
+      refetchMktProspects();
+      refetchDirectorProspects();
+    };
+    window.addEventListener('omark-prospects-changed', handleProspectsChanged);
+    return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
+  }, [refetchAllProspects, refetchMktProspects, refetchDirectorProspects]);
 
   // Overall Marketing Metrics
   const metrics = useMemo(() => {
@@ -410,6 +428,7 @@ export const MarketingDashboardPage: React.FC = () => {
       refetchAnalytics(),
       refetchAllProspects(),
       refetchMktProspects(),
+      refetchDirectorProspects(),
       refetchCustomers(),
       refetchAppointments(),
       refetchUsers(),
@@ -550,6 +569,7 @@ export const MarketingDashboardPage: React.FC = () => {
   const [prospectSearch, setProspectSearch] = useState('');
   const [prospectStatusFilter, setProspectStatusFilter] = useState<string>('all');
   const [prospectStaffFilter, setProspectStaffFilter] = useState<string>('all');
+  const [prospectScope, setProspectScope] = useState<'all' | 'personal'>('all');
 
   // Filter States for Tasks Tab
   const [taskStatusFilter, setTaskStatusFilter] = useState<'all' | TaskStatus>('all');
@@ -607,7 +627,7 @@ export const MarketingDashboardPage: React.FC = () => {
           : allMarketingProspects;
 
       const recipientPhones = targetProspects
-        .map((p) => p.phoneNumber || p.phone)
+        .map((p) => p.phoneNumber || (p as any).phone)
         .filter((ph): ph is string => Boolean(ph && ph.length > 5));
 
       if (values.channel === 'sms' && recipientPhones.length > 0) {
@@ -912,14 +932,19 @@ export const MarketingDashboardPage: React.FC = () => {
     return allMarketingProspects.filter((p) => {
       if (prospectSearch.trim()) {
         const q = prospectSearch.toLowerCase();
-        const name = `${p.name || ''} ${p.firstName || ''} ${p.lastName || ''}`.toLowerCase();
-        const phone = (p.phoneNumber || p.phone || '').toLowerCase();
-        const email = (p.email || '').toLowerCase();
+        const name = `${(p as any).name || ''} ${p.firstName || ''} ${p.lastName || ''}`.toLowerCase();
+        const phone = (p.phoneNumber || (p as any).phone || '').toLowerCase();
+        const email = ((p as any).email || '').toLowerCase();
         if (!name.includes(q) && !phone.includes(q) && !email.includes(q)) return false;
       }
 
       if (prospectStatusFilter !== 'all' && p.status !== prospectStatusFilter) {
         return false;
+      }
+
+      if (prospectScope === 'personal') {
+        const targetStaff = marketingDirectorUser || user;
+        if (!isProspectAssignedOrCreatedByStaff(p, targetStaff)) return false;
       }
 
       if (prospectStaffFilter === 'unassigned') {
@@ -931,7 +956,7 @@ export const MarketingDashboardPage: React.FC = () => {
 
       return true;
     });
-  }, [allMarketingProspects, prospectSearch, prospectStatusFilter, prospectStaffFilter, marketingStaffUsers]);
+  }, [allMarketingProspects, prospectSearch, prospectStatusFilter, prospectStaffFilter, prospectScope, marketingStaffUsers, marketingDirectorUser, user]);
 
   // Filtered Campaigns
   const filteredCampaigns = useMemo(() => {
@@ -1236,10 +1261,18 @@ export const MarketingDashboardPage: React.FC = () => {
                 size="small"
                 showInfo={false}
               />
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12 }}>
+              <div
+                style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 12, cursor: 'pointer' }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setActiveTab('prospects');
+                  setProspectScope('personal');
+                  setProspectStaffFilter('all');
+                }}
+              >
                 <Text type="secondary">Director Added:</Text>
                 <Tag color="purple" style={{ margin: 0, fontWeight: 600 }}>
-                  {metrics.directorProspectsCount} Leads
+                  {metrics.directorProspectsCount} Leads &rarr;
                 </Tag>
               </div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6, fontSize: 12 }}>
@@ -1974,6 +2007,11 @@ export const MarketingDashboardPage: React.FC = () => {
                               if (record.isUnassignedPool) {
                                 setActiveTab('prospects');
                                 setProspectStaffFilter('unassigned');
+                                setProspectScope('all');
+                              } else if (record.role === 'marketing_director') {
+                                setActiveTab('prospects');
+                                setProspectScope('personal');
+                                setProspectStaffFilter('all');
                               } else {
                                 navigate(`/marketing/prospects?assignedUserId=${record.id}&name=${encodeURIComponent(record.name)}`);
                               }
@@ -2361,18 +2399,36 @@ export const MarketingDashboardPage: React.FC = () => {
                 }
                 extra={
                   <Space wrap>
+                    <Radio.Group
+                      value={prospectScope}
+                      onChange={(e) => {
+                        setProspectScope(e.target.value);
+                        if (e.target.value === 'personal') {
+                          setProspectStaffFilter('all');
+                        }
+                      }}
+                      buttonStyle="solid"
+                      size="middle"
+                    >
+                      <Radio.Button value="all">
+                        🌐 All Leads ({liveMarketingProspectsCount})
+                      </Radio.Button>
+                      <Radio.Button value="personal">
+                        👤 Director Personal ({metrics.directorProspectsCount})
+                      </Radio.Button>
+                    </Radio.Group>
                     <Input
                       prefix={<SearchOutlined style={{ color: '#94a3b8' }} />}
                       placeholder="Search by name, phone, email..."
                       value={prospectSearch}
                       onChange={(e) => setProspectSearch(e.target.value)}
                       allowClear
-                      style={{ width: 220 }}
+                      style={{ width: 200 }}
                     />
                     <Select
                       value={prospectStatusFilter}
                       onChange={setProspectStatusFilter}
-                      style={{ width: 160 }}
+                      style={{ width: 150 }}
                       options={[
                         { label: 'All Statuses', value: 'all' },
                         { label: 'New', value: 'new' },
@@ -2382,19 +2438,21 @@ export const MarketingDashboardPage: React.FC = () => {
                         { label: 'Suspended', value: 'suspended' },
                       ]}
                     />
-                    <Select
-                      value={prospectStaffFilter}
-                      onChange={setProspectStaffFilter}
-                      style={{ width: 180 }}
-                      options={[
-                        { label: 'All Staff Assignments', value: 'all' },
-                        { label: '⚠️ Unassigned', value: 'unassigned' },
-                        ...marketingStaffUsers.map((s) => ({
-                          label: `👤 ${getUserFullName(s)}`,
-                          value: s.id,
-                        })),
-                      ]}
-                    />
+                    {prospectScope === 'all' && (
+                      <Select
+                        value={prospectStaffFilter}
+                        onChange={setProspectStaffFilter}
+                        style={{ width: 180 }}
+                        options={[
+                          { label: 'All Staff Assignments', value: 'all' },
+                          { label: '⚠️ Unassigned', value: 'unassigned' },
+                          ...marketingStaffUsers.map((s) => ({
+                            label: `👤 ${getUserFullName(s)}`,
+                            value: s.id,
+                          })),
+                        ]}
+                      />
+                    )}
                     <Button type="primary" icon={<UserAddOutlined />} onClick={() => setAddProspectOpen(true)}>
                       Add Prospect
                     </Button>
@@ -2412,12 +2470,12 @@ export const MarketingDashboardPage: React.FC = () => {
                       title: 'Prospect Name',
                       key: 'name',
                       render: (_, record) => {
-                        const fullName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || 'Valued Lead';
+                        const fullName = (record as any).name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || 'Valued Lead';
                         return (
                           <div>
                             <Text strong style={{ fontSize: 14 }}>{fullName}</Text>
                             <div style={{ fontSize: 12, color: '#64748b' }}>
-                              📞 {record.phoneNumber || record.phone || 'No phone'}
+                              📞 {record.phoneNumber || (record as any).phone || 'No phone'}
                             </div>
                           </div>
                         );
@@ -2908,11 +2966,11 @@ export const MarketingDashboardPage: React.FC = () => {
               title: 'Prospect',
               key: 'prospect',
               render: (_, record) => {
-                const name = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || 'Unassigned Lead';
+                const name = (record as any).name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || 'Unassigned Lead';
                 return (
                   <div>
                     <Text strong>{name}</Text>
-                    <div style={{ fontSize: 11, color: '#64748b' }}>📞 {record.phoneNumber || record.phone || 'No phone'}</div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>📞 {record.phoneNumber || (record as any).phone || 'No phone'}</div>
                   </div>
                 );
               },
@@ -3370,7 +3428,7 @@ export const MarketingDashboardPage: React.FC = () => {
                 (option?.label as string)?.toLowerCase().includes(input.toLowerCase())
               }
               options={allMarketingProspects.map((p) => ({
-                label: `${p.name || p.firstName || 'Lead'} (${p.phoneNumber || p.phone || 'No phone'})`,
+                label: `${(p as any).name || p.firstName || 'Lead'} (${p.phoneNumber || (p as any).phone || 'No phone'})`,
                 value: p.id,
               }))}
             />
@@ -3417,6 +3475,7 @@ export const MarketingDashboardPage: React.FC = () => {
         onSuccess={() => {
           refetchAllProspects();
           refetchMktProspects();
+          refetchDirectorProspects();
           handleRefreshMarketingStorage();
         }}
       />

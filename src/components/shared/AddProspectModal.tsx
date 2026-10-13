@@ -35,7 +35,10 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
   defaultSource = 'customer_service',
 }) => {
   const { user, hasRole } = useAuth();
-  const isAdmin = hasRole(['admin', 'branch_manager', 'marketing_director']);
+  // Marketing director, branch manager, and secretary must NOT have an "assign to staff" field;
+  // all their prospect entries are directly attributed and assigned to themselves.
+  const isSelfAssignedRole = hasRole(['marketing_director', 'branch_manager', 'secretary', 'marketing_staff', 'customer_service']);
+  const canAssignStaff = hasRole(['admin', 'super_admin']) && !isSelfAssignedRole;
   const [form] = Form.useForm();
   const createProspect = useCreateProspectMutation();
 
@@ -61,13 +64,27 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
       );
 
       const { photo, ...prospectValues } = values;
-      const effectiveSource = values.source || (user?.role === 'marketing_director' || user?.role === 'marketing_staff' ? 'marketing' : defaultSource);
+      const isSelfAssigned = user?.role === 'marketing_director' || user?.role === 'branch_manager' || user?.role === 'secretary' || user?.role === 'marketing_staff' || user?.role === 'customer_service';
+      const effectiveAssignedUserId = isSelfAssigned ? user?.id : (values.assignedUserId || user?.id);
+      const fullName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined;
+
+      const effectiveSource = values.source || (
+        user?.role === 'secretary' || user?.role === 'customer_service'
+          ? 'customer_service'
+          : (user?.role === 'marketing_director' || user?.role === 'marketing_staff' ? 'marketing' : defaultSource)
+      );
+
       const payload = {
         ...prospectValues,
         source: effectiveSource,
-        assignedUserId: values.assignedUserId || user?.id,
+        assignedUserId: effectiveAssignedUserId,
+        assignedUserName: isSelfAssigned ? fullName : undefined,
         createdByUserId: user?.id,
-        createdByName: user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined,
+        createdByName: fullName,
+        registeredByUserId: user?.id,
+        registeredByName: fullName,
+        recordedByUserId: user?.id,
+        recordedByName: fullName,
       };
 
       const taggedPayload = tagPayloadWithBranch(payload, user);
@@ -171,7 +188,7 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
         </Form.Item>
 
         <Row gutter={[16, 0]}>
-          <Col xs={24} sm={12}>
+          <Col xs={24} sm={canAssignStaff ? 12 : 24}>
             <Form.Item name="source" label="Prospect Source" rules={[{ required: true }]}>
               <Select>
                 <Option value="customer_service">Customer Service / Front Desk</Option>
@@ -179,7 +196,7 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
               </Select>
             </Form.Item>
           </Col>
-          {isAdmin && (
+          {canAssignStaff && (
             <Col xs={24} sm={12}>
               <Form.Item name="assignedUserId" label="Assign To Staff">
                 <Select placeholder="Select staff member" showSearch optionFilterProp="children" allowClear>

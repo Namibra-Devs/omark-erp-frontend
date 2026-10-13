@@ -1,5 +1,5 @@
 // src/pages/dashboard/SecretaryDashboardPage.tsx
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Card,
   Row,
@@ -101,6 +101,7 @@ import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { consolidateAllProspects, isProspectAssignedOrCreatedByStaff } from '@/utils/prospectAssignment';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
@@ -209,21 +210,33 @@ export const SecretaryDashboardPage: React.FC = () => {
     refetch: refetchCustomers
   } = useCustomersQuery({ pageSize: 100 });
 
-  const { data: prospectsData } = useProspectsQuery({ pageSize: 10000 });
-  const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
-  const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  const { data: prospectsData, refetch: refetchAllProspects } = useProspectsQuery({ pageSize: 10000 });
+  const { data: mktProspectsData, refetch: refetchMktProspects } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: csProspectsData, refetch: refetchCsProspects } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  const { data: userProspectsData, refetch: refetchUserProspects } = useProspectsQuery(
+    { assignedUserId: user?.id, pageSize: 10000 },
+    Boolean(user?.id)
+  );
   const existingCustomersList = customersData?.items ?? [];
 
   const existingProspectsList = useMemo(() => {
-    const prospectMap = new Map<string, Prospect>();
-    (prospectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    (mktProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    (csProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    getStoredProspects().forEach((p) => {
-      if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
-    });
-    return Array.from(prospectMap.values());
-  }, [prospectsData, mktProspectsData, csProspectsData]);
+    return consolidateAllProspects(
+      prospectsData?.items,
+      mktProspectsData?.items,
+      csProspectsData?.items,
+      userProspectsData?.items
+    );
+  }, [prospectsData, mktProspectsData, csProspectsData, userProspectsData]);
+
+  useEffect(() => {
+    const handleProspectsChanged = () => {
+      refetchAllProspects();
+      refetchCsProspects();
+      refetchUserProspects();
+    };
+    window.addEventListener('omark-prospects-changed', handleProspectsChanged);
+    return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
+  }, [refetchAllProspects, refetchCsProspects, refetchUserProspects]);
 
   const {
     data: paymentPlansData,
@@ -538,16 +551,20 @@ export const SecretaryDashboardPage: React.FC = () => {
 
   // Secretary Individual Prospects & Front-Desk Conversions
   const secretaryProspects = useMemo(() => {
-    const userId = user?.id;
-    const userName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim().toLowerCase() : '';
+    if (!user) return [];
     return existingProspectsList.filter((p) => {
-      if (userId && (p.createdByUserId === userId || p.assignedUserId === userId || (p as any).creator?.id === userId)) {
+      // 1. Direct creator or assignee matching (including secretary's name, user id, recordedBy, registeredBy)
+      if (isProspectAssignedOrCreatedByStaff(p, user)) {
         return true;
       }
-      if (userName && (p.createdByName?.toLowerCase().includes(userName) || (p as any).creator?.name?.toLowerCase().includes(userName))) {
-        return true;
-      }
-      if ((p as any).source === 'customer_service' || (p as any).source === 'walk_in') {
+      // 2. Front-desk walk-in / inquiry logged at secretary's branch
+      const pBranch = (p as any).branchId || (p as any).branch;
+      const userBranch = user.branchId || (user as any).branch;
+      const isWalkInOrFrontDesk = (p as any).source === 'customer_service' || (p as any).source === 'walk_in';
+      if (isWalkInOrFrontDesk && userBranch && pBranch && String(pBranch).toLowerCase() === String(userBranch).toLowerCase()) {
+        if (p.assignedUserId && p.assignedUserId !== user.id && p.createdByUserId && p.createdByUserId !== user.id) {
+          return false;
+        }
         return true;
       }
       return false;
@@ -1080,7 +1097,7 @@ export const SecretaryDashboardPage: React.FC = () => {
           <Button
             size="small"
             onClick={() =>
-              navigate(`/marketing/prospects?search=${encodeURIComponent(record.phoneNumber || record.lastName || '')}`)
+              navigate(`/marketing/prospects?search=${encodeURIComponent(record.phoneNumber || record.lastName || '')}&scope=personal&source=all`)
             }
           >
             View
@@ -1198,6 +1215,10 @@ export const SecretaryDashboardPage: React.FC = () => {
     refetchDashboard();
     refetchCustomers();
     refetchPaymentPlans();
+    refetchAllProspects();
+    refetchMktProspects();
+    refetchCsProspects();
+    refetchUserProspects();
     message.success('Dashboard refreshed!');
   };
 
@@ -2221,6 +2242,9 @@ export const SecretaryDashboardPage: React.FC = () => {
         open={addProspectModal}
         onClose={() => setAddProspectModal(false)}
         onSuccess={() => {
+          refetchAllProspects();
+          refetchCsProspects();
+          refetchUserProspects();
           handleRefresh();
         }}
       />

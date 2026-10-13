@@ -208,15 +208,15 @@ export const CSProspectsPage: React.FC = () => {
   const createAppointment = useCreateAppointmentMutation();
   const updateAppointment = useUpdateAppointmentMutation();
 
-  // Only admins can set assignedUserId at creation (per the API), and only
-  // admins need to pick — customer_service reps creating their own
-  // prospects should just self-assign, matching how the field is hidden
-  // for them below.
+  // Marketing director, branch manager, and secretary must NOT have an "assign to rep" field;
+  // entries they create are automatically attributed and assigned to themselves.
+  const isSelfAssignedRole = hasRole(['marketing_director', 'branch_manager', 'secretary', 'customer_service']);
+  const canAssignRep = hasRole(['admin', 'super_admin']) && !isSelfAssignedRole;
   const isAdmin = hasRole(['admin']);
   const { data: allStaffData } = useUsersQuery({ pageSize: 500 });
   const allStaff = allStaffData?.items ?? [];
-  const { data: csStaffData } = useUsersQuery(isAdmin ? { role: 'customer_service' } : undefined);
-  const csStaff = isAdmin ? (csStaffData?.items ?? allStaff.filter((u) => u.role === 'customer_service')) : [];
+  const { data: csStaffData } = useUsersQuery(canAssignRep ? { role: 'customer_service' } : undefined);
+  const csStaff = canAssignRep ? (csStaffData?.items ?? allStaff.filter((u) => u.role === 'customer_service')) : [];
 
   const { data: branches = [] } = useBranchesQuery();
 
@@ -320,10 +320,20 @@ export const CSProspectsPage: React.FC = () => {
       );
 
       const { photo, ...prospectValues } = values;
+      const isSelfAssigned = user?.role === 'marketing_director' || user?.role === 'branch_manager' || user?.role === 'secretary' || user?.role === 'customer_service';
+      const effectiveAssignedUserId = isSelfAssigned ? user?.id : (values.assignedUserId || user?.id);
+      const fullName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined;
       const payload = {
         ...prospectValues,
         source: 'customer_service' as ProspectSource,
-        assignedUserId: isAdmin ? values.assignedUserId : user?.id,
+        assignedUserId: effectiveAssignedUserId,
+        assignedUserName: isSelfAssigned ? fullName : undefined,
+        createdByUserId: user?.id,
+        createdByName: fullName,
+        registeredByUserId: user?.id,
+        registeredByName: fullName,
+        recordedByUserId: user?.id,
+        recordedByName: fullName,
       };
 
       const newProspect = await createProspect.mutateAsync(tagPayloadWithBranch(payload, user));
@@ -1535,7 +1545,7 @@ export const CSProspectsPage: React.FC = () => {
             <PhoneInput />
           </Form.Item>
 
-          {isAdmin && (
+          {canAssignRep && (
             <Form.Item
               name="assignedUserId"
               label="Assign To Rep"

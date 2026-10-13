@@ -15,12 +15,24 @@ export function consolidateAllProspects(
   const map = new Map<string, Prospect>();
 
   // 1. Process all provided query arrays, allowing later arrays (e.g. direct user queries)
-  // to enrich earlier arrays
+  // to enrich earlier arrays while preserving attribution metadata
   sources.forEach((source) => {
     (source || []).forEach((p) => {
       if (!p || !p.id) return;
       if (map.has(p.id)) {
-        map.set(p.id, { ...map.get(p.id)!, ...p });
+        const prev = map.get(p.id)!;
+        map.set(p.id, {
+          ...prev,
+          ...p,
+          createdByUserId: p.createdByUserId || prev.createdByUserId,
+          createdByName: p.createdByName || prev.createdByName,
+          assignedUserId: p.assignedUserId || prev.assignedUserId,
+          assignedUserName: (p as any).assignedUserName || (prev as any).assignedUserName,
+          registeredByUserId: (p as any).registeredByUserId || (prev as any).registeredByUserId,
+          registeredByName: (p as any).registeredByName || (prev as any).registeredByName,
+          recordedByUserId: (p as any).recordedByUserId || (prev as any).recordedByUserId,
+          recordedByName: (p as any).recordedByName || (prev as any).recordedByName,
+        });
       } else {
         map.set(p.id, p);
       }
@@ -32,7 +44,19 @@ export function consolidateAllProspects(
   getStoredProspects().forEach((stored) => {
     if (!stored || !stored.id) return;
     if (map.has(stored.id)) {
-      map.set(stored.id, { ...map.get(stored.id)!, ...stored });
+      const current = map.get(stored.id)!;
+      map.set(stored.id, {
+        ...current,
+        ...stored,
+        createdByUserId: stored.createdByUserId || current.createdByUserId,
+        createdByName: stored.createdByName || current.createdByName,
+        assignedUserId: stored.assignedUserId || current.assignedUserId,
+        assignedUserName: (stored as any).assignedUserName || (current as any).assignedUserName,
+        registeredByUserId: (stored as any).registeredByUserId || (current as any).registeredByUserId,
+        registeredByName: (stored as any).registeredByName || (current as any).registeredByName,
+        recordedByUserId: (stored as any).recordedByUserId || (current as any).recordedByUserId,
+        recordedByName: (stored as any).recordedByName || (current as any).recordedByName,
+      });
     } else {
       map.set(stored.id, stored);
     }
@@ -145,7 +169,11 @@ export function isProspectCreatedByStaff(
       areIdsEqual((prospect as any).creatorId, staffId) ||
       areIdsEqual((prospect as any).created_by_user_id, staffId) ||
       areIdsEqual((prospect as any).creator?.id, staffId) ||
-      areIdsEqual((prospect as any).created_by?.id, staffId)
+      areIdsEqual((prospect as any).created_by?.id, staffId) ||
+      areIdsEqual((prospect as any).recordedByUserId, staffId) ||
+      areIdsEqual((prospect as any).recorded_by_user_id, staffId) ||
+      areIdsEqual((prospect as any).registeredByUserId, staffId) ||
+      areIdsEqual((prospect as any).registered_by_user_id, staffId)
     ) {
       return true;
     }
@@ -158,6 +186,10 @@ export function isProspectCreatedByStaff(
     (prospect as any).creator?.name,
     (prospect as any).created_by_name,
     (prospect as any).created_by?.name,
+    (prospect as any).recordedByName,
+    (prospect as any).recorded_by_name,
+    (prospect as any).registeredByName,
+    (prospect as any).registered_by_name,
   ];
 
   for (const cName of candidateNames) {

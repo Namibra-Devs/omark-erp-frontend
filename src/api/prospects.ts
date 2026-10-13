@@ -74,7 +74,19 @@ export function saveStoredProspect(prospect: Prospect): void {
     let next: Prospect[];
     if (existingIndex >= 0) {
       next = [...list];
-      next[existingIndex] = { ...next[existingIndex], ...prospect };
+      const prev = next[existingIndex];
+      next[existingIndex] = {
+        ...prev,
+        ...prospect,
+        createdByUserId: prospect.createdByUserId || prev.createdByUserId,
+        createdByName: prospect.createdByName || prev.createdByName,
+        assignedUserId: prospect.assignedUserId || prev.assignedUserId,
+        assignedUserName: (prospect as any).assignedUserName || (prev as any).assignedUserName,
+        registeredByUserId: (prospect as any).registeredByUserId || (prev as any).registeredByUserId,
+        registeredByName: (prospect as any).registeredByName || (prev as any).registeredByName,
+        recordedByUserId: (prospect as any).recordedByUserId || (prev as any).recordedByUserId,
+        recordedByName: (prospect as any).recordedByName || (prev as any).recordedByName,
+      };
     } else {
       next = [prospect, ...list];
     }
@@ -132,7 +144,18 @@ export function mergeStoredProspects(
   storedItems.forEach((stored) => {
     if (apiMap.has(stored.id)) {
       const apiItem = apiMap.get(stored.id)!;
-      apiMap.set(stored.id, { ...apiItem, ...stored });
+      apiMap.set(stored.id, {
+        ...apiItem,
+        ...stored,
+        createdByUserId: stored.createdByUserId || (apiItem as any).createdByUserId,
+        createdByName: stored.createdByName || (apiItem as any).createdByName,
+        assignedUserId: stored.assignedUserId || apiItem.assignedUserId,
+        assignedUserName: (stored as any).assignedUserName || (apiItem as any).assignedUserName,
+        registeredByUserId: (stored as any).registeredByUserId || (apiItem as any).registeredByUserId,
+        registeredByName: (stored as any).registeredByName || (apiItem as any).registeredByName,
+        recordedByUserId: (stored as any).recordedByUserId || (apiItem as any).recordedByUserId,
+        recordedByName: (stored as any).recordedByName || (apiItem as any).recordedByName,
+      });
       return;
     }
 
@@ -140,7 +163,19 @@ export function mergeStoredProspects(
     if (normPhone && apiPhoneMap.has(normPhone)) {
       const matchingApiId = apiPhoneMap.get(normPhone)!;
       const apiItem = apiMap.get(matchingApiId)!;
-      apiMap.set(matchingApiId, { ...apiItem, ...stored, id: matchingApiId });
+      apiMap.set(matchingApiId, {
+        ...apiItem,
+        ...stored,
+        id: matchingApiId,
+        createdByUserId: stored.createdByUserId || (apiItem as any).createdByUserId,
+        createdByName: stored.createdByName || (apiItem as any).createdByName,
+        assignedUserId: stored.assignedUserId || apiItem.assignedUserId,
+        assignedUserName: (stored as any).assignedUserName || (apiItem as any).assignedUserName,
+        registeredByUserId: (stored as any).registeredByUserId || (apiItem as any).registeredByUserId,
+        registeredByName: (stored as any).registeredByName || (apiItem as any).registeredByName,
+        recordedByUserId: (stored as any).recordedByUserId || (apiItem as any).recordedByUserId,
+        recordedByName: (stored as any).recordedByName || (apiItem as any).recordedByName,
+      });
       return;
     }
 
@@ -445,7 +480,21 @@ export const useCreateProspectMutation = () => {
       let createdProspect: Prospect | null = null;
       try {
         const response = await apiClient.post<ApiResponse<Prospect>>('/prospects', data);
-        createdProspect = unwrapData(response);
+        const serverData = unwrapData(response) || {};
+        createdProspect = {
+          ...data,
+          ...serverData,
+          id: (serverData as any).id || (data as any).id,
+          createdByUserId: data.createdByUserId || (serverData as any).createdByUserId || (data as any).creatorId,
+          createdByName: data.createdByName || (serverData as any).createdByName,
+          assignedUserId: data.assignedUserId || (serverData as any).assignedUserId,
+          assignedUserName: (data as any).assignedUserName || (serverData as any).assignedUserName,
+          registeredByUserId: (data as any).registeredByUserId || (serverData as any).registeredByUserId,
+          registeredByName: (data as any).registeredByName || (serverData as any).registeredByName,
+          recordedByUserId: (data as any).recordedByUserId || (serverData as any).recordedByUserId,
+          recordedByName: (data as any).recordedByName || (serverData as any).recordedByName,
+          source: (serverData as any).source || data.source || 'marketing',
+        } as Prospect;
         saveStoredProspect(createdProspect);
         return createdProspect;
       } catch (error: any) {
@@ -471,8 +520,13 @@ export const useCreateProspectMutation = () => {
             phoneNumber: (data.phoneNumber || '').trim(),
             source: data.source || 'marketing',
             assignedUserId: data.assignedUserId || '',
+            assignedUserName: (data as any).assignedUserName || undefined,
             createdByUserId: (data as any).createdByUserId || (data as any).creatorId || undefined,
             createdByName: (data as any).createdByName || undefined,
+            registeredByUserId: (data as any).registeredByUserId || undefined,
+            registeredByName: (data as any).registeredByName || undefined,
+            recordedByUserId: (data as any).recordedByUserId || undefined,
+            recordedByName: (data as any).recordedByName || undefined,
             status: 'new',
             reasonForContact: data.reasonForContact || '',
             notes: data.notes || '',

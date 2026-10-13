@@ -65,8 +65,13 @@ export interface Prospect {
   phoneNumber: string;
   source: ProspectSource;
   assignedUserId: string;
+  assignedUserName?: string;
   createdByUserId?: string;
   createdByName?: string;
+  registeredByUserId?: string;
+  registeredByName?: string;
+  recordedByUserId?: string;
+  recordedByName?: string;
   creator?: any;
   status: ProspectStatus;
   reasonForContact: string;

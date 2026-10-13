@@ -72,7 +72,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
-import { isProspectAssignedOrCreatedByStaff } from '@/utils/prospectAssignment';
+import { isProspectAssignedOrCreatedByStaff, consolidateAllProspects } from '@/utils/prospectAssignment';
 import {
   createDuplicatePhoneRule,
   createDuplicateNameRule,
@@ -96,9 +96,14 @@ export const ProspectsPage: React.FC = () => {
   const [bonusModalOpen, setBonusModalOpen] = useState(false);
   const [form] = Form.useForm();
   const [editForm] = Form.useForm();
-  const [searchText, setSearchText] = useState('');
+  const urlSearch = searchParams.get('search') || '';
+  const urlSource = (searchParams.get('source') as any) || 'marketing';
+  const urlScope = searchParams.get('scope') === 'personal' || (searchParams.get('assignedUserId') && user?.id && searchParams.get('assignedUserId') === user.id) ? 'personal' : 'all';
+
+  const [searchText, setSearchText] = useState(urlSearch);
   const [statusFilter, setStatusFilter] = useState<ProspectStatus | 'all'>('all');
-  const [sourceFilter, setSourceFilter] = useState<'marketing' | 'all' | 'customer_service'>('marketing');
+  const [sourceFilter, setSourceFilter] = useState<'marketing' | 'all' | 'customer_service'>(urlSource);
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'personal'>(urlScope);
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'weekly' | 'monthly' | 'yearly' | 'custom'>('all');
   const [customDateRange, setCustomDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [page, setPage] = useState(1);
@@ -138,27 +143,29 @@ export const ProspectsPage: React.FC = () => {
     setSearchParams(next);
   };
 
-  // Multi-source live queries: All prospects, Marketing-specific, and Customer Service (CS) prospects
+  // Multi-source live queries: All prospects, Marketing-specific, Customer Service (CS) prospects, and User-specific prospects
   const { data: allProspectsData, isLoading: allLoading, refetch: refetchAll } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData, isLoading: mktLoading, refetch: refetchMkt } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { data: csProspectsData, isLoading: csLoading, refetch: refetchCs } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
+  const { data: userSpecificProspectsData, refetch: refetchUserSpecific } = useProspectsQuery(
+    { assignedUserId: user?.id, pageSize: 10000 },
+    Boolean(user?.id)
+  );
   const isLoading = allLoading || mktLoading || csLoading;
 
   const refetch = React.useCallback(() => {
-    return Promise.all([refetchAll(), refetchMkt(), refetchCs()]);
-  }, [refetchAll, refetchMkt, refetchCs]);
+    return Promise.all([refetchAll(), refetchMkt(), refetchCs(), refetchUserSpecific()]);
+  }, [refetchAll, refetchMkt, refetchCs, refetchUserSpecific]);
 
   // Consolidate full live prospects pool from all endpoints & storage without omitting records
-  const allExistingProspects = useMemo(() => {
-    const prospectMap = new Map<string, Prospect>();
-    (allProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    (mktProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    (csProspectsData?.items || []).forEach((p) => prospectMap.set(p.id, p));
-    getStoredProspects().forEach((p) => {
-      if (!prospectMap.has(p.id)) prospectMap.set(p.id, p);
-    });
-    return Array.from(prospectMap.values());
-  }, [allProspectsData, mktProspectsData, csProspectsData]);
+  const allExistingProspects = useMemo<Prospect[]>(() => {
+    return consolidateAllProspects(
+      allProspectsData?.items,
+      mktProspectsData?.items,
+      csProspectsData?.items,
+      userSpecificProspectsData?.items
+    );
+  }, [allProspectsData, mktProspectsData, csProspectsData, userSpecificProspectsData]);
 
   const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
   const allExistingCustomers = customersData?.items ?? [];
@@ -182,7 +189,7 @@ export const ProspectsPage: React.FC = () => {
   // doesn't strand the user on a page that no longer exists.
   useEffect(() => {
     setPage(1);
-  }, [searchText, statusFilter, sourceFilter, assignedUserIdFilter, dateFilter, customDateRange]);
+  }, [searchText, statusFilter, sourceFilter, assignedUserIdFilter, scopeFilter, dateFilter, customDateRange]);
 
   // Opening this page clears the "new prospects" nav badge (see NavMenu.tsx).
   useEffect(() => {
@@ -195,9 +202,10 @@ export const ProspectsPage: React.FC = () => {
   const updateProspectMutation = useUpdateProspectMutation();
   const deleteProspectMutation = useDeleteProspectMutation();
 
-  // Only admins can set assignedUserId at creation (per the API), and only
-  // admins need to pick — marketing_staff creating their own prospects
-  // should just self-assign, matching how the field is hidden for them below.
+  // Marketing director, branch manager, and secretary must NOT have an "assign to marketer" field;
+  // entries they create are automatically attributed and assigned to themselves.
+  const isSelfAssignedRole = hasRole(['marketing_director', 'branch_manager', 'secretary', 'marketing_staff']);
+  const canAssignMarketer = hasRole(['admin', 'super_admin']) && !isSelfAssignedRole;
   const isAdmin = hasRole(['admin', 'marketing_director']);
   const { data: usersData } = useUsersQuery({ pageSize: 500 });
   const allStaff = usersData?.items ?? [];
@@ -265,9 +273,27 @@ export const ProspectsPage: React.FC = () => {
     return map;
   }, [appointments]);
 
+  const myPersonalProspects = useMemo(() => {
+    if (!user) return [];
+    return allExistingProspects.filter((p) => isProspectAssignedOrCreatedByStaff(p, user));
+  }, [allExistingProspects, user]);
+
   // Full marketing prospects list across all pages for status breakdown calculation
   const allMarketingProspects = useMemo(() => {
     let list = allExistingProspects;
+
+    // If viewing personal portfolio specifically:
+    if (scopeFilter === 'personal' && user) {
+      list = myPersonalProspects;
+      return filterEntitiesByBranch(list, user, branches);
+    }
+
+    // For regular marketing staff: ONLY show prospects that were added by or assigned to that respective staff
+    if (isMarketingStaff && user?.id) {
+      list = list.filter((p) => isProspectAssignedOrCreatedByStaff(p, user));
+      return filterEntitiesByBranch(list, user, branches);
+    }
+
     if (effectiveSource === 'marketing') {
       list = list.filter((p) => p.source === 'marketing' || !p.source);
     } else if (effectiveSource === 'customer_service') {
@@ -275,10 +301,7 @@ export const ProspectsPage: React.FC = () => {
     }
     // If 'all', keep full combined dataset
 
-    // For marketing staff: ONLY show prospects that were added by or assigned to that respective staff
-    if (isMarketingStaff && user?.id) {
-      list = list.filter((p) => isProspectAssignedOrCreatedByStaff(p, user));
-    } else if (assignedUserIdFilter) {
+    if (assignedUserIdFilter) {
       const targetStaff = allStaff.find((u) => u.id === assignedUserIdFilter) || {
         id: assignedUserIdFilter,
         name: assignedUserName,
@@ -289,7 +312,7 @@ export const ProspectsPage: React.FC = () => {
       ? (allStaff.find((u) => u.id === assignedUserIdFilter) || user)
       : user;
     return filterEntitiesByBranch(list, filterUser, branches);
-  }, [allExistingProspects, effectiveSource, isMarketingStaff, user, branches, assignedUserIdFilter, assignedUserName, allStaff]);
+  }, [allExistingProspects, scopeFilter, myPersonalProspects, effectiveSource, isMarketingStaff, user, branches, assignedUserIdFilter, assignedUserName, allStaff]);
 
   const marketingProspectCount = useMemo(() => {
     if (isMarketingStaff) {
@@ -413,14 +436,24 @@ export const ProspectsPage: React.FC = () => {
       // `photo` isn't a real prospect field — POST /prospects would reject
       // it, so pull it out before spreading the rest into the payload.
       const { photo, ...prospectValues } = values;
+      const isSelfAssigned = user?.role === 'marketing_director' || user?.role === 'branch_manager' || user?.role === 'secretary' || user?.role === 'marketing_staff';
+      const effectiveAssignedUserId = isSelfAssigned ? user?.id : (values.assignedUserId || user?.id);
+      const effectiveSource = (user?.role === 'secretary' || user?.role === 'customer_service') ? 'customer_service' : 'marketing';
+      const fullName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined;
+
       const newProspect = await createProspectMutation.mutateAsync(
         tagPayloadWithBranch(
           {
             ...prospectValues,
-            source: 'marketing',
-            assignedUserId: values.assignedUserId || user?.id,
+            source: effectiveSource,
+            assignedUserId: effectiveAssignedUserId,
+            assignedUserName: isSelfAssigned ? fullName : undefined,
             createdByUserId: user?.id,
-            createdByName: user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined,
+            createdByName: fullName,
+            registeredByUserId: user?.id,
+            registeredByName: fullName,
+            recordedByUserId: user?.id,
+            recordedByName: fullName,
           },
           user
         )
@@ -1549,7 +1582,29 @@ export const ProspectsPage: React.FC = () => {
       {/* Filters (Search, Source, Status, and Date-wise: Daily, Weekly, Monthly, Yearly, Custom) */}
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={[12, 12]} align="middle">
-          <Col xs={24} sm={12} md={5}>
+          {hasRole(['marketing_director', 'secretary', 'admin']) && (
+            <Col xs={24} sm={12} md={6}>
+              <Radio.Group
+                value={scopeFilter}
+                onChange={(e) => {
+                  setScopeFilter(e.target.value);
+                  if (e.target.value === 'personal') {
+                    clearAssignedFilter();
+                  }
+                }}
+                buttonStyle="solid"
+                size="middle"
+              >
+                <Radio.Button value="all">
+                  🌐 All Prospects
+                </Radio.Button>
+                <Radio.Button value="personal">
+                  👤 My Personal ({myPersonalProspects.length})
+                </Radio.Button>
+              </Radio.Group>
+            </Col>
+          )}
+          <Col xs={24} sm={12} md={scopeFilter === 'personal' || isMarketingRole ? 6 : 5}>
             <Input
               placeholder="Search prospects..."
               prefix={<SearchOutlined />}
@@ -1559,7 +1614,7 @@ export const ProspectsPage: React.FC = () => {
               size="middle"
             />
           </Col>
-          {!isMarketingRole && (
+          {(!isMarketingRole || scopeFilter === 'personal') && (
             <Col xs={24} sm={12} md={5}>
               <Select
                 style={{ width: '100%' }}
@@ -1568,8 +1623,8 @@ export const ProspectsPage: React.FC = () => {
                 onChange={setSourceFilter}
                 size="middle"
                 options={[
+                  { value: 'all', label: `🌐 All Sources (${totalProspectCount})` },
                   { value: 'marketing', label: `🎯 Marketing (${marketingProspectCount})` },
-                  { value: 'all', label: `🌐 All Prospects (${totalProspectCount})` },
                   { value: 'customer_service', label: `🎧 Customer Service (${csProspectCount})` },
                 ]}
               />
@@ -1754,7 +1809,7 @@ export const ProspectsPage: React.FC = () => {
             <PhoneInput />
           </Form.Item>
 
-          {isAdmin && (
+          {canAssignMarketer && (
             <Form.Item
               name="assignedUserId"
               label="Assign To Marketer"
