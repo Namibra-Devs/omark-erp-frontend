@@ -263,7 +263,15 @@ const AppRoutes: React.FC = () => {
         
         {/* ===== CUSTOMER SERVICE ROUTES ===== */}
         
-        {/* Appointments - /cs/appointments */}
+        {/* Appointments - /appointments & /cs/appointments */}
+        <Route 
+          path="/appointments" 
+          element={
+            <ProtectedRoute allowedRoles={ALL_STAFF_ROLES}>
+              <AppointmentsPage />
+            </ProtectedRoute>
+          } 
+        />
         <Route 
           path="/cs/appointments" 
           element={
@@ -271,12 +279,6 @@ const AppRoutes: React.FC = () => {
               <AppointmentsPage />
             </ProtectedRoute>
           } 
-        />
-
-        {/* Alias /appointments -> /cs/appointments */}
-        <Route 
-          path="/appointments" 
-          element={<Navigate to="/cs/appointments" replace />} 
         />
 
         {/* Client & Visitor Check-Ins - /cs/check-ins */}

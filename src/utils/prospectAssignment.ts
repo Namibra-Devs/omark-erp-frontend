@@ -547,7 +547,8 @@ export function distributeProspectsAcrossMarketingStaff(
 export function isAppointmentAssignedToStaff(
   appointment: any,
   staffUser: any,
-  staffProspectIds?: Set<string>
+  staffProspectIds?: Set<string>,
+  staffCustomerIds?: Set<string>
 ): boolean {
   if (!appointment || !staffUser) return false;
 
@@ -590,7 +591,16 @@ export function isAppointmentAssignedToStaff(
     return true;
   }
 
-  // 3. Name matching with flexible Akan / Ghanaian spelling normalization
+  // 3. Customer ownership check: If appointment belongs to a customer of this staff member
+  if (
+    appointment.customerId &&
+    staffCustomerIds &&
+    staffCustomerIds.has(String(appointment.customerId).trim())
+  ) {
+    return true;
+  }
+
+  // 4. Name matching with flexible Akan / Ghanaian spelling normalization
   const candidateNames = [
     appointment.assignedStaffName,
     appointment.assignedUserName,
@@ -609,7 +619,7 @@ export function isAppointmentAssignedToStaff(
     }
   }
 
-  // 4. Email matching
+  // 5. Email matching
   const staffEmail = effectiveUser.email;
   if (staffEmail) {
     const sEmail = String(staffEmail).trim().toLowerCase();
@@ -632,6 +642,8 @@ export function isAppointmentAssignedToStaff(
 
 /**
  * Consolidates appointments from multiple query sources into a deduplicated array.
+ * Ensures that a person only has at most ONE active appointment, with any updated
+ * date overwriting older records to prevent duplicate entries.
  */
 export function consolidateAllAppointments(
   ...sources: (any[] | undefined | null)[]
@@ -647,27 +659,87 @@ export function consolidateAllAppointments(
       }
     });
   });
-  return Array.from(map.values());
+
+  const all = Array.from(map.values());
+  const sorted = [...all].sort((a, b) => {
+    const timeA = new Date(a.updatedAt || a.createdAt || a.scheduledFor || 0).getTime();
+    const timeB = new Date(b.updatedAt || b.createdAt || b.scheduledFor || 0).getTime();
+    return timeB - timeA;
+  });
+
+  const seenActivePersons = new Set<string>();
+  const seenIds = new Set<string>();
+  const result: any[] = [];
+
+  for (const appt of sorted) {
+    if (!appt || !appt.id) continue;
+    if (seenIds.has(appt.id)) continue;
+
+    const personKey = appt.prospectId
+      ? `prospect:${appt.prospectId}`
+      : appt.customerId
+      ? `customer:${appt.customerId}`
+      : null;
+
+    const isActive = appt.status === 'scheduled' || appt.status === 'postponed';
+
+    if (personKey && isActive) {
+      if (seenActivePersons.has(personKey)) {
+        // Drop duplicate active appointment for the same person
+        continue;
+      }
+      seenActivePersons.add(personKey);
+    }
+
+    seenIds.add(appt.id);
+    result.push(appt);
+  }
+
+  return result;
 }
 
 /**
- * Filters appointments to those belonging to a staff member (directly or via their prospects).
+ * Filters appointments to those belonging to a staff member (directly or via their prospects/customers).
  */
 export function getStaffAssignedAppointments(
   allAppointments: any[],
   staffUser: any,
   allProspects?: Prospect[],
-  branches: BranchInfo[] = []
+  branches: BranchInfo[] = [],
+  allCustomers?: any[]
 ): any[] {
   if (!Array.isArray(allAppointments) || allAppointments.length === 0 || !staffUser) return [];
 
   let staffProspectIds: Set<string> | undefined;
   if (Array.isArray(allProspects) && allProspects.length > 0) {
-    const staffProspects = getStaffAssignedProspects(allProspects, staffUser, branches);
+    const staffProspects = allProspects.filter((p) => isProspectAssignedOrCreatedByStaff(p, staffUser));
     staffProspectIds = new Set(staffProspects.map((p) => String(p.id).trim()));
   }
 
-  return allAppointments.filter((a) => isAppointmentAssignedToStaff(a, staffUser, staffProspectIds));
+  let staffCustomerIds: Set<string> | undefined;
+  if (Array.isArray(allCustomers) && allCustomers.length > 0) {
+    const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
+    const staffCustomers = allCustomers.filter((c) => {
+      if (!c) return false;
+      if (
+        staffId &&
+        (areIdsEqual(c.assignedUserId, staffId) ||
+          areIdsEqual(c.createdByUserId, staffId) ||
+          areIdsEqual(c.marketerId, staffId) ||
+          areIdsEqual(c.agentId, staffId) ||
+          areIdsEqual(c.userId, staffId) ||
+          areIdsEqual(c.staffId, staffId))
+      ) {
+        return true;
+      }
+      return false;
+    });
+    staffCustomerIds = new Set(staffCustomers.map((c) => String(c.id).trim()));
+  }
+
+  return allAppointments.filter((a) =>
+    isAppointmentAssignedToStaff(a, staffUser, staffProspectIds, staffCustomerIds)
+  );
 }
 
 /**
@@ -677,8 +749,9 @@ export function getStaffAssignedAppointmentCount(
   allAppointments: any[],
   staffUser: any,
   allProspects?: Prospect[],
-  branches: BranchInfo[] = []
+  branches: BranchInfo[] = [],
+  allCustomers?: any[]
 ): { count: number } {
-  const list = getStaffAssignedAppointments(allAppointments, staffUser, allProspects, branches);
+  const list = getStaffAssignedAppointments(allAppointments, staffUser, allProspects, branches, allCustomers);
   return { count: list.length };
 }

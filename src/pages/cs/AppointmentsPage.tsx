@@ -16,6 +16,7 @@ import {
   ExportOutlined,
   PhoneOutlined,
   UserOutlined,
+  TeamOutlined,
   CalendarOutlined,
   ClockCircleOutlined,
   CheckCircleOutlined,
@@ -56,6 +57,7 @@ import {
   useAppointmentsQuery,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
+  saveStoredAppointment,
   type Appointment as ApiAppointment,
   type AppointmentStatus,
   type AppointmentSource,
@@ -69,6 +71,11 @@ import { saveStoredInteraction, isFakeOrSeedInteraction } from '@/utils/interact
 import { LogInteractionModal } from '@/components/shared/LogInteractionModal';
 import { interactionChannelLabels, roleLabels } from '@/constants/enums';
 import type { InteractionChannel, Prospect, Role } from '@/types';
+import {
+  consolidateAllProspects,
+  getStaffAssignedAppointments,
+  isAppointmentAssignedToStaff,
+} from '@/utils/prospectAssignment';
 
 type Appointment = ApiAppointment & {
   date: string;
@@ -157,8 +164,12 @@ export const getAppointmentDueStatus = (appointment: {
 
 export const AppointmentsPage: React.FC = () => {
   const navigate = useNavigate();
-  const { user } = useAuth();
-  
+  const { user, hasRole } = useAuth();
+  const isManagement = hasRole(['admin', 'branch_manager']);
+
+  // Scope filter: management can toggle between personal vs all branch bookings; staff is restricted to personal
+  const [scopeFilter, setScopeFilter] = useState<'personal' | 'all'>('personal');
+
   // States
   const [searchText, setSearchText] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -168,6 +179,7 @@ export const AppointmentsPage: React.FC = () => {
   
   // Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [existingApptForAddModal, setExistingApptForAddModal] = useState<ApiAppointment | null>(null);
   const [form] = Form.useForm();
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
@@ -207,10 +219,38 @@ export const AppointmentsPage: React.FC = () => {
     return filterEntitiesByBranch(rawAppointments, user, branches);
   }, [rawAppointments, user, branches]);
 
-  const { data: prospectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 10000 });
+  const { data: allProspectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 10000 });
+  const { data: userProspectsData } = useProspectsQuery(
+    user?.id ? { assignedUserId: user.id, pageSize: 10000 } : undefined,
+    !!user?.id
+  );
+  const consolidatedProspects = React.useMemo(() => {
+    return consolidateAllProspects(allProspectsData?.items, userProspectsData?.items);
+  }, [allProspectsData, userProspectsData]);
+
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 10000 });
   const { data: usersData } = useUsersQuery({ pageSize: 1000 });
   const allUsers = React.useMemo(() => usersData?.items ?? [], [usersData]);
+
+  // Personal appointments filtered strictly to this staff member
+  const personalAppointments = React.useMemo(() => {
+    return getStaffAssignedAppointments(
+      appointmentsList,
+      user,
+      consolidatedProspects,
+      branches,
+      customersData?.items
+    );
+  }, [appointmentsList, user, consolidatedProspects, branches, customersData]);
+
+  // Effective visible appointments: restricted to individual bookings for all staff;
+  // Management can toggle between personal bookings and all branch bookings.
+  const effectiveAppointments = React.useMemo(() => {
+    if (isManagement && scopeFilter === 'all') {
+      return appointmentsList;
+    }
+    return personalAppointments;
+  }, [isManagement, scopeFilter, appointmentsList, personalAppointments]);
 
   // Helper to resolve staff user information with formatted role label
   const getStaffInfo = (userId?: string, fallbackName = 'Staff Member', fallbackRole = 'Staff') => {
@@ -237,32 +277,63 @@ export const AppointmentsPage: React.FC = () => {
     if (user?.id) markSeen('appointments', user.id);
   }, [user?.id, appointmentsData]);
 
+  // Listen for real-time appointment changes across tabs and components
+  useEffect(() => {
+    const handleAppointmentsChange = () => {
+      refetchAppointments();
+    };
+    window.addEventListener('omark-appointments-changed', handleAppointmentsChange);
+    return () => {
+      window.removeEventListener('omark-appointments-changed', handleAppointmentsChange);
+    };
+  }, [refetchAppointments]);
+
   // API Mutations
   const createAppointment = useCreateAppointmentMutation();
   const updateAppointment = useUpdateAppointmentMutation();
 
   // Combine prospects and customers safely for select dropdown with branch isolation
   const allEntities = React.useMemo(() => {
-    const rawProspects = prospectsData?.items ?? [];
+    const rawProspects = consolidatedProspects;
     const rawCustomers = customersData?.items ?? [];
     const prospects = filterEntitiesByBranch(rawProspects, user, branches);
     const customers = filterEntitiesByBranch(rawCustomers, user, branches);
 
+    const isMine = (e: any) => {
+      if (!user?.id) return false;
+      return (
+        e.assignedUserId === user.id ||
+        e.createdByUserId === user.id ||
+        (e as any).assignedStaffId === user.id ||
+        (e as any).creatorId === user.id
+      );
+    };
+
+    const myProspects = prospects.filter(isMine);
+    const otherProspects = prospects.filter((p) => !isMine(p));
+    const sortedProspects = [...myProspects, ...otherProspects];
+
+    const myCustomers = customers.filter(isMine);
+    const otherCustomers = customers.filter((c) => !isMine(c));
+    const sortedCustomers = [...myCustomers, ...otherCustomers];
+
     return [
-      ...prospects.map((p) => ({
+      ...sortedProspects.map((p) => ({
         id: p.id,
         name: `${p.firstName} ${p.lastName}`,
         phone: p.phoneNumber || '',
         type: 'prospect' as const,
+        isMine: isMine(p),
       })),
-      ...customers.map((c) => ({
+      ...sortedCustomers.map((c) => ({
         id: c.id,
         name: `${c.firstName} ${c.lastName}`,
         phone: c.phoneNumber || '',
         type: 'customer' as const,
+        isMine: isMine(c),
       })),
     ];
-  }, [prospectsData, customersData, user, branches]);
+  }, [consolidatedProspects, customersData, user, branches]);
 
   // Get entity details
   const getEntityDetails = (appointment: ApiAppointment) => {
@@ -277,16 +348,58 @@ export const AppointmentsPage: React.FC = () => {
   // Handle create appointment with integrated booking interaction logging
   const handleAddAppointment = async (values: any) => {
     try {
+      const staffFullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Staff Member';
       const reasonNotes = values.interactionNotes?.trim() || values.feedback?.trim() || undefined;
-      const appointmentData: CreateAppointmentPayload = {
-        prospectId: values.entityType === 'prospect' ? values.entityId : undefined,
-        customerId: values.entityType === 'customer' ? values.entityId : undefined,
-        scheduledFor: values.scheduledFor.toISOString(),
-        reason: reasonNotes,
-      };
 
-      const created = await createAppointment.mutateAsync(tagPayloadWithBranch(appointmentData, user));
-      const appointmentId = created?.id || `app_${Date.now()}`;
+      const existingAppt = appointmentsList.find(
+        (a) =>
+          ((values.entityType === 'prospect' && a.prospectId === values.entityId) ||
+           (values.entityType === 'customer' && a.customerId === values.entityId)) &&
+          a.status !== 'canceled' &&
+          a.status !== 'completed'
+      );
+
+      let appointmentId: string;
+      if (existingAppt) {
+        // Overwrite existing appointment record to prevent duplicate entries
+        await updateAppointment.mutateAsync({
+          id: existingAppt.id,
+          payload: {
+            status: 'scheduled',
+            scheduledFor: values.scheduledFor.toISOString(),
+            feedback: reasonNotes || existingAppt.feedback || `Rescheduled date on ${dayjs().format('YYYY-MM-DD')}`,
+          },
+        });
+        saveStoredAppointment({
+          ...existingAppt,
+          status: 'scheduled',
+          scheduledFor: values.scheduledFor.toISOString(),
+          reason: reasonNotes || existingAppt.reason,
+          feedback: reasonNotes || existingAppt.feedback,
+          assignedUserId: user?.id || existingAppt.assignedUserId,
+          staffId: user?.id || existingAppt.staffId,
+          updatedAt: new Date().toISOString(),
+        });
+        appointmentId = existingAppt.id;
+        message.success('Existing appointment found and overwritten with new date! Duplicate prevented.');
+      } else {
+        const appointmentData: CreateAppointmentPayload = {
+          prospectId: values.entityType === 'prospect' ? values.entityId : undefined,
+          customerId: values.entityType === 'customer' ? values.entityId : undefined,
+          scheduledFor: values.scheduledFor.toISOString(),
+          reason: reasonNotes,
+          assignedUserId: user?.id,
+          assignedUserName: staffFullName,
+          createdByUserId: user?.id,
+          createdByName: staffFullName,
+          staffId: user?.id,
+          staffName: staffFullName,
+        };
+
+        const created = await createAppointment.mutateAsync(tagPayloadWithBranch(appointmentData, user));
+        appointmentId = created?.id || `app_${Date.now()}`;
+        message.success('Appointment created and booking interaction logged successfully!');
+      }
 
       // If interaction logging is enabled, record this booking discussion as an official staff interaction
       if (values.logBookingInteraction !== false) {
@@ -333,13 +446,13 @@ export const AppointmentsPage: React.FC = () => {
       }
 
       window.dispatchEvent(new Event('omark-appointments-changed'));
-      message.success('Appointment created and booking interaction logged successfully!');
       setIsModalOpen(false);
+      setExistingApptForAddModal(null);
       form.resetFields();
       refetchAppointments();
       refetchInteractions();
     } catch (error: any) {
-      message.error(error?.message || 'Failed to create appointment');
+      message.error(error?.message || 'Failed to process appointment');
     }
   };
 
@@ -355,38 +468,23 @@ export const AppointmentsPage: React.FC = () => {
 
     try {
       if (values.status === 'postponed' && values.rescheduleImmediately && values.scheduledFor) {
-        if (values.rebookActionType === 'rebook_new') {
-          // 1. Mark current appointment as postponed with notes
-          await updateAppointment.mutateAsync({
-            id: selectedAppointment.id,
-            payload: {
-              status: 'postponed',
-              feedback: values.feedback 
-                ? `${values.feedback} (Rebooked for ${values.scheduledFor.format('YYYY-MM-DD HH:mm')})`
-                : `Postponed and rebooked for ${values.scheduledFor.format('YYYY-MM-DD HH:mm')}`,
-            },
-          });
-          // 2. Create newly scheduled appointment
-          const appointmentData: CreateAppointmentPayload = {
-            prospectId: selectedAppointment.prospectId,
-            customerId: selectedAppointment.customerId,
+        // Reschedule existing appointment date directly to overwrite old record and prevent duplicate entries
+        await updateAppointment.mutateAsync({
+          id: selectedAppointment.id,
+          payload: {
+            status: 'scheduled',
+            feedback: values.feedback || `Rescheduled on ${dayjs().format('YYYY-MM-DD')}`,
             scheduledFor: values.scheduledFor.toISOString(),
-            reason: values.feedback || selectedAppointment.reason || 'Rebooked appointment',
-          };
-          await createAppointment.mutateAsync(tagPayloadWithBranch(appointmentData, user));
-          message.success('Appointment marked as postponed and new appointment rebooked successfully!');
-        } else {
-          // Reschedule existing appointment date and set status to scheduled
-          await updateAppointment.mutateAsync({
-            id: selectedAppointment.id,
-            payload: {
-              status: 'scheduled',
-              feedback: values.feedback || `Rescheduled on ${dayjs().format('YYYY-MM-DD')}`,
-              scheduledFor: values.scheduledFor.toISOString(),
-            },
-          });
-          message.success('Appointment rescheduled successfully!');
-        }
+          },
+        });
+        saveStoredAppointment({
+          ...selectedAppointment,
+          status: 'scheduled',
+          scheduledFor: values.scheduledFor.toISOString(),
+          feedback: values.feedback || selectedAppointment.feedback,
+          updatedAt: new Date().toISOString(),
+        });
+        message.success('Appointment date updated and record overwritten successfully!');
       } else {
         // Standard status update
         await updateAppointment.mutateAsync({
@@ -513,7 +611,7 @@ export const AppointmentsPage: React.FC = () => {
 
   // Helper to open interaction modal for appointment contact
   const handleOpenLogInteractionForAppointment = (appointment: Appointment) => {
-    const matchedProspect = prospectsData?.items?.find((p) => p.id === appointment.prospectId) || ({
+    const matchedProspect = consolidatedProspects.find((p) => p.id === appointment.prospectId) || ({
       id: appointment.prospectId || `pros_${appointment.id}`,
       firstName: getEntityDetails(appointment).name.split(' ')[0] || 'Client',
       lastName: getEntityDetails(appointment).name.split(' ').slice(1).join(' ') || '',
@@ -529,8 +627,8 @@ export const AppointmentsPage: React.FC = () => {
   const handleOpenRebookModal = (appointment: Appointment) => {
     setRebookAppointment(appointment);
     setRebookModalOpen(true);
+    rebookForm.resetFields();
     rebookForm.setFieldsValue({
-      rebookMode: 'rebook_new',
       scheduledFor: appointment.scheduledFor ? dayjs(appointment.scheduledFor).add(1, 'day') : dayjs().add(1, 'day'),
       reason: appointment.reason || 'Client Consultation / Site Inspection',
       feedback: '',
@@ -538,7 +636,6 @@ export const AppointmentsPage: React.FC = () => {
   };
 
   const handleRebookSubmit = async (values: {
-    rebookMode: 'reschedule_existing' | 'rebook_new';
     scheduledFor: dayjs.Dayjs;
     reason?: string;
     feedback?: string;
@@ -546,38 +643,26 @@ export const AppointmentsPage: React.FC = () => {
     if (!rebookAppointment) return;
 
     try {
-      if (values.rebookMode === 'rebook_new') {
-        // 1. Mark original appointment as postponed if not already
-        await updateAppointment.mutateAsync({
-          id: rebookAppointment.id,
-          payload: {
-            status: 'postponed',
-            feedback: values.feedback 
-              ? `${values.feedback} (Rebooked for ${values.scheduledFor.format('MMM DD, YYYY HH:mm')})`
-              : `Postponed and rebooked for ${values.scheduledFor.format('MMM DD, YYYY HH:mm')}`,
-          },
-        });
-        // 2. Create the new appointment
-        const appointmentData: CreateAppointmentPayload = {
-          prospectId: rebookAppointment.prospectId,
-          customerId: rebookAppointment.customerId,
+      // Overwrite existing appointment record directly to prevent duplicate entries
+      await updateAppointment.mutateAsync({
+        id: rebookAppointment.id,
+        payload: {
+          status: 'scheduled',
           scheduledFor: values.scheduledFor.toISOString(),
-          reason: values.reason || rebookAppointment.reason || 'Rebooked appointment',
-        };
-        await createAppointment.mutateAsync(tagPayloadWithBranch(appointmentData, user));
-        message.success('Appointment rebooked successfully! A new appointment has been scheduled.');
-      } else {
-        // Reschedule existing appointment
-        await updateAppointment.mutateAsync({
-          id: rebookAppointment.id,
-          payload: {
-            status: 'scheduled',
-            scheduledFor: values.scheduledFor.toISOString(),
-            feedback: values.feedback || `Rescheduled from postponed on ${dayjs().format('MMM DD, YYYY')}`,
-          },
-        });
-        message.success('Appointment rescheduled successfully!');
-      }
+          feedback: values.feedback || `Rescheduled date on ${dayjs().format('MMM DD, YYYY')}`,
+        },
+      });
+
+      saveStoredAppointment({
+        ...rebookAppointment,
+        status: 'scheduled',
+        scheduledFor: values.scheduledFor.toISOString(),
+        reason: values.reason || rebookAppointment.reason,
+        feedback: values.feedback || rebookAppointment.feedback,
+        updatedAt: new Date().toISOString(),
+      });
+
+      message.success('Appointment date updated! Record overwritten successfully without duplicates.');
 
       window.dispatchEvent(new Event('omark-appointments-changed'));
       setRebookModalOpen(false);
@@ -606,10 +691,10 @@ export const AppointmentsPage: React.FC = () => {
     }
   };
 
-  // Safely extract raw appointments
+  // Safely extract appointments respecting visibility restrictions
   const appointments: ApiAppointment[] = React.useMemo(() => {
-    return appointmentsList;
-  }, [appointmentsList]);
+    return effectiveAppointments;
+  }, [effectiveAppointments]);
 
   // Map raw appointments to contain display-only date/time properties
   const mappedAppointments = React.useMemo(() => {
@@ -755,7 +840,7 @@ export const AppointmentsPage: React.FC = () => {
       );
     });
 
-    const matchedProspect = prospectsData?.items?.find((p) => p.id === appointment.prospectId);
+    const matchedProspect = consolidatedProspects.find((p) => p.id === appointment.prospectId);
     const creatorUserId =
       appointment.createdByUserId ||
       (appointment as any).userId ||
@@ -868,7 +953,7 @@ export const AppointmentsPage: React.FC = () => {
     const sourceConfig = getSourceConfig(selectedAppointment.source);
     const appointmentHistory = getAppointmentHistory(selectedAppointment);
 
-    const matchedProspect = prospectsData?.items?.find((p) => p.id === selectedAppointment.prospectId);
+    const matchedProspect = consolidatedProspects.find((p) => p.id === selectedAppointment.prospectId);
     const creatorUserId =
       selectedAppointment.createdByUserId ||
       (selectedAppointment as any).userId ||
@@ -1263,6 +1348,35 @@ export const AppointmentsPage: React.FC = () => {
         );
       },
     },
+    ...(scopeFilter === 'all'
+      ? [
+          {
+            title: 'Staff / Host',
+            key: 'staff',
+            width: 170,
+            render: (_: any, record: Appointment) => {
+              const creatorUserId =
+                record.assignedUserId ||
+                record.staffId ||
+                record.createdByUserId ||
+                (record as any).userId;
+              const fallbackName =
+                record.assignedUserName || record.staffName || record.createdByName || 'Staff Member';
+              const info = getStaffInfo(creatorUserId, fallbackName);
+              return (
+                <Space direction="vertical" size={0}>
+                  <Text strong style={{ fontSize: 13 }}>
+                    {info.name}
+                  </Text>
+                  <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>
+                    {info.role}
+                  </Tag>
+                </Space>
+              );
+            },
+          },
+        ]
+      : []),
     {
       title: 'Scheduled For',
       key: 'date',
@@ -1626,7 +1740,12 @@ export const AppointmentsPage: React.FC = () => {
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
       <PageHeader
-        title="Appointments"
+        title={scopeFilter === 'personal' ? 'My Appointments' : 'All Branch Appointments'}
+        subtitle={
+          scopeFilter === 'personal'
+            ? 'View and manage your individual client appointments and personal bookings. Only your bookings are shown.'
+            : 'Overview and management of all branch appointments across staff members.'
+        }
         actions={[
           {
             label: 'Client Check-Ins',
@@ -1650,6 +1769,57 @@ export const AppointmentsPage: React.FC = () => {
           },
         ]}
       />
+
+      {/* Scope Switcher for Admin / Branch Manager, or Personal Scope Notice for Staff */}
+      {isManagement ? (
+        <Card size="small" style={{ marginBottom: 16, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <Space size={12} wrap>
+              <Text strong style={{ fontSize: 13, color: '#334155' }}>
+                <UserOutlined style={{ marginRight: 6, color: tokens.primary }} /> Visibility Scope:
+              </Text>
+              <Segmented
+                value={scopeFilter}
+                onChange={(val) => setScopeFilter(val as 'personal' | 'all')}
+                options={[
+                  {
+                    label: (
+                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
+                        <UserOutlined style={{ marginRight: 6 }} />
+                        My Bookings (Personal: {personalAppointments.length})
+                      </span>
+                    ),
+                    value: 'personal',
+                  },
+                  {
+                    label: (
+                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
+                        <TeamOutlined style={{ marginRight: 6 }} />
+                        All Branch Bookings ({appointmentsList.length})
+                      </span>
+                    ),
+                    value: 'all',
+                  },
+                ]}
+              />
+            </Space>
+            <Tag color={scopeFilter === 'personal' ? 'blue' : 'purple'} style={{ margin: 0, fontWeight: 600 }}>
+              {scopeFilter === 'personal'
+                ? 'Showing your individual appointments only'
+                : 'Showing all appointments across branch staff'}
+            </Tag>
+          </div>
+        </Card>
+      ) : (
+        <Alert
+          type="info"
+          showIcon
+          icon={<UserOutlined style={{ color: '#1890ff' }} />}
+          message="Personal Appointments"
+          description="You are viewing your individual bookings. Any appointments you schedule or are assigned to will appear here."
+          style={{ marginBottom: 16 }}
+        />
+      )}
 
       {/* Status Cards */}
       <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
@@ -1904,6 +2074,24 @@ export const AppointmentsPage: React.FC = () => {
               showTotal: (total) => `Total ${total} appointments`,
               responsive: true,
             }}
+            locale={{
+              emptyText: (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description={
+                    <span>
+                      {scopeFilter === 'personal'
+                        ? 'No personal appointments found. Click "Add Appointment" to book your client meeting.'
+                        : 'No appointments found matching your filters.'}
+                    </span>
+                  }
+                >
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsModalOpen(true)}>
+                    Book Appointment
+                  </Button>
+                </Empty>
+              ),
+            }}
             expandable={{
               expandedRowRender: (record: Appointment) => {
                 const history = getAppointmentHistory(record);
@@ -2016,6 +2204,7 @@ export const AppointmentsPage: React.FC = () => {
         open={isModalOpen}
         onCancel={() => {
           setIsModalOpen(false);
+          setExistingApptForAddModal(null);
           form.resetFields();
         }}
         footer={null}
@@ -2023,10 +2212,41 @@ export const AppointmentsPage: React.FC = () => {
         style={{ maxWidth: '95%', top: 20 }}
         bodyStyle={{ padding: '16px' }}
       >
+        {existingApptForAddModal && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Existing Active Appointment"
+            description={`This person already has an appointment scheduled for ${dayjs(existingApptForAddModal.scheduledFor).format('ddd, MMM D, YYYY [at] h:mm A')}. Selecting a new date will overwrite their existing record, ensuring no duplicate entries are generated.`}
+          />
+        )}
         <Form
           form={form}
           layout="vertical"
           onFinish={handleAddAppointment}
+          onValuesChange={(changedValues, allValues) => {
+            const eType = allValues.entityType;
+            const eId = allValues.entityId;
+            if (eId) {
+              const existing = appointmentsList.find(
+                (a) =>
+                  ((eType === 'prospect' && a.prospectId === eId) ||
+                   (eType === 'customer' && a.customerId === eId)) &&
+                  a.status !== 'canceled' &&
+                  a.status !== 'completed'
+              );
+              setExistingApptForAddModal(existing || null);
+              if (existing && 'entityId' in changedValues) {
+                form.setFieldsValue({
+                  scheduledFor: existing.scheduledFor ? dayjs(existing.scheduledFor) : form.getFieldValue('scheduledFor'),
+                  feedback: existing.reason || existing.feedback || form.getFieldValue('feedback'),
+                });
+              }
+            } else {
+              setExistingApptForAddModal(null);
+            }
+          }}
           initialValues={{
             logBookingInteraction: true,
             interactionChannel: 'call',
@@ -2152,12 +2372,13 @@ export const AppointmentsPage: React.FC = () => {
               <Button 
                 type="primary" 
                 htmlType="submit" 
-                loading={createAppointment.isPending}
+                loading={createAppointment.isPending || updateAppointment.isPending}
               >
-                Create Appointment & Record Log
+                {existingApptForAddModal ? 'Update Appointment Date (Overwrite)' : 'Create Appointment & Record Log'}
               </Button>
               <Button onClick={() => {
                 setIsModalOpen(false);
+                setExistingApptForAddModal(null);
                 form.resetFields();
               }}>
                 Cancel
@@ -2256,20 +2477,13 @@ export const AppointmentsPage: React.FC = () => {
 
                         return (
                           <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed #ffd591' }}>
-                            <Form.Item
-                              name="rebookActionType"
-                              label={<Text strong style={{ fontSize: 12 }}>Action Type</Text>}
+                            <Alert
+                              type="info"
+                              showIcon
                               style={{ marginBottom: 12 }}
-                            >
-                              <Radio.Group size="small">
-                                <Radio.Button value="rebook_new">
-                                  Rebook as New Appointment (Keep Audit Trail)
-                                </Radio.Button>
-                                <Radio.Button value="reschedule">
-                                  Update Existing Date
-                                </Radio.Button>
-                              </Radio.Group>
-                            </Form.Item>
+                              message="Overwriting Record"
+                              description="Choosing a new date will directly overwrite this appointment and restore its status to Scheduled, preventing duplicate entries."
+                            />
 
                             <Form.Item
                               name="scheduledFor"
@@ -2387,40 +2601,18 @@ export const AppointmentsPage: React.FC = () => {
                 layout="vertical"
                 onFinish={handleRebookSubmit}
                 initialValues={{
-                  rebookMode: 'rebook_new',
                   scheduledFor: dayjs().add(1, 'day').hour(10).minute(0),
                   reason: rebookAppointment.reason || '',
                   feedback: '',
                 }}
               >
-                <Form.Item
-                  name="rebookMode"
-                  label={<Text strong>Rebooking Method</Text>}
-                  rules={[{ required: true }]}
-                >
-                  <Radio.Group style={{ width: '100%' }}>
-                    <Space direction="vertical" style={{ width: '100%' }}>
-                      <Radio value="rebook_new" style={{ alignItems: 'flex-start' }}>
-                        <div>
-                          <Text strong>Rebook as New Appointment (Recommended)</Text>
-                          <br />
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            Creates a new scheduled appointment while maintaining the original record marked as Postponed for history/audit tracking.
-                          </Text>
-                        </div>
-                      </Radio>
-                      <Radio value="reschedule_existing" style={{ alignItems: 'flex-start', marginTop: 8 }}>
-                        <div>
-                          <Text strong>Reschedule Existing Appointment</Text>
-                          <br />
-                          <Text type="secondary" style={{ fontSize: 12 }}>
-                            Updates this appointment's date/time directly and restores its status to Scheduled.
-                          </Text>
-                        </div>
-                      </Radio>
-                    </Space>
-                  </Radio.Group>
-                </Form.Item>
+                <Alert
+                  type="info"
+                  showIcon
+                  style={{ marginBottom: 16 }}
+                  message="Overwriting Existing Appointment Record"
+                  description="Updating the date directly overwrites this appointment record and restores its status to Scheduled, ensuring no duplicate entries are generated for this person."
+                />
 
                 <Form.Item
                   name="scheduledFor"
@@ -2471,7 +2663,7 @@ export const AppointmentsPage: React.FC = () => {
                       loading={createAppointment.isPending || updateAppointment.isPending}
                       style={{ background: '#fa8c16', borderColor: '#fa8c16' }}
                     >
-                      Confirm Rebook / Reschedule
+                      Confirm Reschedule (Overwrite)
                     </Button>
                   </Space>
                 </Form.Item>

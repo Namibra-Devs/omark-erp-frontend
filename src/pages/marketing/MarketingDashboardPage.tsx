@@ -82,7 +82,7 @@ import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPe
 import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
 import { useProspectsQuery, useUpdateProspectMutation, getStoredProspects } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
-import { useAppointmentsQuery, useCreateAppointmentMutation } from '@/api/appointments';
+import { useAppointmentsQuery, useCreateAppointmentMutation, useUpdateAppointmentMutation, saveStoredAppointment } from '@/api/appointments';
 import { usePropertiesQuery } from '@/api/properties';
 import { useSendBroadcastSMSMutation } from '@/api/notifications';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -547,6 +547,7 @@ export const MarketingDashboardPage: React.FC = () => {
   const [editingTask, setEditingTask] = useState<MarketingTask | null>(null);
   const [appointmentModalOpen, setAppointmentModalOpen] = useState(false);
   const [selectedProspectForAppt, setSelectedProspectForAppt] = useState<any | null>(null);
+  const [existingAppointmentForProspect, setExistingAppointmentForProspect] = useState<any | null>(null);
 
   // New Modals for Requested Features
   const [stalledLeadsDrawerOpen, setStalledLeadsDrawerOpen] = useState(false);
@@ -563,7 +564,19 @@ export const MarketingDashboardPage: React.FC = () => {
   // Mutations
   const updateProspectMutation = useUpdateProspectMutation();
   const createAppointmentMutation = useCreateAppointmentMutation();
+  const updateAppointmentMutation = useUpdateAppointmentMutation();
   const sendBroadcastSMSMutation = useSendBroadcastSMSMutation();
+
+  // Real-time synchronization for appointment updates
+  useEffect(() => {
+    const handleAppointmentsChange = () => {
+      refetchAppointments();
+    };
+    window.addEventListener('omark-appointments-changed', handleAppointmentsChange);
+    return () => {
+      window.removeEventListener('omark-appointments-changed', handleAppointmentsChange);
+    };
+  }, [refetchAppointments]);
 
   // Filter States for Prospects Tab
   const [prospectSearch, setProspectSearch] = useState('');
@@ -881,32 +894,76 @@ export const MarketingDashboardPage: React.FC = () => {
     handleRefreshMarketingStorage();
   };
 
-  // Handle Book Appointment
+  // Handle Book / Reschedule Appointment
   const handleOpenAppointmentModal = (prospect?: any) => {
+    const existing = prospect?.id
+      ? appointments.find(
+          (a) => a.prospectId === prospect.id && a.status !== 'canceled' && a.status !== 'completed'
+        )
+      : null;
+    setExistingAppointmentForProspect(existing || null);
     setSelectedProspectForAppt(prospect || null);
     appointmentForm.resetFields();
     appointmentForm.setFieldsValue({
       prospectId: prospect?.id || undefined,
-      title: prospect ? `Site Inspection: ${prospect.name || prospect.firstName}` : 'Marketing Lead Consultation',
-      date: dayjs().add(1, 'day'),
+      title: existing?.reason || (prospect ? `Site Inspection: ${prospect.name || prospect.firstName}` : 'Marketing Lead Consultation'),
+      date: existing?.scheduledFor ? dayjs(existing.scheduledFor) : dayjs().add(1, 'day'),
       type: 'in_person',
-      staffId: prospect?.assignedUserId || user?.id,
+      staffId: existing?.assignedUserId || existing?.staffId || prospect?.assignedUserId || user?.id,
+      notes: existing?.feedback || '',
     });
     setAppointmentModalOpen(true);
   };
 
   const handleSaveAppointment = async (values: any) => {
     try {
-      await createAppointmentMutation.mutateAsync({
-        scheduledFor: (values.date || dayjs()).toISOString(),
-        prospectId: values.prospectId,
-        reason: values.title || 'Marketing Site Inspection / Lead Consultation',
-      });
-      message.success('Appointment booked successfully!');
+      const scheduledIso = (values.date || dayjs()).toISOString();
+      const reasonText = values.title || 'Marketing Site Inspection / Lead Consultation';
+      const conductingStaffId = values.staffId || user?.id;
+
+      const existing = existingAppointmentForProspect ||
+        appointments.find(
+          (a) => a.prospectId === values.prospectId && a.status !== 'canceled' && a.status !== 'completed'
+        );
+
+      if (existing) {
+        // Overwrite existing appointment record to prevent duplicate entries
+        await updateAppointmentMutation.mutateAsync({
+          id: existing.id,
+          payload: {
+            scheduledFor: scheduledIso,
+            status: 'scheduled',
+            feedback: values.notes || reasonText,
+          },
+        });
+        saveStoredAppointment({
+          ...existing,
+          scheduledFor: scheduledIso,
+          reason: reasonText,
+          feedback: values.notes || existing.feedback,
+          status: 'scheduled',
+          assignedUserId: conductingStaffId,
+          staffId: conductingStaffId,
+          updatedAt: new Date().toISOString(),
+        });
+        message.success('Appointment date updated and record overwritten successfully!');
+      } else {
+        await createAppointmentMutation.mutateAsync({
+          scheduledFor: scheduledIso,
+          prospectId: values.prospectId,
+          reason: reasonText,
+          assignedUserId: conductingStaffId,
+          staffId: conductingStaffId,
+        });
+        message.success('Appointment booked successfully!');
+      }
+
       setAppointmentModalOpen(false);
+      setExistingAppointmentForProspect(null);
       refetchAppointments();
+      window.dispatchEvent(new Event('omark-appointments-changed'));
     } catch (err: any) {
-      message.error(err?.message || 'Failed to book appointment');
+      message.error(err?.message || 'Failed to save appointment');
     }
   };
 
@@ -3406,16 +3463,51 @@ export const MarketingDashboardPage: React.FC = () => {
         title={
           <Space>
             <CalendarOutlined style={{ color: '#0284c7' }} />
-            <span>Book Site Inspection or Consultation</span>
+            <span>{existingAppointmentForProspect ? 'Reschedule Site Inspection / Appointment' : 'Book Site Inspection or Consultation'}</span>
           </Space>
         }
         open={appointmentModalOpen}
-        onCancel={() => setAppointmentModalOpen(false)}
+        onCancel={() => {
+          setAppointmentModalOpen(false);
+          setExistingAppointmentForProspect(null);
+        }}
         footer={null}
         destroyOnClose
         width={560}
       >
-        <Form form={appointmentForm} layout="vertical" onFinish={handleSaveAppointment}>
+        {existingAppointmentForProspect && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Existing Appointment Record Found"
+            description={`This prospect already has an appointment scheduled for ${dayjs(existingAppointmentForProspect.scheduledFor).format('ddd, MMM D, YYYY [at] h:mm A')}. Changing the date below will overwrite the existing record, preventing duplicate entries for this person.`}
+          />
+        )}
+        <Form
+          form={appointmentForm}
+          layout="vertical"
+          onFinish={handleSaveAppointment}
+          onValuesChange={(changedValues) => {
+            if ('prospectId' in changedValues) {
+              const pid = changedValues.prospectId;
+              const existing = pid
+                ? appointments.find(
+                    (a) => a.prospectId === pid && a.status !== 'canceled' && a.status !== 'completed'
+                  )
+                : null;
+              setExistingAppointmentForProspect(existing || null);
+              if (existing) {
+                appointmentForm.setFieldsValue({
+                  title: existing.reason || appointmentForm.getFieldValue('title'),
+                  date: existing.scheduledFor ? dayjs(existing.scheduledFor) : appointmentForm.getFieldValue('date'),
+                  staffId: existing.assignedUserId || existing.staffId || appointmentForm.getFieldValue('staffId'),
+                  notes: existing.feedback || appointmentForm.getFieldValue('notes'),
+                });
+              }
+            }
+          }}
+        >
           <Form.Item name="title" label="Appointment Title" rules={[{ required: true }]}>
             <Input placeholder="e.g., East Legon Hills Site Inspection" />
           </Form.Item>
@@ -3459,9 +3551,12 @@ export const MarketingDashboardPage: React.FC = () => {
 
           <div style={{ textAlign: 'right', marginTop: 16 }}>
             <Space>
-              <Button onClick={() => setAppointmentModalOpen(false)}>Cancel</Button>
+              <Button onClick={() => {
+                setAppointmentModalOpen(false);
+                setExistingAppointmentForProspect(null);
+              }}>Cancel</Button>
               <Button type="primary" htmlType="submit">
-                Confirm Appointment
+                {existingAppointmentForProspect ? 'Update Appointment (Overwrite)' : 'Confirm Appointment'}
               </Button>
             </Space>
           </div>

@@ -101,7 +101,12 @@ export interface Appointment {
   status: AppointmentStatus;
   reason?: string;
   feedback?: string;
+  assignedUserId?: string;
+  assignedUserName?: string;
   createdByUserId?: string;
+  createdByName?: string;
+  staffId?: string;
+  staffName?: string;
   createdAt: string;
   updatedAt: string;
 }

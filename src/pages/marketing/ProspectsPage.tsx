@@ -67,6 +67,8 @@ import {
   useAppointmentsQuery,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
+  saveStoredAppointment,
+  type Appointment,
 } from '@/api/appointments';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUsersQuery, getUserFullName } from '@/api/users';
@@ -114,6 +116,7 @@ export const ProspectsPage: React.FC = () => {
   const [prospectToConvert, setProspectToConvert] = useState<Prospect | null>(null);
   const [bookAppointmentModal, setBookAppointmentModal] = useState(false);
   const [appointmentTargetProspect, setAppointmentTargetProspect] = useState<Prospect | null>(null);
+  const [existingApptForProspectModal, setExistingApptForProspectModal] = useState<Appointment | null>(null);
   const [appointmentForm] = Form.useForm();
   const [selectedProspect, setSelectedProspect] = useState<Prospect | null>(null);
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
@@ -500,14 +503,23 @@ export const ProspectsPage: React.FC = () => {
   };
 
   const handleOpenBookAppointment = (target?: Prospect | null) => {
+    const existing = target?.id
+      ? appointments.find(
+          (a) => a.prospectId === target.id && a.status !== 'canceled' && a.status !== 'completed'
+        )
+      : null;
+    setExistingApptForProspectModal(existing || null);
+
     if (target) {
       setAppointmentTargetProspect(target);
       appointmentForm.resetFields();
       appointmentForm.setFieldsValue({
         prospectId: target.id,
-        staffId: target.assignedUserId || user?.id,
-        scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
-        reason: 'Site Inspection & Property Viewing',
+        staffId: existing?.assignedUserId || existing?.staffId || target.assignedUserId || user?.id,
+        scheduledFor: existing?.scheduledFor
+          ? dayjs(existing.scheduledFor)
+          : dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+        reason: existing?.reason || 'Site Inspection & Property Viewing',
         source: 'marketing',
       });
     } else {
@@ -2020,7 +2032,9 @@ export const ProspectsPage: React.FC = () => {
           <Space>
             <CalendarOutlined style={{ color: '#001529' }} />
             <Text strong>
-              {appointmentTargetProspect
+              {existingApptForProspectModal
+                ? `Reschedule Appointment: ${appointmentTargetProspect ? `${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}` : 'Prospect'}`
+                : appointmentTargetProspect
                 ? `Book Appointment: ${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}`
                 : 'Book Prospect Appointment'}
             </Text>
@@ -2030,6 +2044,7 @@ export const ProspectsPage: React.FC = () => {
         onCancel={() => {
           setBookAppointmentModal(false);
           setAppointmentTargetProspect(null);
+          setExistingApptForProspectModal(null);
           appointmentForm.resetFields();
         }}
         footer={null}
@@ -2037,9 +2052,38 @@ export const ProspectsPage: React.FC = () => {
         style={{ top: 24, maxWidth: '95%' }}
         destroyOnClose
       >
+        {existingApptForProspectModal && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Existing Appointment Record Found"
+            description={`This prospect already has an appointment scheduled for ${dayjs(existingApptForProspectModal.scheduledFor).format('ddd, MMM D, YYYY [at] h:mm A')}. Changing the date below will overwrite the existing record to prevent duplicate entries.`}
+          />
+        )}
         <Form
           form={appointmentForm}
           layout="vertical"
+          onValuesChange={(changedValues) => {
+            if ('prospectId' in changedValues) {
+              const pid = changedValues.prospectId;
+              const existing = pid
+                ? appointments.find(
+                    (a) => a.prospectId === pid && a.status !== 'canceled' && a.status !== 'completed'
+                  )
+                : null;
+              setExistingApptForProspectModal(existing || null);
+              if (existing) {
+                appointmentForm.setFieldsValue({
+                  scheduledFor: existing.scheduledFor
+                    ? dayjs(existing.scheduledFor)
+                    : appointmentForm.getFieldValue('scheduledFor'),
+                  reason: existing.reason || appointmentForm.getFieldValue('reason'),
+                  staffId: existing.assignedUserId || existing.staffId || appointmentForm.getFieldValue('staffId'),
+                });
+              }
+            }
+          }}
           onFinish={async (values) => {
             const targetId = values.prospectId || appointmentTargetProspect?.id;
             if (!targetId) {
@@ -2051,19 +2095,52 @@ export const ProspectsPage: React.FC = () => {
                 ? `[${values.source || 'marketing'}] ${values.reason.trim()}`
                 : `[${values.source || 'marketing'}] Site inspection and sales consultation`;
 
-              await createAppointment.mutateAsync({
-                prospectId: targetId,
-                scheduledFor: values.scheduledFor.toISOString(),
-                reason: reasonText,
-              });
+              const existing = existingApptForProspectModal ||
+                appointments.find(
+                  (a) => a.prospectId === targetId && a.status !== 'canceled' && a.status !== 'completed'
+                );
+
+              const target = allExistingProspects.find((p) => p.id === targetId) || appointmentTargetProspect;
+
+              if (existing) {
+                await updateAppointmentMutation.mutateAsync({
+                  id: existing.id,
+                  payload: {
+                    status: 'scheduled',
+                    scheduledFor: values.scheduledFor.toISOString(),
+                    feedback: reasonText,
+                  },
+                });
+                saveStoredAppointment({
+                  ...existing,
+                  status: 'scheduled',
+                  scheduledFor: values.scheduledFor.toISOString(),
+                  reason: reasonText,
+                  assignedUserId: values.staffId || existing.assignedUserId,
+                  staffId: values.staffId || existing.staffId,
+                  updatedAt: new Date().toISOString(),
+                });
+                message.success(
+                  `Appointment date updated and record overwritten for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+                );
+              } else {
+                await createAppointment.mutateAsync({
+                  prospectId: targetId,
+                  scheduledFor: values.scheduledFor.toISOString(),
+                  reason: reasonText,
+                  assignedUserId: values.staffId || user?.id,
+                  staffId: values.staffId || user?.id,
+                });
+                message.success(
+                  `Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+                );
+              }
+
               queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
               window.dispatchEvent(new Event('omark-appointments-changed'));
-              const target = allExistingProspects.find((p) => p.id === targetId) || appointmentTargetProspect;
-              message.success(
-                `Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
-              );
               setBookAppointmentModal(false);
               setAppointmentTargetProspect(null);
+              setExistingApptForProspectModal(null);
               appointmentForm.resetFields();
               refetchAppointments();
             } catch (err: any) {
@@ -2169,12 +2246,12 @@ export const ProspectsPage: React.FC = () => {
               <Button
                 type="primary"
                 htmlType="submit"
-                loading={createAppointment.isPending}
+                loading={createAppointment.isPending || updateAppointmentMutation.isPending}
                 icon={<CheckCircleOutlined />}
                 style={{ background: '#001529', borderColor: '#001529', color: '#fff' }}
                 className="btn-blue-black"
               >
-                Confirm Appointment
+                {existingApptForProspectModal ? 'Update Appointment Date (Overwrite)' : 'Confirm Appointment'}
               </Button>
             </Space>
           </Form.Item>

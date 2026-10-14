@@ -78,6 +78,7 @@ import {
   useAppointmentsQuery,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
+  saveStoredAppointment,
   appointmentsKeys,
   type Appointment
 } from '@/api/appointments';
@@ -120,6 +121,7 @@ export const CSProspectsPage: React.FC = () => {
   const [logInteractionModal, setLogInteractionModal] = useState(false);
   const [bookAppointmentModal, setBookAppointmentModal] = useState(false);
   const [appointmentTargetProspect, setAppointmentTargetProspect] = useState<Prospect | null>(null);
+  const [existingApptForCSModal, setExistingApptForCSModal] = useState<Appointment | null>(null);
   const [appointmentForm] = Form.useForm();
   const queryClient = useQueryClient();
 
@@ -163,12 +165,22 @@ export const CSProspectsPage: React.FC = () => {
   }, [allProspectsData, prospectsData]);
 
   const handleOpenBookAppointment = (target?: Prospect | null) => {
+    const existing = target?.id
+      ? appointments.find(
+          (a) => a.prospectId === target.id && a.status !== 'canceled' && a.status !== 'completed'
+        )
+      : null;
+    setExistingApptForCSModal(existing || null);
+
     if (target) {
       setAppointmentTargetProspect(target);
+      appointmentForm.resetFields();
       appointmentForm.setFieldsValue({
         prospectId: target.id,
-        scheduledFor: dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
-        reason: 'Site inspection and payment plan discussion',
+        scheduledFor: existing?.scheduledFor
+          ? dayjs(existing.scheduledFor)
+          : dayjs().add(1, 'day').set('hour', 10).set('minute', 0),
+        reason: existing?.reason || 'Site inspection and payment plan discussion',
       });
     } else {
       setAppointmentTargetProspect(null);
@@ -1871,7 +1883,9 @@ export const CSProspectsPage: React.FC = () => {
           <Space>
             <CalendarOutlined style={{ color: '#001529' }} />
             <Text strong>
-              {appointmentTargetProspect 
+              {existingApptForCSModal
+                ? `Reschedule Appointment: ${appointmentTargetProspect ? `${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}` : 'Prospect'}`
+                : appointmentTargetProspect 
                 ? `Book Appointment: ${appointmentTargetProspect.firstName} ${appointmentTargetProspect.lastName}`
                 : 'Book Prospect Appointment'}
             </Text>
@@ -1881,6 +1895,7 @@ export const CSProspectsPage: React.FC = () => {
         onCancel={() => {
           setBookAppointmentModal(false);
           setAppointmentTargetProspect(null);
+          setExistingApptForCSModal(null);
           appointmentForm.resetFields();
         }}
         footer={null}
@@ -1888,26 +1903,85 @@ export const CSProspectsPage: React.FC = () => {
         style={{ top: 24, maxWidth: '95%' }}
         destroyOnClose
       >
+        {existingApptForCSModal && (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 16 }}
+            message="Existing Appointment Record Found"
+            description={`This prospect already has an appointment scheduled for ${dayjs(existingApptForCSModal.scheduledFor).format('ddd, MMM D, YYYY [at] h:mm A')}. Changing the date below will overwrite the existing record to prevent duplicate entries.`}
+          />
+        )}
         <Form
           form={appointmentForm}
           layout="vertical"
+          onValuesChange={(changedValues) => {
+            if ('prospectId' in changedValues) {
+              const pid = changedValues.prospectId;
+              const existing = pid
+                ? appointments.find(
+                    (a) => a.prospectId === pid && a.status !== 'canceled' && a.status !== 'completed'
+                  )
+                : null;
+              setExistingApptForCSModal(existing || null);
+              if (existing) {
+                appointmentForm.setFieldsValue({
+                  scheduledFor: existing.scheduledFor
+                    ? dayjs(existing.scheduledFor)
+                    : appointmentForm.getFieldValue('scheduledFor'),
+                  reason: existing.reason || appointmentForm.getFieldValue('reason'),
+                });
+              }
+            }
+          }}
           onFinish={async (values) => {
             if (!values.prospectId) {
               message.error('Please select a prospect for this appointment');
               return;
             }
             try {
-              await createAppointment.mutateAsync({
-                prospectId: values.prospectId,
-                scheduledFor: values.scheduledFor.toISOString(),
-                reason: values.reason?.trim() || 'Prospect consultation / site visit',
-              });
+              const existing = existingApptForCSModal ||
+                appointments.find(
+                  (a) => a.prospectId === values.prospectId && a.status !== 'canceled' && a.status !== 'completed'
+                );
+
+              const target = allProspectsList.find((p) => p.id === values.prospectId) || appointmentTargetProspect;
+
+              if (existing) {
+                await updateAppointment.mutateAsync({
+                  id: existing.id,
+                  payload: {
+                    status: 'scheduled',
+                    scheduledFor: values.scheduledFor.toISOString(),
+                    feedback: values.reason?.trim() || 'Prospect consultation / site visit',
+                  },
+                });
+                saveStoredAppointment({
+                  ...existing,
+                  status: 'scheduled',
+                  scheduledFor: values.scheduledFor.toISOString(),
+                  reason: values.reason?.trim() || existing.reason,
+                  updatedAt: new Date().toISOString(),
+                });
+                message.success(
+                  `Appointment date updated and record overwritten for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+                );
+              } else {
+                await createAppointment.mutateAsync({
+                  prospectId: values.prospectId,
+                  scheduledFor: values.scheduledFor.toISOString(),
+                  reason: values.reason?.trim() || 'Prospect consultation / site visit',
+                });
+                message.success(
+                  `Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+                );
+              }
+
               queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
               window.dispatchEvent(new Event('omark-appointments-changed'));
-              const target = allProspectsList.find((p) => p.id === values.prospectId) || appointmentTargetProspect;
-              message.success(`Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`);
               setBookAppointmentModal(false);
               setAppointmentTargetProspect(null);
+              setExistingApptForCSModal(null);
               appointmentForm.resetFields();
               refetchAppointments();
             } catch (err: any) {
@@ -2002,6 +2076,7 @@ export const CSProspectsPage: React.FC = () => {
               <Button onClick={() => {
                 setBookAppointmentModal(false);
                 setAppointmentTargetProspect(null);
+                setExistingApptForCSModal(null);
                 appointmentForm.resetFields();
               }}>
                 Cancel
@@ -2009,12 +2084,12 @@ export const CSProspectsPage: React.FC = () => {
               <Button
                 type="primary"
                 htmlType="submit"
-                loading={createAppointment.isPending}
+                loading={createAppointment.isPending || updateAppointment.isPending}
                 icon={<CheckCircleOutlined />}
                 style={{ background: '#001529', borderColor: '#001529', color: '#fff' }}
                 className="btn-blue-black"
               >
-                Confirm Appointment
+                {existingApptForCSModal ? 'Update Appointment Date (Overwrite)' : 'Confirm Appointment'}
               </Button>
             </Space>
           </Form.Item>

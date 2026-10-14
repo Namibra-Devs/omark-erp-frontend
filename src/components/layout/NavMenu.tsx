@@ -27,7 +27,8 @@ import { EXPENSES_ALLOWED_ROLES } from '@/constants/enums';
 import { usePendingNotificationsCountQuery } from '@/api/notifications';
 import { useUnseenCountsQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
-import { useAppointmentsQuery } from '@/api/appointments';
+import { useAppointmentsQuery, appointmentsKeys } from '@/api/appointments';
+import { isAppointmentAssignedToStaff } from '@/utils/prospectAssignment';
 import { useComplaintsQuery } from '@/api/complaints';
 import { useApprovalsQuery, approvalsKeys } from '@/api/approvals';
 import { usePayrollQuery, payrollKeys } from '@/api/payroll';
@@ -94,7 +95,7 @@ export const NavMenu: React.FC = () => {
     (p: any) => String(p?.status || '').trim().toLowerCase() === 'pending'
   ).length;
 
-  // Listen for real-time approval decisions/creations & payroll changes across tabs & components
+  // Listen for real-time approval decisions/creations, payroll & appointment changes across tabs & components
   useEffect(() => {
     const handleApprovalsChange = () => {
       queryClient.invalidateQueries({ queryKey: approvalsKeys.all });
@@ -102,11 +103,16 @@ export const NavMenu: React.FC = () => {
     const handlePayrollChange = () => {
       queryClient.invalidateQueries({ queryKey: payrollKeys.all });
     };
+    const handleAppointmentsChange = () => {
+      queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
+    };
     window.addEventListener('omark-approvals-changed', handleApprovalsChange);
     window.addEventListener('omark-payroll-changed', handlePayrollChange);
+    window.addEventListener('omark-appointments-changed', handleAppointmentsChange);
     return () => {
       window.removeEventListener('omark-approvals-changed', handleApprovalsChange);
       window.removeEventListener('omark-payroll-changed', handlePayrollChange);
+      window.removeEventListener('omark-appointments-changed', handleAppointmentsChange);
     };
   }, [queryClient]);
 
@@ -147,15 +153,21 @@ export const NavMenu: React.FC = () => {
     staffProspectTimestamps
   );
 
-  const canSeeAppointmentsBadge = hasRole(['customer_service', 'admin']);
+  const canSeeAppointmentsBadge = Boolean(user?.id);
   const { data: appointmentsData } = useAppointmentsQuery(
     { pageSize: 100 },
     canSeeAppointmentsBadge && !apiUnseenCounts
   );
+
+  const staffAppointments = useMemo(() => {
+    if (!user?.id || !appointmentsData?.items) return [];
+    return appointmentsData.items.filter((a) => isAppointmentAssignedToStaff(a, user));
+  }, [appointmentsData, user]);
+
   const { count: fallbackAppointmentsCount } = useUnseenCount(
     'appointments',
     canSeeAppointmentsBadge ? user?.id : undefined,
-    (appointmentsData?.items ?? []).map((a) => a.createdAt)
+    staffAppointments.map((a) => a.createdAt)
   );
 
   const canSeeCheckIns = hasRole(['customer_service', 'admin', 'secretary', 'branch_manager']);
@@ -185,7 +197,10 @@ export const NavMenu: React.FC = () => {
     : isMarketingStaff
     ? fallbackProspectsCount
     : (fallbackProspectsCount > 0 ? fallbackProspectsCount : 0);
-  const newAppointmentsCount = apiUnseenCounts?.appointments ?? (canSeeAppointmentsBadge ? fallbackAppointmentsCount : 0);
+  const isOnAppointmentsPage = location.pathname.startsWith('/appointments') || location.pathname.startsWith('/cs/appointments');
+  const newAppointmentsCount = isOnAppointmentsPage
+    ? 0
+    : (apiUnseenCounts?.appointments ?? (canSeeAppointmentsBadge ? fallbackAppointmentsCount : 0));
   const newCheckInsCount = apiUnseenCounts?.checkIns ?? (canSeeCheckIns ? fallbackCheckInsCount : 0);
 
   // Get the current selected key based on path
@@ -196,7 +211,7 @@ export const NavMenu: React.FC = () => {
     if (path.startsWith('/marketing/prospects')) return '/marketing/prospects';
     if (path.startsWith('/cs/check-ins')) return '/cs/check-ins';
     if (path.startsWith('/cs/prospects')) return '/cs/prospects';
-    if (path.startsWith('/cs/appointments')) return '/cs/appointments';
+    if (path.startsWith('/appointments') || path.startsWith('/cs/appointments')) return '/appointments';
     if (path.startsWith('/admin/properties')) return '/admin/properties';
     if (path.startsWith('/head-office/pricing')) return '/head-office/pricing';
     if (path.startsWith('/head-office/approvals')) return '/head-office/approvals';
@@ -326,13 +341,12 @@ export const NavMenu: React.FC = () => {
       });
     }
 
-    if (hasRole(['customer_service', 'admin', 'branch_manager', 'secretary', 'accounts', 'marketing_director'])) {
-      items.push({
-        key: '/cs/appointments',
-        icon: <CalendarOutlined />,
-        label: <span>Appointments<NavBadge count={newAppointmentsCount} title={`${newAppointmentsCount} new appointment(s)`} /></span>,
-      });
-    }
+    // ── Appointments (Available to all staff members) ────────────────────────
+    items.push({
+      key: '/appointments',
+      icon: <CalendarOutlined />,
+      label: <span>Appointments<NavBadge count={newAppointmentsCount} title={`${newAppointmentsCount} new appointment(s)`} /></span>,
+    });
 
     // ── Properties (moved up - before Customers) ──────────────────────────
     if (hasRole(['admin'])) {
