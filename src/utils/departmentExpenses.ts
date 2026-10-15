@@ -139,3 +139,193 @@ export function calculateGrandTotals(expenses: any[]): DynamicGrandTotals {
     grandRejectedGHS: grandRejectedMinor / 100,
   };
 }
+
+// ── 4 Main Department Hub (Secretary, BM, Marketing, Admin) ─────────────────
+export type FourMainDepartmentKey = 'secretary' | 'bm' | 'marketing' | 'admin';
+
+export interface FourDepartmentConfig {
+  key: FourMainDepartmentKey;
+  name: string;
+  label: string;
+  color: string;
+  accentColor: string;
+  borderColor: string;
+  badgeBg: string;
+  gradientBg: string;
+  description: string;
+}
+
+export const FOUR_MAIN_DEPARTMENTS: FourDepartmentConfig[] = [
+  {
+    key: 'secretary',
+    name: 'Secretary',
+    label: 'Secretary',
+    color: '#13c2c2',
+    accentColor: '#006d75',
+    borderColor: '#87e8de',
+    badgeBg: '#e6fffb',
+    gradientBg: 'linear-gradient(135deg, #e6fffb 0%, #ffffff 100%)',
+    description: 'Front desk, office stationery, client refreshments & courier dispatch',
+  },
+  {
+    key: 'bm',
+    name: 'BM',
+    label: 'BM (Branch Manager)',
+    color: '#1890ff',
+    accentColor: '#096dd9',
+    borderColor: '#91d5ff',
+    badgeBg: '#e6f7ff',
+    gradientBg: 'linear-gradient(135deg, #e6f7ff 0%, #ffffff 100%)',
+    description: 'Generator diesel, vehicle transit, premises repairs & branch utilities',
+  },
+  {
+    key: 'marketing',
+    name: 'Marketing',
+    label: 'Marketing',
+    color: '#fa8c16',
+    accentColor: '#d46b08',
+    borderColor: '#ffd591',
+    badgeBg: '#fff7e6',
+    gradientBg: 'linear-gradient(135deg, #fff7e6 0%, #ffffff 100%)',
+    description: 'Mega-billboards, property expos, digital ads & campaign outreach',
+  },
+  {
+    key: 'admin',
+    name: 'Admin',
+    label: 'Admin',
+    color: '#722ed1',
+    accentColor: '#531dab',
+    borderColor: '#d3adf7',
+    badgeBg: '#f9f0ff',
+    gradientBg: 'linear-gradient(135deg, #f9f0ff 0%, #ffffff 100%)',
+    description: 'Executive IT hosting, audit compliance, legal fees & corporate filing',
+  },
+];
+
+export interface FourDepartmentSummary {
+  key: FourMainDepartmentKey;
+  name: string;
+  label: string;
+  count: number;
+  totalMinor: number;
+  approvedMinor: number;
+  pendingMinor: number;
+  rejectedMinor: number;
+  items: any[];
+}
+
+/**
+ * Resolves any expense into one of the 4 primary departments: Secretary, BM, Marketing, Admin
+ */
+export function resolveFourMainDepartment(expense: {
+  department?: string;
+  recordedByUserRole?: string;
+  category?: string;
+}): FourMainDepartmentKey {
+  const d = (expense.department || '').trim().toLowerCase();
+  const role = (expense.recordedByUserRole || '').trim().toLowerCase();
+  const cat = (expense.category || '').trim().toLowerCase();
+
+  // 1. Admin / Executive / Accounts / Finance
+  if (
+    role === 'admin' ||
+    role === 'accounts' ||
+    role === 'finance' ||
+    d.includes('executive') ||
+    d.includes('finance') ||
+    cat.includes('hosting') ||
+    cat.includes('audit') ||
+    cat.includes('legal') ||
+    cat.includes('compliance') ||
+    cat.includes('retainer') ||
+    cat.includes('statutory') ||
+    cat.includes('lands commission')
+  ) {
+    return 'admin';
+  }
+
+  // 2. Secretary (Desk, Hospitality, Supplies, Courier, Admin/Office Support)
+  if (
+    role === 'secretary' ||
+    d.includes('secretar') ||
+    d === 'administration' ||
+    d === 'customer service' ||
+    cat.includes('hospitality') ||
+    cat.includes('refreshment') ||
+    cat.includes('courier') ||
+    cat.includes('stationery') ||
+    cat.includes('supplies') ||
+    cat.includes('front desk') ||
+    cat.includes('sanitation') ||
+    cat.includes('cleaning')
+  ) {
+    return 'secretary';
+  }
+
+  // 3. Marketing (Marketing Director, Marketing Staff, Ads, Campaigns, Expos)
+  if (
+    role === 'marketing_director' ||
+    role === 'marketing_staff' ||
+    d.includes('market') ||
+    d.includes('sales') ||
+    cat.includes('billboard') ||
+    cat.includes('expo') ||
+    cat.includes('digital media') ||
+    cat.includes('ad') ||
+    cat.includes('campaign') ||
+    cat.includes('flyer') ||
+    cat.includes('branding') ||
+    cat.includes('sponsorship')
+  ) {
+    return 'marketing';
+  }
+
+  // 4. BM (Branch Manager, Operations, Fuel, Site Works, Maintenance, Transit)
+  if (
+    role === 'branch_manager' ||
+    d.includes('operat') ||
+    d.includes('branch') ||
+    cat.includes('fuel') ||
+    cat.includes('power') ||
+    cat.includes('diesel') ||
+    cat.includes('generator') ||
+    cat.includes('transit') ||
+    cat.includes('repairs') ||
+    cat.includes('servicing') ||
+    cat.includes('maintenance') ||
+    cat.includes('utilities')
+  ) {
+    return 'bm';
+  }
+
+  return 'admin';
+}
+
+/**
+ * Calculates sub-totals for the 4 primary departments (Secretary, BM, Marketing, Admin)
+ * based on the active filtered expenses.
+ */
+export function calculateFourDepartmentSummaries(expenses: any[]): FourDepartmentSummary[] {
+  const map: Record<FourMainDepartmentKey, FourDepartmentSummary> = {
+    secretary: { key: 'secretary', name: 'Secretary', label: 'Secretary', count: 0, totalMinor: 0, approvedMinor: 0, pendingMinor: 0, rejectedMinor: 0, items: [] },
+    bm: { key: 'bm', name: 'BM', label: 'BM (Branch Manager)', count: 0, totalMinor: 0, approvedMinor: 0, pendingMinor: 0, rejectedMinor: 0, items: [] },
+    marketing: { key: 'marketing', name: 'Marketing', label: 'Marketing', count: 0, totalMinor: 0, approvedMinor: 0, pendingMinor: 0, rejectedMinor: 0, items: [] },
+    admin: { key: 'admin', name: 'Admin', label: 'Admin', count: 0, totalMinor: 0, approvedMinor: 0, pendingMinor: 0, rejectedMinor: 0, items: [] },
+  };
+
+  expenses.forEach((exp) => {
+    const key = resolveFourMainDepartment(exp);
+    const entry = map[key];
+    const amt = exp.amountMinor || 0;
+    entry.count += 1;
+    entry.totalMinor += amt;
+    entry.items.push(exp);
+
+    if (exp.status === 'approved') entry.approvedMinor += amt;
+    else if (exp.status === 'pending') entry.pendingMinor += amt;
+    else if (exp.status === 'rejected') entry.rejectedMinor += amt;
+  });
+
+  return [map.secretary, map.bm, map.marketing, map.admin];
+}
+

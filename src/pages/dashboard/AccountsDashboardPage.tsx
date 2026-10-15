@@ -38,6 +38,7 @@ import { AccountsAnalyticsSection } from './accounts/AccountsAnalyticsSection';
 import { BankReconciliationSection } from './accounts/BankReconciliationSection';
 import { AccountsReceivableAgingCard } from './accounts/AccountsReceivableAgingCard';
 import { DepartmentalBudgetVarianceCard } from './accounts/DepartmentalBudgetVarianceCard';
+import { ExpenseOverviewChartsAndStats } from '@/components/expenses/ExpenseOverviewChartsAndStats';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
 import dayjs from 'dayjs';
@@ -400,6 +401,9 @@ export const AccountsDashboardPage: React.FC = () => {
 
       {/* ── 4. Departmental Budget vs. Actual Variance ── */}
       <DepartmentalBudgetVarianceCard />
+
+      {/* ── 5. Corporate Expense Overview Analytics & Visual Charts ── */}
+      <ExpenseOverviewChartsAndStats />
 
       {/* ── Finance Tools ── */}
       <Title level={4} style={{ marginBottom: 16 }}>

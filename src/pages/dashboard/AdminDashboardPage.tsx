@@ -41,6 +41,7 @@ import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
+import { ExpenseOverviewChartsAndStats } from '@/components/expenses/ExpenseOverviewChartsAndStats';
 
 const { Title, Text } = Typography;
 
@@ -186,6 +187,9 @@ export const AdminDashboardPage: React.FC = () => {
           </div>
           <div style={{ marginBottom: 20 }}>
             <AppointmentCommunicationHistory />
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <ExpenseOverviewChartsAndStats />
           </div>
           <div style={{ marginBottom: 20 }}>
             <RoleFilteredExpensesTable />

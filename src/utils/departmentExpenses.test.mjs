@@ -186,3 +186,87 @@ test('Administrative Actions: direct decision updating payload schema', () => {
   assert.equal(rejectedExpense.status, 'rejected');
   assert.ok(rejectedExpense.decisionNote.includes('Over budget'));
 });
+
+test('4 Main Department Resolution: accurately maps expenses to Secretary, BM, Marketing, and Admin', async () => {
+  const { resolveFourMainDepartment, calculateFourDepartmentSummaries, FOUR_MAIN_DEPARTMENTS } = await import('./departmentExpenses.ts');
+
+  // Verify 4 departments config
+  assert.equal(FOUR_MAIN_DEPARTMENTS.length, 4);
+  const keys = FOUR_MAIN_DEPARTMENTS.map((d) => d.key);
+  assert.deepEqual(keys, ['secretary', 'bm', 'marketing', 'admin']);
+
+  // Secretary
+  assert.equal(resolveFourMainDepartment({ recordedByUserRole: 'secretary' }), 'secretary');
+  assert.equal(resolveFourMainDepartment({ department: 'Administration' }), 'secretary');
+  assert.equal(resolveFourMainDepartment({ department: 'Customer Service' }), 'secretary');
+  assert.equal(resolveFourMainDepartment({ category: 'Client Hospitality' }), 'secretary');
+  assert.equal(resolveFourMainDepartment({ category: 'Office Supplies' }), 'secretary');
+  assert.equal(resolveFourMainDepartment({ category: 'Courier & Dispatch' }), 'secretary');
+
+  // BM (Branch Manager)
+  assert.equal(resolveFourMainDepartment({ recordedByUserRole: 'branch_manager' }), 'bm');
+  assert.equal(resolveFourMainDepartment({ department: 'Operations' }), 'bm');
+  assert.equal(resolveFourMainDepartment({ department: 'Branch Operations' }), 'bm');
+  assert.equal(resolveFourMainDepartment({ category: 'Power & Fuel' }), 'bm');
+  assert.equal(resolveFourMainDepartment({ category: 'Premises Repairs' }), 'bm');
+
+  // Marketing
+  assert.equal(resolveFourMainDepartment({ recordedByUserRole: 'marketing_director' }), 'marketing');
+  assert.equal(resolveFourMainDepartment({ recordedByUserRole: 'marketing_staff' }), 'marketing');
+  assert.equal(resolveFourMainDepartment({ department: 'Marketing & Sales' }), 'marketing');
+  assert.equal(resolveFourMainDepartment({ category: 'Digital Media Ads' }), 'marketing');
+  assert.equal(resolveFourMainDepartment({ category: 'Property Expo & Roadshow' }), 'marketing');
+
+  // Admin
+  assert.equal(resolveFourMainDepartment({ recordedByUserRole: 'admin' }), 'admin');
+  assert.equal(resolveFourMainDepartment({ recordedByUserRole: 'accounts' }), 'admin');
+  assert.equal(resolveFourMainDepartment({ department: 'Executive Administration' }), 'admin');
+  assert.equal(resolveFourMainDepartment({ department: 'Finance & Accounts' }), 'admin');
+  assert.equal(resolveFourMainDepartment({ category: 'Executive IT & Cloud Hosting' }), 'admin');
+  assert.equal(resolveFourMainDepartment({ category: 'Audit & Compliance' }), 'admin');
+});
+
+test('4 Main Department Summaries & Periodic Totals: calculates subtotals and grand totals reflecting period', async () => {
+  const { calculateFourDepartmentSummaries, calculateGrandTotals } = await import('./departmentExpenses.ts');
+
+  const periodicExpenses = [
+    { id: 'e1', recordedByUserRole: 'secretary', amountMinor: 50000, status: 'approved', incurredOn: '2026-10-10' },
+    { id: 'e2', recordedByUserRole: 'branch_manager', amountMinor: 120000, status: 'pending', incurredOn: '2026-10-12' },
+    { id: 'e3', recordedByUserRole: 'marketing_director', amountMinor: 250000, status: 'approved', incurredOn: '2026-10-14' },
+    { id: 'e4', recordedByUserRole: 'admin', amountMinor: 80000, status: 'approved', incurredOn: '2026-10-15' },
+    { id: 'e5', recordedByUserRole: 'admin', amountMinor: 40000, status: 'rejected', incurredOn: '2026-10-15' },
+  ];
+
+  const summaries = calculateFourDepartmentSummaries(periodicExpenses);
+  assert.equal(summaries.length, 4);
+
+  const sec = summaries.find((s) => s.key === 'secretary');
+  assert.equal(sec.count, 1);
+  assert.equal(sec.totalMinor, 50000); // 500.00 GHS
+  assert.equal(sec.approvedMinor, 50000);
+
+  const bm = summaries.find((s) => s.key === 'bm');
+  assert.equal(bm.count, 1);
+  assert.equal(bm.totalMinor, 120000); // 1,200.00 GHS
+  assert.equal(bm.pendingMinor, 120000);
+
+  const mkt = summaries.find((s) => s.key === 'marketing');
+  assert.equal(mkt.count, 1);
+  assert.equal(mkt.totalMinor, 250000); // 2,500.00 GHS
+  assert.equal(mkt.approvedMinor, 250000);
+
+  const adm = summaries.find((s) => s.key === 'admin');
+  assert.equal(adm.count, 2);
+  assert.equal(adm.totalMinor, 120000); // 1,200.00 GHS
+  assert.equal(adm.approvedMinor, 80000);
+  assert.equal(adm.rejectedMinor, 40000);
+
+  // Overall grand totals reflecting this period
+  const grand = calculateGrandTotals(periodicExpenses);
+  assert.equal(grand.grandCount, 5);
+  assert.equal(grand.grandTotalMinor, 540000); // 5,400.00 GHS
+  assert.equal(grand.grandTotalGHS, 5400.0);
+  assert.equal(grand.grandApprovedMinor, 380000); // 3,800.00 GHS
+  assert.equal(grand.grandPendingMinor, 120000); // 1,200.00 GHS
+  assert.equal(grand.grandRejectedMinor, 40000); // 400.00 GHS
+});
