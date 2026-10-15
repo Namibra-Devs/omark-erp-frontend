@@ -253,9 +253,43 @@ export const filterEntitiesByBranch = <T extends Record<string, any>>(
       item.creatorId ||
       item.recordedByUserId ||
       item.generatedByUserId ||
-      item.userId;
+      item.userId ||
+      item.staffId ||
+      item.hostUserId ||
+      item.hostId ||
+      item.marketerId ||
+      item.agentId ||
+      item.bookedByUserId ||
+      item.updatedByUserId ||
+      item.feedbackByUserId ||
+      item.attendedByUserId;
     if (user?.id && assignedId && String(assignedId).toLowerCase() === String(user.id).toLowerCase()) {
       return true;
+    }
+
+    // Name-based match on assigned/created fields
+    const candidateNames = [
+      item.assignedUserName,
+      item.assignedStaffName,
+      item.createdByName,
+      item.creatorName,
+      item.staffName,
+      item.marketerName,
+      item.agentName,
+      item.hostName,
+      item.bookedByName,
+      item.updatedByName,
+      item.attendedByName,
+    ];
+    const userFullName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim().toLowerCase() : '';
+    const userSimpleName = String(user?.name || '').trim().toLowerCase();
+    for (const cName of candidateNames) {
+      if (cName) {
+        const cn = String(cName).trim().toLowerCase();
+        if ((userFullName && cn === userFullName) || (userSimpleName && cn === userSimpleName)) {
+          return true;
+        }
+      }
     }
 
     // 1. Direct branch ID or name on item, or stored branch mapping

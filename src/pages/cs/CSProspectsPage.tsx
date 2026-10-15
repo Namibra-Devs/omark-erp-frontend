@@ -75,13 +75,16 @@ import {
   prospectKeys,
 } from '@/api/prospects';
 import {
-  useAppointmentsQuery,
+  useScopedAppointments,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
-  saveStoredAppointment,
   appointmentsKeys,
   type Appointment
 } from '@/api/appointments';
+import { useAllStaffInteractionsQuery } from '@/api/interactions';
+import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
+import { roleLabels } from '@/constants/enums';
+import type { Role } from '@/types';
 import { useQueryClient } from '@tanstack/react-query';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -199,18 +202,25 @@ export const CSProspectsPage: React.FC = () => {
     refetch: refetchInteractions,
   } = useInteractionsQuery(selectedProspect?.id ?? '');
 
-  // ── Appointments Query & Real-Time Sync ─────────────────────────────────────
+  // ── Scoped Appointments Query & Real-Time Sync ──────────────────────────────
   const {
-    data: appointmentsData,
+    scopedAppointments: appointments,
     refetch: refetchAppointments,
-  } = useAppointmentsQuery({ pageSize: 500 });
-  const appointments = appointmentsData?.items ?? [];
+  } = useScopedAppointments({ pageSize: 1000 });
+  const { interactions: allInteractions, refetch: refetchAllInteractions } = useAllStaffInteractionsQuery();
 
   useEffect(() => {
-    const handleAppointmentsChanged = () => refetchAppointments();
+    const handleAppointmentsChanged = () => {
+      refetchAppointments();
+      refetchAllInteractions();
+    };
     window.addEventListener('omark-appointments-changed', handleAppointmentsChanged);
-    return () => window.removeEventListener('omark-appointments-changed', handleAppointmentsChanged);
-  }, [refetchAppointments]);
+    window.addEventListener('omark-interactions-changed', handleAppointmentsChanged);
+    return () => {
+      window.removeEventListener('omark-appointments-changed', handleAppointmentsChanged);
+      window.removeEventListener('omark-interactions-changed', handleAppointmentsChanged);
+    };
+  }, [refetchAppointments, refetchAllInteractions]);
 
   // ── API Mutations ──────────────────────────────────────────────────────────
   const createProspect = useCreateProspectMutation();
@@ -1146,6 +1156,19 @@ export const CSProspectsPage: React.FC = () => {
                             <div style={{ marginTop: 4 }}>
                               <Text style={{ fontSize: 12 }}>{apt.reason || 'Client Consultation / Site Inspection'}</Text>
                             </div>
+                            {(() => {
+                              const creatorId = getAppointmentCreatorId(apt, allInteractions);
+                              const creatorUser = creatorId ? allStaff.find((u) => u.id === creatorId) : null;
+                              const creatorName = creatorUser ? getUserFullName(creatorUser) : (apt.createdByName || 'Staff Member');
+                              const creatorRole = creatorUser ? (roleLabels[creatorUser.role as Role] || creatorUser.role) : 'Staff';
+                              return (
+                                <div style={{ marginTop: 2 }}>
+                                  <Text type="secondary" style={{ fontSize: 11 }}>Created by: </Text>
+                                  <Text strong style={{ fontSize: 11 }}>{creatorName} </Text>
+                                  <Tag color="geekblue" style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>{creatorRole}</Tag>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </Timeline.Item>
@@ -1940,37 +1963,38 @@ export const CSProspectsPage: React.FC = () => {
               return;
             }
             try {
-              const existing = existingApptForCSModal ||
-                appointments.find(
-                  (a) => a.prospectId === values.prospectId && a.status !== 'canceled' && a.status !== 'completed'
-                );
+              const targetId = values.prospectId;
+              const reasonText = values.reason?.trim() || 'Prospect consultation / site visit';
+              const targetTime = dayjs(values.scheduledFor);
+              // Safe update ONLY if provably the same creator, same prospect, and same slot
+              const sameSlotAppt = appointments.find(
+                (a) =>
+                  a.prospectId === targetId &&
+                  getAppointmentCreatorId(a, allInteractions) === user?.id &&
+                  dayjs(a.scheduledFor).isSame(targetTime, 'minute') &&
+                  a.status !== 'canceled' &&
+                  a.status !== 'completed'
+              );
 
-              const target = allProspectsList.find((p) => p.id === values.prospectId) || appointmentTargetProspect;
+              const target = allProspectsList.find((p) => p.id === targetId) || appointmentTargetProspect;
 
-              if (existing) {
+              if (sameSlotAppt) {
                 await updateAppointment.mutateAsync({
-                  id: existing.id,
+                  id: sameSlotAppt.id,
                   payload: {
                     status: 'scheduled',
                     scheduledFor: values.scheduledFor.toISOString(),
-                    feedback: values.reason?.trim() || 'Prospect consultation / site visit',
+                    feedback: reasonText,
                   },
                 });
-                saveStoredAppointment({
-                  ...existing,
-                  status: 'scheduled',
-                  scheduledFor: values.scheduledFor.toISOString(),
-                  reason: values.reason?.trim() || existing.reason,
-                  updatedAt: new Date().toISOString(),
-                });
                 message.success(
-                  `Appointment date updated and record overwritten for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+                  `Personal appointment updated for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
                 );
               } else {
                 await createAppointment.mutateAsync({
-                  prospectId: values.prospectId,
+                  prospectId: targetId,
                   scheduledFor: values.scheduledFor.toISOString(),
-                  reason: values.reason?.trim() || 'Prospect consultation / site visit',
+                  reason: reasonText,
                 });
                 message.success(
                   `Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`

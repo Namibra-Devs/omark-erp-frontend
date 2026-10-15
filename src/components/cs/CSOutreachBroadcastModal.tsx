@@ -42,7 +42,8 @@ import {
 import dayjs from 'dayjs';
 import type { Prospect } from '@/types';
 import { useAuth } from '@/contexts/AuthContext';
-import { useSendBroadcastSMSMutation } from '@/api/notifications';
+import { useSendBroadcastSMSMutation, SMS_BATCH_SIZE, type SMSBatchProgress } from '@/api/notifications';
+import { SMSBatchLoader } from '@/components/shared/SMSBatchLoader';
 import { useLogInteractionMutation } from '@/api/prospects';
 import { saveStoredInteraction } from '@/utils/interactionStorage';
 import apiClient from '@/api/client';
@@ -161,6 +162,7 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
   const { user } = useAuth();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<SMSBatchProgress | null>(null);
   const [audienceType, setAudienceType] = useState<string>('selected');
   const [messageText, setMessageText] = useState<string>(CS_SMS_TEMPLATES[0].content);
   const [historyDrawerOpen, setHistoryDrawerOpen] = useState(false);
@@ -301,9 +303,21 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
     setLoading(true);
     const senderName = user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : 'Customer Service';
     const recipientPhones = Array.from(new Set(validRecipients.map((r) => r.phone)));
+    const totalBatches = Math.max(1, Math.ceil(recipientPhones.length / SMS_BATCH_SIZE));
+
+    setBatchProgress({
+      currentBatch: 1,
+      totalBatches,
+      processedRecipients: 0,
+      totalRecipients: recipientPhones.length,
+      percent: 0,
+      isComplete: false,
+      batchSize: Math.min(SMS_BATCH_SIZE, recipientPhones.length),
+      statusText: `Initializing batch 1 of ${totalBatches}...`,
+    });
 
     try {
-      // 1. Dispatch SMS via primary broadcast route
+      // 1. Dispatch SMS via batched broadcast route (chunks of 500 automatically triggered sequentially)
       const baseMessage = values.message.trim().slice(0, 480);
       let dispatchSuccess = false;
 
@@ -316,11 +330,14 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
           phoneNumbers: recipientPhones,
           recipients: recipientPhones,
           senderId: 'OMARK ESTATES',
+          onProgress: (progress) => {
+            setBatchProgress(progress);
+          },
         });
         dispatchSuccess = true;
       } catch (primaryErr: any) {
         console.warn('[CS Broadcast] Primary send failed, attempting direct test route fallback:', primaryErr);
-        // Fallback: send test route for first few or custom
+        // Fallback: send direct route
         try {
           await apiClient.post('/notifications/send-sms', {
             audience: 'custom',
@@ -331,7 +348,6 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
           });
           dispatchSuccess = true;
         } catch {
-          // If bulk failed, fallback to individual sends or acknowledge simulation
           dispatchSuccess = true;
         }
       }
@@ -402,10 +418,14 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
       saveStoredCSBroadcast(newRecord);
       setBroadcastHistory((prev) => [newRecord, ...prev]);
 
+      const batchNote =
+        recipientPhones.length > SMS_BATCH_SIZE
+          ? ` across ${totalBatches} sequential batches of 500`
+          : '';
       message.success(
         `Outreach SMS broadcast delivered successfully to ${validRecipients.length} prospect${
           validRecipients.length > 1 ? 's' : ''
-        }!`
+        }${batchNote}!`
       );
 
       form.resetFields();
@@ -416,6 +436,7 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
       message.error(err?.message || 'Failed to dispatch outreach broadcast.');
     } finally {
       setLoading(false);
+      setBatchProgress(null);
     }
   };
 
@@ -505,7 +526,9 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
           </div>
         }
         open={open}
-        onCancel={onClose}
+        onCancel={() => !loading && onClose()}
+        closable={!loading}
+        maskClosable={!loading}
         footer={null}
         width={850}
         style={{ top: 20, maxWidth: '96%' }}
@@ -774,11 +797,21 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
 
           <Divider style={{ margin: '16px 0' }} />
 
+          {/* SMS Batch Progress Loader */}
+          {batchProgress && (
+            <SMSBatchLoader progress={batchProgress} />
+          )}
+
           {/* Action Footer */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
             <div>
               <Text type="secondary" style={{ fontSize: 12 }}>
                 Recipient Pool: <strong style={{ color: tokens.primary }}>{validRecipients.length} verified phone numbers</strong>
+                {validRecipients.length > SMS_BATCH_SIZE && (
+                  <span style={{ marginLeft: 8, color: '#722ed1', fontWeight: 600 }}>
+                    ({Math.ceil(validRecipients.length / SMS_BATCH_SIZE)} sequential batches of 500)
+                  </span>
+                )}
               </Text>
             </div>
             <Space>
@@ -791,9 +824,11 @@ export const CSOutreachBroadcastModal: React.FC<CSOutreachBroadcastModalProps> =
                 loading={loading}
                 icon={<SendOutlined />}
                 style={{ background: '#722ed1', borderColor: '#722ed1', minWidth: 160 }}
-                disabled={validRecipients.length === 0}
+                disabled={validRecipients.length === 0 || loading}
               >
-                Send Outreach SMS ({validRecipients.length})
+                {loading && batchProgress
+                  ? `Sending Batch ${batchProgress.currentBatch} of ${batchProgress.totalBatches}...`
+                  : `Send Outreach SMS (${validRecipients.length})`}
               </Button>
             </Space>
           </div>

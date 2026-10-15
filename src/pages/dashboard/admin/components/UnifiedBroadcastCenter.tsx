@@ -69,8 +69,11 @@ import { useBranchesQuery } from '@/api/branches';
 import {
   useNotificationsQuery,
   useSendBroadcastSMSMutation,
+  SMS_BATCH_SIZE,
+  type SMSBatchProgress,
   type NotificationLog,
 } from '@/api/notifications';
+import { SMSBatchLoader } from '@/components/shared/SMSBatchLoader';
 import { recordSystemEvent } from '@/utils/activityNotificationEngine';
 import { normalizePhone, extractPhoneDigits } from '@/utils/duplicateValidation';
 import {
@@ -284,6 +287,7 @@ export const UnifiedBroadcastCenter: React.FC = () => {
   const [messageText, setMessageText] = useState<string>('');
   const [subjectTitle, setSubjectTitle] = useState<string>('');
   const [sending, setSending] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<SMSBatchProgress | null>(null);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [recipientSearchQuery, setRecipientSearchQuery] = useState<string>('');
 
@@ -633,6 +637,17 @@ export const UnifiedBroadcastCenter: React.FC = () => {
         }
 
         const trimmedMsg = messageText.trim().slice(0, 480);
+        const totalBatches = Math.max(1, Math.ceil(recipientPhoneNumbers.length / SMS_BATCH_SIZE));
+        setBatchProgress({
+          currentBatch: 1,
+          totalBatches,
+          processedRecipients: 0,
+          totalRecipients: recipientPhoneNumbers.length,
+          percent: 0,
+          isComplete: false,
+          batchSize: Math.min(SMS_BATCH_SIZE, recipientPhoneNumbers.length),
+          statusText: `Initializing batch 1 of ${totalBatches}...`,
+        });
 
         await sendBroadcastSMS.mutateAsync({
           audience: resolvedAudience,
@@ -642,6 +657,9 @@ export const UnifiedBroadcastCenter: React.FC = () => {
           phoneNumbers: recipientPhoneNumbers,
           recipients: recipientPhoneNumbers,
           senderId: 'OMARK ESTATES',
+          onProgress: (progress) => {
+            setBatchProgress(progress);
+          },
         });
       }
 
@@ -712,8 +730,12 @@ export const UnifiedBroadcastCenter: React.FC = () => {
 
       setConfirmModalOpen(false);
       refetchNotifications();
+      const batchNote =
+        channels.includes('sms') && recipientPhoneNumbers.length > SMS_BATCH_SIZE
+          ? ` in ${Math.ceil(recipientPhoneNumbers.length / SMS_BATCH_SIZE)} sequential batches of 500`
+          : '';
       message.success(
-        `Broadcast successfully dispatched to ${selectedRecipients.length} recipients (${excludedCount} excluded) via OMARK gateway!`
+        `Broadcast successfully dispatched to ${selectedRecipients.length} recipients (${excludedCount} excluded) via OMARK gateway${batchNote}!`
       );
     } catch (err: any) {
       const responseData = err?.response?.data;
@@ -729,6 +751,7 @@ export const UnifiedBroadcastCenter: React.FC = () => {
       message.error(errorMsg);
     } finally {
       setSending(false);
+      setBatchProgress(null);
     }
   };
 
@@ -1251,6 +1274,11 @@ export const UnifiedBroadcastCenter: React.FC = () => {
                   Broadcast Campaign Now ({selectedRecipients.length} Selected)
                 </Button>
               </div>
+              {channels.includes('sms') && validMobileCount > SMS_BATCH_SIZE && (
+                <div style={{ fontSize: 11, color: '#0284c7', marginTop: 8, textAlign: 'right', fontWeight: 600 }}>
+                  ⚡ Auto-Batching Active: {validMobileCount} recipients will be dispatched in {Math.ceil(validMobileCount / SMS_BATCH_SIZE)} sequential batches of 500
+                </div>
+              )}
             </Form>
           </Card>
         </Col>
@@ -1695,13 +1723,26 @@ export const UnifiedBroadcastCenter: React.FC = () => {
           </Space>
         }
         open={confirmModalOpen}
-        onCancel={() => setConfirmModalOpen(false)}
+        onCancel={() => !sending && setConfirmModalOpen(false)}
+        closable={!sending}
+        maskClosable={!sending}
         confirmLoading={sending}
         onOk={handleExecuteBroadcast}
-        okText={`Confirm & Broadcast (${selectedRecipients.length} Recipients)`}
-        okButtonProps={{ style: { background: '#0284c7' } }}
+        okText={
+          sending && batchProgress
+            ? `Sending Batch ${batchProgress.currentBatch} of ${batchProgress.totalBatches}...`
+            : sending
+            ? 'Dispatching Broadcast...'
+            : `Confirm & Broadcast (${selectedRecipients.length} Recipients)`
+        }
+        okButtonProps={{ style: { background: '#0284c7' }, disabled: sending }}
+        cancelButtonProps={{ disabled: sending }}
       >
         <div style={{ padding: '8px 0' }}>
+          {batchProgress && (
+            <SMSBatchLoader progress={batchProgress} />
+          )}
+
           <Alert
             message="You are about to dispatch an official broadcast."
             description={
@@ -1710,6 +1751,11 @@ export const UnifiedBroadcastCenter: React.FC = () => {
                 <div>• <strong>Included Recipients:</strong> {selectedRecipients.length} contacts ({excludedCount} excluded)</div>
                 <div>• <strong>Channels:</strong> {channels.map((c) => c.toUpperCase()).join(', ')}</div>
                 <div>• <strong>Sender ID:</strong> OMARK ESTATES</div>
+                {channels.includes('sms') && (
+                  <div>
+                    • <strong>SMS Batching:</strong> Restricted to 500 messages/batch ({Math.ceil(validMobileCount / SMS_BATCH_SIZE)} sequential batch{Math.ceil(validMobileCount / SMS_BATCH_SIZE) > 1 ? 'es' : ''})
+                  </div>
+                )}
                 {validMobileCount < selectedRecipients.length && (
                   <div style={{ color: '#d97706', marginTop: 4 }}>
                     ℹ️ Note: {selectedRecipients.length - validMobileCount} recipients do not have a mobile number registered and will receive the announcement via ERP In-App Bell / Portal only.

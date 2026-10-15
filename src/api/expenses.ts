@@ -13,6 +13,7 @@ export interface ExpenseEntity {
   incurredOn: string;
   branchId?: string;
   branchName?: string;
+  department?: string;
   description?: string;
   status: 'pending' | 'approved' | 'rejected';
   recordedByUserId?: string;
@@ -39,6 +40,7 @@ export interface CreateExpensePayload {
   amountMinor: number;
   incurredOn: string;
   branchId?: string;
+  department?: string;
   description?: string;
   status?: 'pending' | 'approved' | 'rejected';
   recordedByUserId?: string;
@@ -419,6 +421,7 @@ export function normalizeExpenseEntity(raw: any): ExpenseEntity {
     incurredOn: dayjs(incurredOn).isValid() ? dayjs(incurredOn).format('YYYY-MM-DD') : incurredOn,
     branchId: raw.branchId || (typeof raw.branch === 'object' ? raw.branch?.id : raw.branch) || undefined,
     branchName: raw.branchName || (typeof raw.branch === 'object' ? raw.branch?.name : undefined) || undefined,
+    department: raw.department || undefined,
     description: raw.description || raw.notes || raw.title || undefined,
     status,
     recordedByUserId:
@@ -571,6 +574,7 @@ export function useCreateExpenseMutation() {
         amountMinor: payload.amountMinor,
         incurredOn: payload.incurredOn,
         branchId: payload.branchId,
+        department: payload.department,
         description: payload.description,
         recordedByUserId: payload.recordedByUserId,
         recordedByUserName: payload.recordedByUserName,
@@ -587,6 +591,7 @@ export function useCreateExpenseMutation() {
         incurredOn: payload.incurredOn,
       };
       if (payload.branchId) cleanPayload.branchId = payload.branchId;
+      if (payload.department) cleanPayload.department = payload.department;
       if (payload.description) cleanPayload.description = payload.description;
 
       let saved: ExpenseEntity | null = null;

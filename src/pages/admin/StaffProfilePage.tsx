@@ -62,8 +62,9 @@ import { useAttendanceQuery, useStaffAttendanceStatsQuery, type AttendanceRecord
 import { ATTENDANCE_STATUS_META } from '@/constants/attendance';
 import { useStaffLeaveRequestsQuery } from '@/api/leaves';
 import { useProspectsQuery, useUpdateProspectMutation } from '@/api/prospects';
-import { consolidateAllProspects, consolidateAllAppointments, getStaffAssignedProspects, getStaffAssignedAppointments } from '@/utils/prospectAssignment';
-import { useAppointmentsQuery } from '@/api/appointments';
+import { consolidateAllProspects, getStaffAssignedProspects } from '@/utils/prospectAssignment';
+import { useScopedAppointments } from '@/api/appointments';
+import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import { useDeedsQuery } from '@/api/deeds';
 import { useBranchesQuery, DEFAULT_SYSTEM_BRANCHES } from '@/api/branches';
 import { roleLabels } from '@/constants/enums';
@@ -136,8 +137,7 @@ export const StaffProfilePage: React.FC = () => {
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
-  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 1000 });
-  const { data: staffSpecificAppointments } = useAppointmentsQuery({ assignedUserId: id, pageSize: 1000 });
+  const { appointments: scopedAppointments, isLoading: appointmentsLoading, allInteractions } = useScopedAppointments();
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 500 });
 
   const isMarketingDirector = staffMember?.role === 'marketing_director' || storedAssignment?.role === 'marketing_director';
@@ -150,13 +150,6 @@ export const StaffProfilePage: React.FC = () => {
       prospectsData?.items
     );
   }, [allProspectsData, mktProspectsData, csProspectsData, prospectsData]);
-
-  const allConsolidatedAppointments = useMemo(() => {
-    return consolidateAllAppointments(
-      appointmentsData?.items,
-      staffSpecificAppointments?.items
-    );
-  }, [appointmentsData, staffSpecificAppointments]);
 
   const targetStaffMember = useMemo(() => {
     const base = staffMember || { id, role: isMarketingDirector ? 'marketing_director' : 'marketing_staff' };
@@ -174,8 +167,11 @@ export const StaffProfilePage: React.FC = () => {
   }, [allConsolidatedProspects, targetStaffMember, branches]);
 
   const staffAppointments = useMemo(() => {
-    return getStaffAssignedAppointments(allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects, branches);
-  }, [allConsolidatedAppointments, targetStaffMember, allConsolidatedProspects, branches]);
+    if (!id) return [];
+    return scopedAppointments.filter(
+      (a) => getAppointmentCreatorId(a, allInteractions) === id
+    );
+  }, [scopedAppointments, allInteractions, id]);
 
   const staffDeeds = useMemo(() => {
     return (deedsData?.items ?? []).filter((d) => d.generatedByUserId === id);

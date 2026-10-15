@@ -48,7 +48,7 @@ import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPe
 import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
 import { useProspectsQuery, useUpdateProspectMutation, getStoredProspects } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
-import { useAppointmentsQuery, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
+import { useScopedAppointments, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
 import { useCreateExpenseMutation } from '@/api/expenses';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
 import { saveStoredInteraction } from '@/utils/interactionStorage';
@@ -205,8 +205,7 @@ export const DirectorOverviewPage: React.FC = () => {
     return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
   }, [refetchProspects, refetchAnalytics]);
 
-  const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 1000 });
-  const appointments = appointmentsData?.items ?? [];
+  const { scopedAppointments: appointments, refetch: refetchAppointments } = useScopedAppointments({ pageSize: 1000 });
 
   const { data: propertiesData } = usePropertiesQuery({ pageSize: 200 });
   const properties = propertiesData?.items ?? [];

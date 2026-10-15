@@ -46,7 +46,10 @@ import {
   MailOutlined,
   HistoryOutlined,
   FlagFilled,
+  CloudDownloadOutlined,
+  AuditOutlined,
 } from '@ant-design/icons';
+import { classifyAppointments, generateBackfillCsv, type ClassificationResult } from '@/utils/appointmentBackfill';
 import { useAuth } from '@/contexts/AuthContext';
 import { useBranchesQuery } from '@/api/branches';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
@@ -54,10 +57,10 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
 import { tokens } from '@/constants/tokens';
 import {
+  useScopedAppointments,
   useAppointmentsQuery,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
-  saveStoredAppointment,
   type Appointment as ApiAppointment,
   type AppointmentStatus,
   type AppointmentSource,
@@ -73,9 +76,16 @@ import { interactionChannelLabels, roleLabels } from '@/constants/enums';
 import type { InteractionChannel, Prospect, Role } from '@/types';
 import {
   consolidateAllProspects,
-  getStaffAssignedAppointments,
-  isAppointmentAssignedToStaff,
+  getAppointmentDueStatus,
+  type AppointmentDueStatus,
 } from '@/utils/prospectAssignment';
+import {
+  getAppointmentCreatorId,
+  isAppointmentEditableByUser,
+  getVisibleStaffIds,
+} from '@/utils/appointmentScoping';
+
+export { getAppointmentDueStatus, type AppointmentDueStatus };
 
 type Appointment = ApiAppointment & {
   date: string;
@@ -117,58 +127,14 @@ const getSourceConfig = (source: string) => {
   return configs[source] || configs.staff;
 };
 
-// Helper to determine due / overdue status of an appointment
-// IMPORTANT: Due and overdue flags MUST disappear when the appointment is completed, attended to, or canceled
-export type AppointmentDueStatus = 'overdue' | 'due_today' | 'upcoming' | 'none';
-
-export const getAppointmentDueStatus = (appointment: {
-  status?: string;
-  scheduledFor?: string;
-  date?: string;
-  time?: string;
-}): AppointmentDueStatus => {
-  const status = String(appointment.status || '').toLowerCase();
-  // Completed, attended, canceled or no_show appointments must NEVER show due/overdue flags
-  if (status === 'completed' || status === 'canceled' || status === 'no_show') {
-    return 'none';
-  }
-
-  const schedTime = appointment.scheduledFor
-    ? dayjs(appointment.scheduledFor)
-    : (appointment.date && appointment.time ? dayjs(`${appointment.date}T${appointment.time}`) : null);
-
-  if (!schedTime || !schedTime.isValid()) {
-    return 'none';
-  }
-
-  const now = dayjs();
-  const startOfToday = now.startOf('day');
-
-  // If scheduled before today: OVERDUE
-  if (schedTime.isBefore(startOfToday)) {
-    return 'overdue';
-  }
-
-  // If scheduled for today:
-  if (schedTime.isSame(now, 'day')) {
-    // If appointment time has already passed today:
-    if (schedTime.isBefore(now)) {
-      return 'overdue';
-    }
-    // Upcoming today:
-    return 'due_today';
-  }
-
-  return 'upcoming';
-};
-
 export const AppointmentsPage: React.FC = () => {
   const navigate = useNavigate();
   const { user, hasRole } = useAuth();
-  const isManagement = hasRole(['admin', 'branch_manager']);
+  const isAdmin = hasRole(['admin', 'super_admin']);
 
-  // Scope filter: management can toggle between personal vs all branch bookings; staff is restricted to personal
-  const [scopeFilter, setScopeFilter] = useState<'personal' | 'all'>('personal');
+  // Specific staff filter for Admin (all staff) and Marketing Director (marketing staff)
+  const [staffFilter, setStaffFilter] = useState<string>('all');
+  const [scopeFilter, setScopeFilter] = useState<'personal' | 'all'>('all');
 
   // States
   const [searchText, setSearchText] = useState('');
@@ -185,6 +151,10 @@ export const AppointmentsPage: React.FC = () => {
   const [viewDrawerOpen, setViewDrawerOpen] = useState(false);
   const [updateStatusModal, setUpdateStatusModal] = useState(false);
   const [statusForm] = Form.useForm();
+
+  // Diagnostics & Backfill modal states
+  const [diagnosticModalOpen, setDiagnosticModalOpen] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<any>(null);
 
   // Rebook states
   const [rebookModalOpen, setRebookModalOpen] = useState(false);
@@ -203,54 +173,148 @@ export const AppointmentsPage: React.FC = () => {
   const logInteractionMutation = useLogInteractionMutation();
   const updateProspectMutation = useUpdateProspectMutation();
 
-  // API Queries
-  const { 
-    data: appointmentsData, 
+  // Primary Scoped Appointments Query:
+  // Calls GET /appointments, applies role-based scoping (creator-only), and de-duplicates by ID.
+  const {
+    appointments: scopedAppointments,
+    rawAppointments,
     isLoading: appointmentsLoading,
     refetch: refetchAppointments,
-    error: appointmentsError
-  } = useAppointmentsQuery({
+    error: appointmentsError,
+  } = useScopedAppointments({
     status: (statusFilter !== 'all' && statusFilter !== 'overdue' && statusFilter !== 'due_today') ? statusFilter as AppointmentStatus : undefined,
+    pageSize: 1000,
   });
 
   const { data: branches = [] } = useBranchesQuery();
-  const rawAppointments = appointmentsData?.items ?? [];
-  const appointmentsList = React.useMemo(() => {
-    return filterEntitiesByBranch(rawAppointments, user, branches);
-  }, [rawAppointments, user, branches]);
 
   const { data: allProspectsData, isLoading: prospectsLoading } = useProspectsQuery({ pageSize: 10000 });
-  const { data: userProspectsData } = useProspectsQuery(
-    user?.id ? { assignedUserId: user.id, pageSize: 10000 } : undefined,
-    !!user?.id
-  );
+  const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
+  const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
   const consolidatedProspects = React.useMemo(() => {
-    return consolidateAllProspects(allProspectsData?.items, userProspectsData?.items);
-  }, [allProspectsData, userProspectsData]);
+    return consolidateAllProspects(
+      allProspectsData?.items,
+      mktProspectsData?.items,
+      csProspectsData?.items
+    );
+  }, [allProspectsData, mktProspectsData, csProspectsData]);
 
   const { data: customersData, isLoading: customersLoading } = useCustomersQuery({ pageSize: 10000 });
   const { data: usersData } = useUsersQuery({ pageSize: 1000 });
   const allUsers = React.useMemo(() => usersData?.items ?? [], [usersData]);
 
-  // Personal appointments filtered strictly to this staff member
-  const personalAppointments = React.useMemo(() => {
-    return getStaffAssignedAppointments(
-      appointmentsList,
-      user,
-      consolidatedProspects,
-      branches,
-      customersData?.items
-    );
-  }, [appointmentsList, user, consolidatedProspects, branches, customersData]);
-
-  // Effective visible appointments: restricted to individual bookings for all staff;
-  // Management can toggle between personal bookings and all branch bookings.
-  const effectiveAppointments = React.useMemo(() => {
-    if (isManagement && scopeFilter === 'all') {
-      return appointmentsList;
+  // Allowed staff filter options for Admin and Marketing Director
+  const canFilterByStaff = user?.role === 'admin' || user?.role === 'marketing_director';
+  const staffFilterOptions = React.useMemo(() => {
+    if (user?.role === 'admin') {
+      const staffList = allUsers.filter((u) => u.isActive !== false);
+      return [
+        { label: 'All Staff Members', value: 'all' },
+        { label: '⚠️ Unassigned (Website & Legacy)', value: 'unassigned' },
+        ...staffList.map((u) => ({
+          label: `${getUserFullName(u)} (${roleLabels[u.role as Role] || u.role})`,
+          value: u.id,
+        })),
+      ];
     }
-    return personalAppointments;
-  }, [isManagement, scopeFilter, appointmentsList, personalAppointments]);
+    if (user?.role === 'marketing_director') {
+      const marketingStaff = allUsers.filter((u) => u.role === 'marketing_staff' && u.isActive !== false);
+      return [
+        { label: 'All Marketing Team', value: 'all' },
+        { label: `${getUserFullName(user)} (Self - Director)`, value: user.id },
+        ...marketingStaff.map((u) => ({
+          label: `${getUserFullName(u)} (Marketing Staff)`,
+          value: u.id,
+        })),
+      ];
+    }
+    return [];
+  }, [user, allUsers]);
+
+  // Effective visible appointments: scopedAppointments is already scoped to the authenticated user's role
+  const effectiveAppointments = scopedAppointments;
+
+  const personalAppointments = React.useMemo(() => {
+    if (!user?.id) return [];
+    return effectiveAppointments.filter((app) => getAppointmentCreatorId(app, allInteractions) === user.id);
+  }, [effectiveAppointments, user?.id, allInteractions]);
+
+  // Read-only diagnostic export for Administrator: downloads omark_stored_appointments and omark_stored_interactions
+  const handleExportLocalStorageBackup = () => {
+    try {
+      const storedAppointments = JSON.parse(localStorage.getItem('omark_stored_appointments') || '[]');
+      const storedInteractions = JSON.parse(localStorage.getItem('omark_stored_interactions') || '[]');
+      const backupData = {
+        exportedAt: new Date().toISOString(),
+        omark_stored_appointments: storedAppointments,
+        omark_stored_interactions: storedInteractions,
+      };
+      const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `omark_local_storage_backup_${dayjs().format('YYYY-MM-DD_HHmm')}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      message.success('Local diagnostic data backup downloaded successfully');
+    } catch (err) {
+      message.error('Failed to export local data backup');
+    }
+  };
+
+  // Run dry-run backfill classification on live appointments + local data
+  const handleRunBackfillDryRun = () => {
+    try {
+      const storedAppointments = JSON.parse(localStorage.getItem('omark_stored_appointments') || '[]');
+      const storedInteractions = JSON.parse(localStorage.getItem('omark_stored_interactions') || '[]');
+      const combinedInteractions = [...(allInteractions || []), ...storedInteractions];
+
+      const result = classifyAppointments({
+        serverAppointments: rawAppointments || [],
+        localAppointments: storedAppointments,
+        users: allUsers,
+        interactions: combinedInteractions,
+        prospects: consolidatedProspects,
+        customers: customersData?.items ?? [],
+      });
+
+      setDiagnosticResult(result);
+      setDiagnosticModalOpen(true);
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to generate dry-run report');
+    }
+  };
+
+  const handleDownloadBackfillCsv = () => {
+    if (!diagnosticResult?.classified) return;
+    const csv = generateBackfillCsv(diagnosticResult.classified);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `appointment_backfill_dryrun_${dayjs().format('YYYY-MM-DD_HHmm')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    message.success('Backfill report CSV downloaded');
+  };
+
+  const handleDownloadBackfillJson = () => {
+    if (!diagnosticResult) return;
+    const blob = new Blob([JSON.stringify(diagnosticResult, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `appointment_backfill_dryrun_${dayjs().format('YYYY-MM-DD_HHmm')}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    message.success('Backfill report JSON downloaded');
+  };
 
   // Helper to resolve staff user information with formatted role label
   const getStaffInfo = (userId?: string, fallbackName = 'Staff Member', fallbackRole = 'Staff') => {
@@ -275,7 +339,7 @@ export const AppointmentsPage: React.FC = () => {
   // Opening this page clears the "new appointments" nav badge (see NavMenu.tsx).
   useEffect(() => {
     if (user?.id) markSeen('appointments', user.id);
-  }, [user?.id, appointmentsData]);
+  }, [user?.id, scopedAppointments]);
 
   // Listen for real-time appointment changes across tabs and components
   useEffect(() => {
@@ -351,49 +415,39 @@ export const AppointmentsPage: React.FC = () => {
       const staffFullName = `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Staff Member';
       const reasonNotes = values.interactionNotes?.trim() || values.feedback?.trim() || undefined;
 
-      const existingAppt = appointmentsList.find(
+      // Check if an active appointment already exists for the EXACT same creator, prospect/customer, and time slot
+      const targetTime = dayjs(values.scheduledFor);
+      const sameSlotAppt = effectiveAppointments.find(
         (a) =>
           ((values.entityType === 'prospect' && a.prospectId === values.entityId) ||
            (values.entityType === 'customer' && a.customerId === values.entityId)) &&
+          getAppointmentCreatorId(a, allInteractions) === user?.id &&
+          dayjs(a.scheduledFor).isSame(targetTime, 'minute') &&
           a.status !== 'canceled' &&
           a.status !== 'completed'
       );
 
       let appointmentId: string;
-      if (existingAppt) {
-        // Overwrite existing appointment record to prevent duplicate entries
+      if (sameSlotAppt) {
+        // Safe update ONLY when provably the same creator, same contact, and same slot
         await updateAppointment.mutateAsync({
-          id: existingAppt.id,
+          id: sameSlotAppt.id,
           payload: {
             status: 'scheduled',
             scheduledFor: values.scheduledFor.toISOString(),
-            feedback: reasonNotes || existingAppt.feedback || `Rescheduled date on ${dayjs().format('YYYY-MM-DD')}`,
+            feedback: reasonNotes || sameSlotAppt.feedback || `Updated slot notes on ${dayjs().format('YYYY-MM-DD')}`,
           },
         });
-        saveStoredAppointment({
-          ...existingAppt,
-          status: 'scheduled',
-          scheduledFor: values.scheduledFor.toISOString(),
-          reason: reasonNotes || existingAppt.reason,
-          feedback: reasonNotes || existingAppt.feedback,
-          assignedUserId: user?.id || existingAppt.assignedUserId,
-          staffId: user?.id || existingAppt.staffId,
-          updatedAt: new Date().toISOString(),
-        });
-        appointmentId = existingAppt.id;
-        message.success('Existing appointment found and overwritten with new date! Duplicate prevented.');
+        appointmentId = sameSlotAppt.id;
+        message.success('Existing personal appointment in this slot updated successfully.');
       } else {
         const appointmentData: CreateAppointmentPayload = {
           prospectId: values.entityType === 'prospect' ? values.entityId : undefined,
           customerId: values.entityType === 'customer' ? values.entityId : undefined,
           scheduledFor: values.scheduledFor.toISOString(),
           reason: reasonNotes,
-          assignedUserId: user?.id,
-          assignedUserName: staffFullName,
-          createdByUserId: user?.id,
-          createdByName: staffFullName,
-          staffId: user?.id,
-          staffName: staffFullName,
+          assignedUserId: values.assignedUserId || user?.id,
+          assignedUserName: values.assignedUserId ? getStaffInfo(values.assignedUserId).name : staffFullName,
         };
 
         const created = await createAppointment.mutateAsync(tagPayloadWithBranch(appointmentData, user));
@@ -468,7 +522,7 @@ export const AppointmentsPage: React.FC = () => {
 
     try {
       if (values.status === 'postponed' && values.rescheduleImmediately && values.scheduledFor) {
-        // Reschedule existing appointment date directly to overwrite old record and prevent duplicate entries
+        // Reschedule existing appointment date directly on server
         await updateAppointment.mutateAsync({
           id: selectedAppointment.id,
           payload: {
@@ -477,14 +531,7 @@ export const AppointmentsPage: React.FC = () => {
             scheduledFor: values.scheduledFor.toISOString(),
           },
         });
-        saveStoredAppointment({
-          ...selectedAppointment,
-          status: 'scheduled',
-          scheduledFor: values.scheduledFor.toISOString(),
-          feedback: values.feedback || selectedAppointment.feedback,
-          updatedAt: new Date().toISOString(),
-        });
-        message.success('Appointment date updated and record overwritten successfully!');
+        message.success('Appointment date updated successfully!');
       } else {
         // Standard status update
         await updateAppointment.mutateAsync({
@@ -643,7 +690,7 @@ export const AppointmentsPage: React.FC = () => {
     if (!rebookAppointment) return;
 
     try {
-      // Overwrite existing appointment record directly to prevent duplicate entries
+      // Update appointment record directly on server
       await updateAppointment.mutateAsync({
         id: rebookAppointment.id,
         payload: {
@@ -653,16 +700,7 @@ export const AppointmentsPage: React.FC = () => {
         },
       });
 
-      saveStoredAppointment({
-        ...rebookAppointment,
-        status: 'scheduled',
-        scheduledFor: values.scheduledFor.toISOString(),
-        reason: values.reason || rebookAppointment.reason,
-        feedback: values.feedback || rebookAppointment.feedback,
-        updatedAt: new Date().toISOString(),
-      });
-
-      message.success('Appointment date updated! Record overwritten successfully without duplicates.');
+      message.success('Appointment rescheduled successfully.');
 
       window.dispatchEvent(new Event('omark-appointments-changed'));
       setRebookModalOpen(false);
@@ -735,7 +773,25 @@ export const AppointmentsPage: React.FC = () => {
       } else if (statusFilter !== 'all') {
         matchesStatus = app.status === statusFilter;
       }
-      return matchesSearch && matchesSource && matchesDate && matchesStatus;
+
+      let matchesStaff = true;
+      if (staffFilter !== 'all') {
+        const creatorId = getAppointmentCreatorId(app, allInteractions);
+        if (staffFilter === 'unassigned') {
+          matchesStaff = !creatorId;
+        } else {
+          matchesStaff = creatorId === staffFilter;
+        }
+      }
+
+      if (scopeFilter === 'personal' && (user?.role === 'admin' || user?.role === 'marketing_director')) {
+        const creatorId = getAppointmentCreatorId(app, allInteractions);
+        if (creatorId !== user?.id) {
+          return false;
+        }
+      }
+
+      return matchesSearch && matchesSource && matchesDate && matchesStatus && matchesStaff;
     });
 
     // Priority sort: Overdue (1), Due Today (2), Upcoming (3), Completed/Canceled (4)
@@ -752,7 +808,19 @@ export const AppointmentsPage: React.FC = () => {
       if (diff !== 0) return diff;
       return dayjs(`${b.date}T${b.time}`).unix() - dayjs(`${a.date}T${a.time}`).unix();
     });
-  }, [mappedAppointments, searchText, statusFilter, sourceFilter, dateRange, allEntities]);
+  }, [
+    mappedAppointments,
+    searchText,
+    statusFilter,
+    sourceFilter,
+    dateRange,
+    allEntities,
+    scopeFilter,
+    staffFilter,
+    allInteractions,
+    user?.id,
+    user?.role,
+  ]);
 
   // Status breakdown
   const statusBreakdown = React.useMemo(() => {
@@ -953,19 +1021,9 @@ export const AppointmentsPage: React.FC = () => {
     const sourceConfig = getSourceConfig(selectedAppointment.source);
     const appointmentHistory = getAppointmentHistory(selectedAppointment);
 
-    const matchedProspect = consolidatedProspects.find((p) => p.id === selectedAppointment.prospectId);
-    const creatorUserId =
-      selectedAppointment.createdByUserId ||
-      (selectedAppointment as any).userId ||
-      (selectedAppointment as any).assignedUserId ||
-      (selectedAppointment as any).assignedStaffId ||
-      matchedProspect?.assignedUserId ||
-      (matchedProspect as any)?.createdByUserId;
-    const defaultStaffName = user
-      ? `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email || 'Customer Service Officer'
-      : 'Customer Service Officer';
-    const defaultStaffRole = user?.role ? (roleLabels[user.role as Role] || 'Customer Service') : 'Customer Service';
-    const bookingStaff = getStaffInfo(creatorUserId, defaultStaffName, defaultStaffRole);
+    const creatorUserId = getAppointmentCreatorId(selectedAppointment, allInteractions);
+    const bookingStaff = creatorUserId ? getStaffInfo(creatorUserId) : null;
+    const isDrawerEditable = isAppointmentEditableByUser(selectedAppointment, user, allUsers, allInteractions);
 
     return (
       <div style={{ height: '100%' }}>
@@ -1057,7 +1115,7 @@ export const AppointmentsPage: React.FC = () => {
         {/* Action Buttons */}
         <div style={{ marginBottom: 24 }}>
           <Space wrap>
-            {selectedAppointment.status !== 'completed' && selectedAppointment.status !== 'canceled' && (
+            {isDrawerEditable && selectedAppointment.status !== 'completed' && selectedAppointment.status !== 'canceled' && (
               <Button
                 type="primary"
                 icon={<CheckCircleOutlined />}
@@ -1067,7 +1125,7 @@ export const AppointmentsPage: React.FC = () => {
                 Mark Attended / Completed
               </Button>
             )}
-            {selectedAppointment.status === 'postponed' && (
+            {isDrawerEditable && selectedAppointment.status === 'postponed' && (
               <Button
                 type="primary"
                 icon={<RedoOutlined />}
@@ -1079,22 +1137,24 @@ export const AppointmentsPage: React.FC = () => {
                 Rebook / Reschedule
               </Button>
             )}
-            <Button 
-              type="primary" 
-              icon={<EditOutlined />}
-              onClick={() => {
-                setUpdateStatusModal(true);
-                statusForm.setFieldsValue({
-                  status: selectedAppointment.status,
-                  feedback: selectedAppointment.feedback || '',
-                  rescheduleImmediately: false,
-                  rebookActionType: 'rebook_new',
-                });
-                setViewDrawerOpen(false);
-              }}
-            >
-              Update Status
-            </Button>
+            {isDrawerEditable && (
+              <Button 
+                type="primary" 
+                icon={<EditOutlined />}
+                onClick={() => {
+                  setUpdateStatusModal(true);
+                  statusForm.setFieldsValue({
+                    status: selectedAppointment.status,
+                    feedback: selectedAppointment.feedback || '',
+                    rescheduleImmediately: false,
+                    rebookActionType: 'rebook_new',
+                  });
+                  setViewDrawerOpen(false);
+                }}
+              >
+                Update Status
+              </Button>
+            )}
             <Button
               icon={<MessageOutlined style={{ color: '#1677ff' }} />}
               onClick={() => {
@@ -1103,25 +1163,27 @@ export const AppointmentsPage: React.FC = () => {
             >
               Log Interaction
             </Button>
-            <Popconfirm
-              title="Cancel Appointment"
-              description="Are you sure you want to cancel this appointment?"
-              onConfirm={() => {
-                handleCancelAppointment(selectedAppointment.id);
-                setViewDrawerOpen(false);
-              }}
-              okText="Yes"
-              cancelText="No"
-              disabled={selectedAppointment.status === 'canceled' || selectedAppointment.status === 'completed'}
-            >
-              <Button
-                danger
-                icon={<CloseCircleOutlined />}
+            {isDrawerEditable && (
+              <Popconfirm
+                title="Cancel Appointment"
+                description="Are you sure you want to cancel this appointment?"
+                onConfirm={() => {
+                  handleCancelAppointment(selectedAppointment.id);
+                  setViewDrawerOpen(false);
+                }}
+                okText="Yes"
+                cancelText="No"
                 disabled={selectedAppointment.status === 'canceled' || selectedAppointment.status === 'completed'}
               >
-                Cancel Appointment
-              </Button>
-            </Popconfirm>
+                <Button
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  disabled={selectedAppointment.status === 'canceled' || selectedAppointment.status === 'completed'}
+                >
+                  Cancel Appointment
+                </Button>
+              </Popconfirm>
+            )}
           </Space>
         </div>
 
@@ -1141,11 +1203,26 @@ export const AppointmentsPage: React.FC = () => {
                     {sourceConfig.label}
                   </Tag>
                 </Descriptions.Item>
-                {selectedAppointment.source !== 'website' && (
-                  <Descriptions.Item label={<Space><IdcardOutlined /> Booked By</Space>}>
+                <Descriptions.Item label={<Space><IdcardOutlined /> Created by</Space>}>
+                  {bookingStaff ? (
                     <Space size={6}>
                       <Text strong>{bookingStaff.name}</Text>
-                      <Tag color="blue">{bookingStaff.role}</Tag>
+                      <Tag color="geekblue">{bookingStaff.role}</Tag>
+                    </Space>
+                  ) : (
+                    <Space size={6}>
+                      <Text strong style={{ color: '#8c8c8c' }}>
+                        {selectedAppointment.source === 'website' ? 'Website Booking' : 'Unassigned / System'}
+                      </Text>
+                      <Tag color="default">{selectedAppointment.source === 'website' ? 'Website' : 'Orphan'}</Tag>
+                    </Space>
+                  )}
+                </Descriptions.Item>
+                {selectedAppointment.assignedUserId && (
+                  <Descriptions.Item label={<Space><UserOutlined /> Assigned Host (Display Only)</Space>}>
+                    <Space size={6}>
+                      <Text strong>{getStaffInfo(selectedAppointment.assignedUserId).name}</Text>
+                      <Tag color="default">{getStaffInfo(selectedAppointment.assignedUserId).role}</Tag>
                     </Space>
                   </Descriptions.Item>
                 )}
@@ -1348,35 +1425,37 @@ export const AppointmentsPage: React.FC = () => {
         );
       },
     },
-    ...(scopeFilter === 'all'
-      ? [
-          {
-            title: 'Staff / Host',
-            key: 'staff',
-            width: 170,
-            render: (_: any, record: Appointment) => {
-              const creatorUserId =
-                record.assignedUserId ||
-                record.staffId ||
-                record.createdByUserId ||
-                (record as any).userId;
-              const fallbackName =
-                record.assignedUserName || record.staffName || record.createdByName || 'Staff Member';
-              const info = getStaffInfo(creatorUserId, fallbackName);
-              return (
-                <Space direction="vertical" size={0}>
-                  <Text strong style={{ fontSize: 13 }}>
-                    {info.name}
-                  </Text>
-                  <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>
-                    {info.role}
-                  </Tag>
-                </Space>
-              );
-            },
-          },
-        ]
-      : []),
+    {
+      title: 'Created by',
+      key: 'createdBy',
+      width: 180,
+      render: (_: any, record: Appointment) => {
+        const creatorId = getAppointmentCreatorId(record, allInteractions);
+        if (!creatorId) {
+          return (
+            <Space direction="vertical" size={0}>
+              <Text strong style={{ fontSize: 13, color: '#8c8c8c' }}>
+                {record.source === 'website' ? 'Website Booking' : 'Unassigned / System'}
+              </Text>
+              <Tag color="default" style={{ fontSize: 10, margin: 0 }}>
+                {record.source === 'website' ? 'Website' : 'Orphan'}
+              </Tag>
+            </Space>
+          );
+        }
+        const info = getStaffInfo(creatorId);
+        return (
+          <Space direction="vertical" size={0}>
+            <Text strong style={{ fontSize: 13 }}>
+              {info.name}
+            </Text>
+            <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>
+              {info.role}
+            </Tag>
+          </Space>
+        );
+      },
+    },
     {
       title: 'Scheduled For',
       key: 'date',
@@ -1561,93 +1640,100 @@ export const AppointmentsPage: React.FC = () => {
       key: 'actions',
       width: 250,
       fixed: 'right' as const,
-      render: (_: any, record: Appointment) => (
-        <Space>
-          {record.status !== 'completed' && record.status !== 'canceled' && (
-            <Tooltip title="Mark as Attended / Completed (clears due & overdue flags)">
-              <Button
-                type="primary"
-                size="small"
-                icon={<CheckCircleOutlined />}
-                style={{
-                  backgroundColor: '#52c41a',
-                  borderColor: '#52c41a',
-                  fontWeight: 600,
-                  fontSize: 12,
-                  padding: '0 8px',
-                }}
-                onClick={() => handleQuickCompleteAppointment(record)}
-              >
-                Attend
-              </Button>
-            </Tooltip>
-          )}
-          {record.status === 'postponed' && (
-            <Tooltip title="Rebook Postponed Appointment">
-              <Button
+      render: (_: any, record: Appointment) => {
+        const isEditable = isAppointmentEditableByUser(record, user, allUsers, allInteractions);
+        return (
+          <Space>
+            {isEditable && record.status !== 'completed' && record.status !== 'canceled' && (
+              <Tooltip title="Mark as Attended / Completed (clears due & overdue flags)">
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<CheckCircleOutlined />}
+                  style={{
+                    backgroundColor: '#52c41a',
+                    borderColor: '#52c41a',
+                    fontWeight: 600,
+                    fontSize: 12,
+                    padding: '0 8px',
+                  }}
+                  onClick={() => handleQuickCompleteAppointment(record)}
+                >
+                  Attend
+                </Button>
+              </Tooltip>
+            )}
+            {isEditable && record.status === 'postponed' && (
+              <Tooltip title="Rebook Postponed Appointment">
+                <Button
+                  type="primary"
+                  ghost
+                  icon={<RedoOutlined />}
+                  style={{
+                    color: '#fa8c16',
+                    borderColor: '#fa8c16',
+                    fontWeight: 600,
+                    fontSize: 12,
+                    padding: '0 8px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                  onClick={() => handleOpenRebookModal(record)}
+                >
+                  Rebook
+                </Button>
+              </Tooltip>
+            )}
+            <Tooltip title="View Details">
+              <Button 
                 type="primary"
                 ghost
-                icon={<RedoOutlined />}
-                style={{
-                  color: '#fa8c16',
-                  borderColor: '#fa8c16',
-                  fontWeight: 600,
-                  fontSize: 12,
-                  padding: '0 8px',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
+                icon={<EyeOutlined />} 
+                onClick={() => {
+                  setSelectedAppointment(record);
+                  setViewDrawerOpen(true);
                 }}
-                onClick={() => handleOpenRebookModal(record)}
-              >
-                Rebook
-              </Button>
-            </Tooltip>
-          )}
-          <Tooltip title="View Details">
-            <Button 
-              type="primary"
-              ghost
-              icon={<EyeOutlined />} 
-              onClick={() => {
-                setSelectedAppointment(record);
-                setViewDrawerOpen(true);
-              }}
-            />
-          </Tooltip>
-          <Tooltip title="Update Status">
-            <Button
-              icon={<EditOutlined />}
-              onClick={() => {
-                setSelectedAppointment(record);
-                setUpdateStatusModal(true);
-                statusForm.setFieldsValue({
-                  status: record.status,
-                  feedback: record.feedback || '',
-                  rescheduleImmediately: false,
-                  rebookActionType: 'rebook_new',
-                });
-              }}
-            />
-          </Tooltip>
-          <Popconfirm
-            title="Cancel Appointment"
-            description={`Are you sure you want to cancel this appointment?`}
-            onConfirm={() => handleCancelAppointment(record.id)}
-            okText="Yes"
-            cancelText="No"
-            disabled={record.status === 'canceled' || record.status === 'completed'}
-          >
-            <Tooltip title="Cancel">
-              <Button
-                danger
-                icon={<CloseCircleOutlined />}
-                disabled={record.status === 'canceled' || record.status === 'completed'}
               />
             </Tooltip>
-          </Popconfirm>
-        </Space>
-      ),
+            {isEditable && (
+              <Tooltip title="Update Status">
+                <Button
+                  icon={<EditOutlined />}
+                  onClick={() => {
+                    setSelectedAppointment(record);
+                    setUpdateStatusModal(true);
+                    statusForm.setFieldsValue({
+                      status: record.status,
+                      feedback: record.feedback || '',
+                      rescheduleImmediately: false,
+                      rebookActionType: 'rebook_new',
+                    });
+                  }}
+                />
+              </Tooltip>
+            )}
+            {isEditable && (
+              <Popconfirm
+                title="Cancel Appointment"
+                description={`Are you sure you want to cancel this appointment?`}
+                onConfirm={() => handleCancelAppointment(record.id)}
+                okText="Yes"
+                cancelText="No"
+                disabled={record.status === 'canceled' || record.status === 'completed'}
+              >
+                <Tooltip title="Cancel">
+                  <Button
+                    danger
+                    icon={<CloseCircleOutlined />}
+                    disabled={record.status === 'canceled' || record.status === 'completed'}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            )}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -1668,30 +1754,47 @@ export const AppointmentsPage: React.FC = () => {
           {dayApps.slice(0, 3).map((app: Appointment) => {
             const config = getStatusConfig(app.status);
             const entity = getEntityDetails(app);
+            const creatorId = getAppointmentCreatorId(app, allInteractions);
+            const creatorInfo = creatorId ? getStaffInfo(creatorId) : null;
+            const creatorLabel = creatorInfo
+              ? `${creatorInfo.name} (${creatorInfo.role})`
+              : (app.source === 'website' ? 'Website Booking' : 'Unassigned / System');
+
             return (
-              <div 
+              <Tooltip
                 key={app.id}
-                style={{
-                  padding: '2px 4px',
-                  marginBottom: 2,
-                  background: `${config.color}20`,
-                  borderRadius: 4,
-                  fontSize: 11,
-                  cursor: 'pointer',
-                  borderLeft: `2px solid ${config.color}`,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap'
-                }}
-                onClick={() => {
-                  setSelectedAppointment(app);
-                  setViewDrawerOpen(true);
-                }}
+                title={
+                  <div>
+                    <div><strong>{entity.name}</strong> ({app.time})</div>
+                    <div>Status: {config.label}</div>
+                    <div>Created by: {creatorLabel}</div>
+                    {app.assignedUserId && <div>Host: {getStaffInfo(app.assignedUserId).name}</div>}
+                  </div>
+                }
               >
-                <Text style={{ fontSize: 10 }}>
-                  {app.time} - {entity.name}
-                </Text>
-              </div>
+                <div 
+                  style={{
+                    padding: '2px 4px',
+                    marginBottom: 2,
+                    background: `${config.color}20`,
+                    borderRadius: 4,
+                    fontSize: 11,
+                    cursor: 'pointer',
+                    borderLeft: `2px solid ${config.color}`,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                  onClick={() => {
+                    setSelectedAppointment(app);
+                    setViewDrawerOpen(true);
+                  }}
+                >
+                  <Text style={{ fontSize: 10 }}>
+                    {app.time} - {entity.name}
+                  </Text>
+                </div>
+              </Tooltip>
             );
           })}
           {dayApps.length > 3 && (
@@ -1740,13 +1843,43 @@ export const AppointmentsPage: React.FC = () => {
   return (
     <div style={{ maxWidth: '100%', overflow: 'hidden', padding: '0 4px' }}>
       <PageHeader
-        title={scopeFilter === 'personal' ? 'My Appointments' : 'All Branch Appointments'}
+        title={
+          user?.role === 'admin'
+            ? scopeFilter === 'personal'
+              ? 'My Appointments'
+              : 'All Staff Appointments'
+            : user?.role === 'marketing_director'
+            ? scopeFilter === 'personal'
+              ? 'My Appointments'
+              : 'Marketing Team Appointments'
+            : 'My Appointments'
+        }
         subtitle={
-          scopeFilter === 'personal'
-            ? 'View and manage your individual client appointments and personal bookings. Only your bookings are shown.'
-            : 'Overview and management of all branch appointments across staff members.'
+          user?.role === 'admin'
+            ? scopeFilter === 'personal'
+              ? 'View and manage your individual client appointments. Only your bookings are shown.'
+              : 'Complete company-wide master table of all staff appointments, consultations, and website bookings.'
+            : user?.role === 'marketing_director'
+            ? scopeFilter === 'personal'
+              ? 'View and manage your personal bookings.'
+              : 'Overview of appointments created by you and all marketing staff members.'
+            : 'View and manage your individual client appointments. Showing appointments created by you.'
         }
         actions={[
+          ...(user?.role === 'admin'
+            ? [
+                {
+                  label: 'Backfill Dry-Run Report',
+                  onClick: handleRunBackfillDryRun,
+                  icon: <AuditOutlined />,
+                },
+                {
+                  label: 'Export Local Diagnostics',
+                  onClick: handleExportLocalStorageBackup,
+                  icon: <CloudDownloadOutlined />,
+                },
+              ]
+            : []),
           {
             label: 'Client Check-Ins',
             onClick: () => navigate('/cs/check-ins'),
@@ -1770,13 +1903,13 @@ export const AppointmentsPage: React.FC = () => {
         ]}
       />
 
-      {/* Scope Switcher for Admin / Branch Manager, or Personal Scope Notice for Staff */}
-      {isManagement ? (
+      {/* Scope Switcher: Restricted so it cannot widen beyond user's allowed scope */}
+      {isAdmin ? (
         <Card size="small" style={{ marginBottom: 16, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <Space size={12} wrap>
               <Text strong style={{ fontSize: 13, color: '#334155' }}>
-                <UserOutlined style={{ marginRight: 6, color: tokens.primary }} /> Visibility Scope:
+                <UserOutlined style={{ marginRight: 6, color: tokens.primary }} /> Administrator Visibility Scope:
               </Text>
               <Segmented
                 value={scopeFilter}
@@ -1785,20 +1918,20 @@ export const AppointmentsPage: React.FC = () => {
                   {
                     label: (
                       <span style={{ padding: '0 8px', fontWeight: 600 }}>
-                        <UserOutlined style={{ marginRight: 6 }} />
-                        My Bookings (Personal: {personalAppointments.length})
+                        <TeamOutlined style={{ marginRight: 6 }} />
+                        All Staff Appointments ({effectiveAppointments.length})
                       </span>
                     ),
-                    value: 'personal',
+                    value: 'all',
                   },
                   {
                     label: (
                       <span style={{ padding: '0 8px', fontWeight: 600 }}>
-                        <TeamOutlined style={{ marginRight: 6 }} />
-                        All Branch Bookings ({appointmentsList.length})
+                        <UserOutlined style={{ marginRight: 6 }} />
+                        My Bookings ({personalAppointments.length})
                       </span>
                     ),
-                    value: 'all',
+                    value: 'personal',
                   },
                 ]}
               />
@@ -1806,19 +1939,65 @@ export const AppointmentsPage: React.FC = () => {
             <Tag color={scopeFilter === 'personal' ? 'blue' : 'purple'} style={{ margin: 0, fontWeight: 600 }}>
               {scopeFilter === 'personal'
                 ? 'Showing your individual appointments only'
-                : 'Showing all appointments across branch staff'}
+                : 'Showing all appointments across all staff and website bookings'}
+            </Tag>
+          </div>
+        </Card>
+      ) : user?.role === 'marketing_director' ? (
+        <Card size="small" style={{ marginBottom: 16, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <Space size={12} wrap>
+              <Text strong style={{ fontSize: 13, color: '#334155' }}>
+                <TeamOutlined style={{ marginRight: 6, color: tokens.primary }} /> Marketing Director Visibility Scope:
+              </Text>
+              <Segmented
+                value={scopeFilter}
+                onChange={(val) => setScopeFilter(val as 'personal' | 'all')}
+                options={[
+                  {
+                    label: (
+                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
+                        <TeamOutlined style={{ marginRight: 6 }} />
+                        Marketing Team ({effectiveAppointments.length})
+                      </span>
+                    ),
+                    value: 'all',
+                  },
+                  {
+                    label: (
+                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
+                        <UserOutlined style={{ marginRight: 6 }} />
+                        My Bookings ({personalAppointments.length})
+                      </span>
+                    ),
+                    value: 'personal',
+                  },
+                ]}
+              />
+            </Space>
+            <Tag color="cyan" style={{ margin: 0, fontWeight: 600 }}>
+              {scopeFilter === 'personal'
+                ? 'Showing your personal bookings only'
+                : 'Showing marketing department appointments (self + marketing staff)'}
             </Tag>
           </div>
         </Card>
       ) : (
-        <Alert
-          type="info"
-          showIcon
-          icon={<UserOutlined style={{ color: '#1890ff' }} />}
-          message="Personal Appointments"
-          description="You are viewing your individual bookings. Any appointments you schedule or are assigned to will appear here."
-          style={{ marginBottom: 16 }}
-        />
+        <Card size="small" style={{ marginBottom: 16, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+            <Space size={12}>
+              <Text strong style={{ fontSize: 13, color: '#334155' }}>
+                <UserOutlined style={{ marginRight: 6, color: tokens.primary }} /> Visibility Scope:
+              </Text>
+              <Tag color="blue" style={{ fontWeight: 600, fontSize: 12, padding: '2px 8px' }}>
+                Personal ({effectiveAppointments.length} Bookings)
+              </Tag>
+            </Space>
+            <Tag color="default" style={{ margin: 0 }}>
+              Showing only appointments created by you (creator-scoped)
+            </Tag>
+          </div>
+        </Card>
       )}
 
       {/* Status Cards */}
@@ -1991,10 +2170,10 @@ export const AppointmentsPage: React.FC = () => {
 
       {/* Filters and View Controls */}
       <Card style={{ marginBottom: 16 }}>
-        <Row gutter={[16, 16]}>
-          <Col xs={24} md={6}>
+        <Row gutter={[16, 16]} align="middle">
+          <Col xs={24} md={canFilterByStaff && scopeFilter === 'all' ? 5 : 6}>
             <Input
-              placeholder="Search by name or phone"
+              placeholder="Search by name, phone, reason"
               prefix={<SearchOutlined />}
               value={searchText}
               onChange={(e) => setSearchText(e.target.value)}
@@ -2002,7 +2181,26 @@ export const AppointmentsPage: React.FC = () => {
               size="middle"
             />
           </Col>
-          <Col xs={12} md={4}>
+          {canFilterByStaff && scopeFilter === 'all' && (
+            <Col xs={12} md={4}>
+              <Select
+                style={{ width: '100%' }}
+                placeholder="Filter by Creator"
+                value={staffFilter}
+                onChange={setStaffFilter}
+                size="middle"
+                showSearch
+                optionFilterProp="children"
+              >
+                {staffFilterOptions.map((opt) => (
+                  <Option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </Option>
+                ))}
+              </Select>
+            </Col>
+          )}
+          <Col xs={12} md={canFilterByStaff && scopeFilter === 'all' ? 3 : 4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Filter by status"
@@ -2021,7 +2219,7 @@ export const AppointmentsPage: React.FC = () => {
               <Option value="no_show">No Show ({statusBreakdown.noShow})</Option>
             </Select>
           </Col>
-          <Col xs={12} md={4}>
+          <Col xs={12} md={scopeFilter === 'all' ? 3 : 4}>
             <Select
               style={{ width: '100%' }}
               placeholder="Filter by source"
@@ -2035,7 +2233,7 @@ export const AppointmentsPage: React.FC = () => {
               <Option value="website">Website Booking</Option>
             </Select>
           </Col>
-          <Col xs={24} md={6}>
+          <Col xs={24} md={scopeFilter === 'all' ? 5 : 6}>
             <RangePicker 
               style={{ width: '100%' }}
               onChange={(dates) => setDateRange(dates as [dayjs.Dayjs, dayjs.Dayjs] | null)}
@@ -2043,7 +2241,7 @@ export const AppointmentsPage: React.FC = () => {
               placeholder={['Start Date', 'End Date']}
             />
           </Col>
-          <Col xs={12} md={4}>
+          <Col xs={12} md={scopeFilter === 'all' ? 4 : 4}>
             <Segmented
               style={{ width: '100%' }}
               value={viewMode}
@@ -2217,8 +2415,8 @@ export const AppointmentsPage: React.FC = () => {
             type="info"
             showIcon
             style={{ marginBottom: 16 }}
-            message="Existing Active Appointment"
-            description={`This person already has an appointment scheduled for ${dayjs(existingApptForAddModal.scheduledFor).format('ddd, MMM D, YYYY [at] h:mm A')}. Selecting a new date will overwrite their existing record, ensuring no duplicate entries are generated.`}
+            message="Active Appointment Exists"
+            description={`This contact already has an appointment scheduled for ${dayjs(existingApptForAddModal.scheduledFor).format('ddd, MMM D, YYYY [at] h:mm A')}. Creating a new appointment will preserve their appointment history.`}
           />
         )}
         <Form
@@ -2229,7 +2427,7 @@ export const AppointmentsPage: React.FC = () => {
             const eType = allValues.entityType;
             const eId = allValues.entityId;
             if (eId) {
-              const existing = appointmentsList.find(
+              const existing = effectiveAppointments.find(
                 (a) =>
                   ((eType === 'prospect' && a.prospectId === eId) ||
                    (eType === 'customer' && a.customerId === eId)) &&
@@ -2237,12 +2435,6 @@ export const AppointmentsPage: React.FC = () => {
                   a.status !== 'completed'
               );
               setExistingApptForAddModal(existing || null);
-              if (existing && 'entityId' in changedValues) {
-                form.setFieldsValue({
-                  scheduledFor: existing.scheduledFor ? dayjs(existing.scheduledFor) : form.getFieldValue('scheduledFor'),
-                  feedback: existing.reason || existing.feedback || form.getFieldValue('feedback'),
-                });
-              }
             } else {
               setExistingApptForAddModal(null);
             }
@@ -2374,7 +2566,7 @@ export const AppointmentsPage: React.FC = () => {
                 htmlType="submit" 
                 loading={createAppointment.isPending || updateAppointment.isPending}
               >
-                {existingApptForAddModal ? 'Update Appointment Date (Overwrite)' : 'Create Appointment & Record Log'}
+                Create Appointment & Record Log
               </Button>
               <Button onClick={() => {
                 setIsModalOpen(false);
@@ -2818,6 +3010,157 @@ export const AppointmentsPage: React.FC = () => {
           refetchAppointments();
         }}
       />
+
+      {/* Backfill Dry-Run Analysis Modal (Admin Only) */}
+      <Modal
+        title={
+          <Space>
+            <AuditOutlined style={{ color: tokens.primary }} />
+            <Text strong style={{ fontSize: 16 }}>Appointment Backfill Dry-Run Classification</Text>
+            <Tag color="purple">Read-Only</Tag>
+          </Space>
+        }
+        open={diagnosticModalOpen}
+        onCancel={() => setDiagnosticModalOpen(false)}
+        width={850}
+        footer={[
+          <Button key="close" onClick={() => setDiagnosticModalOpen(false)}>
+            Close
+          </Button>,
+          <Button
+            key="csv"
+            icon={<FileExcelOutlined />}
+            onClick={handleDownloadBackfillCsv}
+            type="primary"
+            style={{ backgroundColor: '#52c41a' }}
+          >
+            Download CSV Report
+          </Button>,
+          <Button
+            key="json"
+            icon={<CodeOutlined />}
+            onClick={handleDownloadBackfillJson}
+            type="primary"
+          >
+            Download JSON Report
+          </Button>,
+        ]}
+      >
+        {diagnosticResult && (
+          <div style={{ marginTop: 12 }}>
+            <Alert
+              type="info"
+              showIcon
+              message="Read-Only Dry-Run Audit"
+              description="This dry-run classifies live appointments from GET /appointments plus local browser records into assignment confidence tiers. No data has been modified or deleted. The output CSV/JSON will serve as the input for backend database migration."
+              style={{ marginBottom: 16 }}
+            />
+
+            <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+              <Col span={6}>
+                <Card size="small" style={{ textAlign: 'center', background: '#f8fafc' }}>
+                  <Statistic title="Total Analyzed" value={diagnosticResult.totalAppointments} />
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ textAlign: 'center', background: '#f0fdf4' }}>
+                  <Statistic
+                    title="Strong Tier"
+                    value={diagnosticResult.tierCounts.strong}
+                    valueStyle={{ color: '#16a34a' }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 11 }}>Explicit creator/interaction</Text>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ textAlign: 'center', background: '#fffbeb' }}>
+                  <Statistic
+                    title="Weak Tier"
+                    value={diagnosticResult.tierCounts.weak}
+                    valueStyle={{ color: '#d97706' }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 11 }}>Inferred (needs confirm)</Text>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ textAlign: 'center', background: '#fef2f2' }}>
+                  <Statistic
+                    title="None Tier"
+                    value={diagnosticResult.tierCounts.none}
+                    valueStyle={{ color: '#dc2626' }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 11 }}>Website/Orphans</Text>
+                </Card>
+              </Col>
+            </Row>
+
+            <Row gutter={[16, 16]} style={{ marginBottom: 20 }}>
+              <Col span={8}>
+                <Card size="small" style={{ background: '#f5f3ff' }}>
+                  <Statistic
+                    title="Possible Duplicates Flagged"
+                    value={diagnosticResult.duplicateCount}
+                    valueStyle={{ color: '#7c3aed' }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 11 }}>Same person + date & time</Text>
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" style={{ background: '#f0f9ff' }}>
+                  <Statistic
+                    title="Local Records Not on Server (by ID)"
+                    value={diagnosticResult.localOnlyByIdCount}
+                    valueStyle={{ color: '#0284c7' }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 11 }}>Exist in browser only</Text>
+                </Card>
+              </Col>
+              <Col span={8}>
+                <Card size="small" style={{ background: '#f0fdfa' }}>
+                  <Statistic
+                    title="Local Records Not on Server (by Slot)"
+                    value={diagnosticResult.localOnlyBySlotCount}
+                    valueStyle={{ color: '#0d9488' }}
+                  />
+                  <Text type="secondary" style={{ fontSize: 11 }}>Unique time slots</Text>
+                </Card>
+              </Col>
+            </Row>
+
+            <Divider orientation="left" style={{ fontSize: 14 }}>Proposed Owner Attribution Breakdown</Divider>
+            <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+              <Table
+                size="small"
+                pagination={false}
+                dataSource={Object.entries(diagnosticResult.ownerCounts || {}).map(([owner, count], idx) => ({
+                  key: idx,
+                  owner,
+                  count,
+                }))}
+                columns={[
+                  {
+                    title: 'Proposed Owner / Bucket',
+                    dataIndex: 'owner',
+                    key: 'owner',
+                    render: (text: string) => {
+                      if (text.startsWith('[WEAK]')) return <Tag color="orange">{text}</Tag>;
+                      if (text.startsWith('[UNASSIGNED]')) return <Tag color="red">{text}</Tag>;
+                      return <Text strong>{text}</Text>;
+                    },
+                  },
+                  {
+                    title: 'Appointments Count',
+                    dataIndex: 'count',
+                    key: 'count',
+                    align: 'right' as const,
+                    render: (cnt: number) => <Badge count={cnt} overflowCount={9999} style={{ backgroundColor: '#1890ff' }} />,
+                  },
+                ]}
+              />
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 };

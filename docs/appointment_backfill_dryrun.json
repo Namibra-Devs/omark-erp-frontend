@@ -1,0 +1,13 @@
+{
+  "totalAppointments": 0,
+  "tierCounts": {
+    "strong": 0,
+    "weak": 0,
+    "none": 0
+  },
+  "duplicateCount": 0,
+  "ownerCounts": {},
+  "localOnlyByIdCount": 0,
+  "localOnlyBySlotCount": 0,
+  "classified": []
+}

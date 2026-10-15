@@ -29,12 +29,11 @@ import { tokens } from '@/constants/tokens';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { useUserAssignmentQuery, useUpdateUserMutation, getUserFullName } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
-import { useAppointmentsQuery } from '@/api/appointments';
+import { useScopedAppointments } from '@/api/appointments';
+import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import {
   consolidateAllProspects,
-  consolidateAllAppointments,
   getStaffAssignedProspectCount,
-  getStaffAssignedAppointmentCount,
 } from '@/utils/prospectAssignment';
 import { useDepartmentsQuery, mockBranchDepartments } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
@@ -173,7 +172,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
-  const { data: appointmentsData } = useAppointmentsQuery({ pageSize: 1000 });
+  const { appointments: scopedAppointments, allInteractions } = useScopedAppointments();
 
   const allConsolidatedProspects = useMemo(() => {
     return consolidateAllProspects(
@@ -183,10 +182,6 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     );
   }, [allProspectsData, mktProspectsData, csProspectsData]);
 
-  const allConsolidatedAppointments = useMemo(() => {
-    return consolidateAllAppointments(appointmentsData?.items);
-  }, [appointmentsData]);
-
   const getStaffProspectCount = (staffId: string, role: string, userRecord?: User) => {
     const userObj = userRecord || users.find((u) => u.id === staffId) || { id: staffId, role };
     const stored = getStoredUserAssignment(staffId);
@@ -194,11 +189,11 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     return getStaffAssignedProspectCount(allConsolidatedProspects, effectiveUser, branches);
   };
 
-  const getStaffAppointmentCount = (staffId: string, role: string, userRecord?: User) => {
-    const userObj = userRecord || users.find((u) => u.id === staffId) || { id: staffId, role };
-    const stored = getStoredUserAssignment(staffId);
-    const effectiveUser = { ...stored, ...userObj, role: userObj.role || stored?.role || role };
-    return getStaffAssignedAppointmentCount(allConsolidatedAppointments, effectiveUser, allConsolidatedProspects);
+  const getStaffAppointmentCount = (staffId: string, _role: string, _userRecord?: User) => {
+    const count = scopedAppointments.filter(
+      (a) => getAppointmentCreatorId(a, allInteractions) === staffId
+    ).length;
+    return { count };
   };
 
   // Row ids whose password is currently revealed (masked by default).

@@ -27,8 +27,7 @@ import { EXPENSES_ALLOWED_ROLES } from '@/constants/enums';
 import { usePendingNotificationsCountQuery } from '@/api/notifications';
 import { useUnseenCountsQuery } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
-import { useAppointmentsQuery, appointmentsKeys } from '@/api/appointments';
-import { isAppointmentAssignedToStaff } from '@/utils/prospectAssignment';
+import { useScopedAppointments, appointmentsKeys } from '@/api/appointments';
 import { useComplaintsQuery } from '@/api/complaints';
 import { useApprovalsQuery, approvalsKeys } from '@/api/approvals';
 import { usePayrollQuery, payrollKeys } from '@/api/payroll';
@@ -154,20 +153,12 @@ export const NavMenu: React.FC = () => {
   );
 
   const canSeeAppointmentsBadge = Boolean(user?.id);
-  const { data: appointmentsData } = useAppointmentsQuery(
-    { pageSize: 100 },
-    canSeeAppointmentsBadge && !apiUnseenCounts
-  );
-
-  const staffAppointments = useMemo(() => {
-    if (!user?.id || !appointmentsData?.items) return [];
-    return appointmentsData.items.filter((a) => isAppointmentAssignedToStaff(a, user));
-  }, [appointmentsData, user]);
+  const { appointments: scopedAppointments } = useScopedAppointments();
 
   const { count: fallbackAppointmentsCount } = useUnseenCount(
     'appointments',
     canSeeAppointmentsBadge ? user?.id : undefined,
-    staffAppointments.map((a) => a.createdAt)
+    scopedAppointments.map((a) => a.createdAt)
   );
 
   const canSeeCheckIns = hasRole(['customer_service', 'admin', 'secretary', 'branch_manager']);

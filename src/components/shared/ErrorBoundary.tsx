@@ -33,7 +33,16 @@ export class ErrorBoundary extends Component<Props, State> {
   };
 
   private handleReset = () => {
-    localStorage.clear();
+    // Protect offline/unreconciled business data (e.g. omark_* keys)
+    // Clear only authentication credentials and temporary session data
+    localStorage.removeItem('omark_access_token');
+    localStorage.removeItem('omark_refresh_token');
+    localStorage.removeItem('accessToken');
+    localStorage.removeItem('refreshToken');
+    localStorage.removeItem('omark_auth_user');
+    try {
+      sessionStorage.clear();
+    } catch (_) {}
     window.location.href = '/login';
   };
 

@@ -44,7 +44,7 @@ import {
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import { useAppointmentsQuery, appointmentsKeys } from '@/api/appointments';
+import { useScopedAppointments, appointmentsKeys } from '@/api/appointments';
 import { useAllStaffInteractionsQuery } from '@/api/interactions';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
@@ -55,6 +55,7 @@ import { interactionChannelLabels, roleLabels } from '@/constants/enums';
 import { useAuth } from '@/contexts/AuthContext';
 import type { Appointment, AppointmentStatus, Prospect, Customer, InteractionChannel, Role, AppointmentSource } from '@/types';
 import { type StaffInteraction, isFakeOrSeedInteraction } from '@/utils/interactionStorage';
+import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 
 dayjs.extend(relativeTime);
 
@@ -135,10 +136,10 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const {
-    data: appointmentsData,
+    scopedAppointments: appointmentsList,
     isLoading: appointmentsLoading,
     refetch: refetchAppointments,
-  } = useAppointmentsQuery({ pageSize: 100 });
+  } = useScopedAppointments({ pageSize: 1000 });
 
   const {
     interactions: allInteractions,
@@ -173,92 +174,6 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
       window.removeEventListener('omark-interactions-changed', handleInteractionsChange);
     };
   }, [refetchAppointments, refetchInteractions]);
-
-  // Raw list of appointments: combine live API appointments with live booking interactions and prospect meetings
-  const appointmentsList: Appointment[] = useMemo(() => {
-    const list: Appointment[] = [];
-    const seenIds = new Set<string>();
-    const seenProspects = new Set<string>();
-
-    // 1. Live appointments returned from backend API
-    const apiItems = appointmentsData?.items ?? (Array.isArray(appointmentsData) ? appointmentsData : []);
-    apiItems.forEach((appt) => {
-      if (appt && appt.id && !seenIds.has(appt.id)) {
-        seenIds.add(appt.id);
-        if (appt.prospectId) seenProspects.add(appt.prospectId);
-        list.push(appt);
-      }
-    });
-
-    // 2. Any booking records tracked in staff interactions
-    allInteractions.forEach((inter) => {
-      if (inter.appointmentId && !seenIds.has(inter.appointmentId)) {
-        seenIds.add(inter.appointmentId);
-        if (inter.prospectId) seenProspects.add(inter.prospectId);
-        list.push({
-          id: inter.appointmentId,
-          prospectId: inter.prospectId,
-          customerId: inter.customerId,
-          source: (inter.prospectSource === 'marketing' ? 'staff' : 'staff') as AppointmentSource,
-          scheduledFor: inter.occurredAt,
-          status: 'scheduled' as AppointmentStatus,
-          reason: inter.response,
-          createdByUserId: inter.loggedByUserId,
-          createdAt: inter.createdAt || inter.occurredAt,
-          updatedAt: inter.createdAt || inter.occurredAt,
-        });
-      }
-    });
-
-    // 3. Any prospects whose current CRM status is meeting_scheduled or meeting_completed (or postponed/canceled meetings)
-    allProspects.forEach((p) => {
-      const isMeetingStatus =
-        p.status === 'meeting_scheduled' ||
-        p.status === 'meeting_completed' ||
-        (p.status === 'postponed' &&
-          (p.notes?.toLowerCase().includes('meet') ||
-            p.notes?.toLowerCase().includes('appoint') ||
-            p.reasonForContact?.toLowerCase().includes('meet'))) ||
-        (p.status === 'canceled' &&
-          (p.notes?.toLowerCase().includes('meet') ||
-            p.notes?.toLowerCase().includes('appoint') ||
-            p.reasonForContact?.toLowerCase().includes('meet')));
-
-      if (isMeetingStatus && !seenProspects.has(p.id)) {
-        seenProspects.add(p.id);
-        const meetingId = `prospect_meeting_${p.id}`;
-        if (!seenIds.has(meetingId)) {
-          seenIds.add(meetingId);
-          const mappedStatus: AppointmentStatus =
-            p.status === 'meeting_completed'
-              ? 'completed'
-              : p.status === 'postponed'
-              ? 'postponed'
-              : p.status === 'canceled'
-              ? 'canceled'
-              : 'scheduled';
-
-          list.push({
-            id: meetingId,
-            prospectId: p.id,
-            source: (p.source === 'customer_service' ? 'staff' : 'staff') as AppointmentSource,
-            scheduledFor: p.updatedAt || p.createdAt,
-            status: mappedStatus,
-            reason: p.notes || p.reasonForContact || 'Consultation Meeting Scheduled',
-            createdByUserId: p.assignedUserId || p.createdByUserId,
-            createdAt: p.createdAt,
-            updatedAt: p.updatedAt,
-          });
-        }
-      }
-    });
-
-    return list.sort(
-      (a, b) =>
-        new Date(b.scheduledFor || b.createdAt).getTime() -
-        new Date(a.scheduledFor || a.createdAt).getTime()
-    );
-  }, [appointmentsData, allInteractions, allProspects]);
 
   // Helper to map entity details (client/prospect/customer)
   const getEntityDetails = (app: Appointment) => {
@@ -431,17 +346,15 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
 
   // Staff list for filtering
   const staffFilterOptions = useMemo(() => {
-    const staffSet = new Map<string, string>();
-    allInteractions.forEach((i) => {
-      if (i.loggedByUserId && i.loggedByUserName) {
-        staffSet.set(i.loggedByUserId, i.loggedByUserName);
-      }
-    });
-    allUsers.forEach((u: UserEntity) => {
-      staffSet.set(u.id, getUserFullName(u));
-    });
-    return Array.from(staffSet.entries()).map(([id, name]) => ({ id, name }));
-  }, [allInteractions, allUsers]);
+    const list = allUsers.filter((u) => u.isActive !== false).map((u) => ({
+      id: u.id,
+      name: `${getUserFullName(u)} (${roleLabels[u.role as Role] || u.role})`,
+    }));
+    return [
+      { id: 'unassigned', name: '⚠️ Unassigned (Website & Legacy)' },
+      ...list,
+    ];
+  }, [allUsers]);
 
   // Filtered appointments list
   const filteredAppointments = useMemo(() => {
@@ -468,13 +381,14 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
         if (!hasChannel) return false;
       }
 
-      // Filter: Staff member
+      // Filter: Staff creator
       if (staffFilter !== 'all') {
-        const matchesStaff =
-          (app as any).userId === staffFilter ||
-          app.createdByUserId === staffFilter ||
-          history.some((h) => h.user.toLowerCase().includes(staffFilter.toLowerCase()));
-        if (!matchesStaff) return false;
+        const creatorId = getAppointmentCreatorId(app, allInteractions);
+        if (staffFilter === 'unassigned') {
+          if (creatorId) return false;
+        } else if (creatorId !== staffFilter) {
+          return false;
+        }
       }
 
       // Search text
@@ -727,35 +641,31 @@ export const AppointmentCommunicationHistory: React.FC<AppointmentCommunicationH
       },
     },
     {
-      title: 'Booked By',
-      key: 'staff',
-      width: 140,
+      title: 'Created by',
+      key: 'createdBy',
+      width: 170,
       render: (_: any, record: Appointment) => {
-        const matchedProspect = record.prospectId
-          ? allProspects.find((p) => p.id === record.prospectId)
-          : undefined;
-        const staffUserId =
-          (record as any).userId ||
-          record.createdByUserId ||
-          (record as any).assignedUserId ||
-          matchedProspect?.assignedUserId ||
-          matchedProspect?.createdByUserId;
-        const staffName = getStaffName(
-          staffUserId,
-          record.source === 'website' ? 'Website Online' : 'Staff Member'
-        );
-        const staffRole = getStaffRole(
-          staffUserId,
-          record.source === 'website' ? 'Client' : 'Staff Assigned'
-        );
+        const creatorId = getAppointmentCreatorId(record, allInteractions);
+        if (!creatorId) {
+          return (
+            <Space direction="vertical" size={0}>
+              <div style={{ fontSize: 12, fontWeight: 500, color: '#8c8c8c' }}>
+                {record.source === 'website' ? 'Website Booking' : 'Unassigned / System'}
+              </div>
+              <Tag color="default" style={{ fontSize: 10, margin: 0 }}>
+                {record.source === 'website' ? 'Website' : 'Orphan'}
+              </Tag>
+            </Space>
+          );
+        }
+        const staffName = getStaffName(creatorId, 'Staff Member');
+        const staffRole = getStaffRole(creatorId, 'Staff');
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Avatar size="small" icon={<UserOutlined />} style={{ backgroundColor: '#1677ff' }} />
             <div>
               <div style={{ fontSize: 12, fontWeight: 500, color: '#262626' }}>{staffName}</div>
-              <div style={{ fontSize: 10, color: '#8c8c8c' }}>
-                {record.source === 'website' ? 'Client Self-Book' : staffRole}
-              </div>
+              <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>{staffRole}</Tag>
             </div>
           </div>
         );

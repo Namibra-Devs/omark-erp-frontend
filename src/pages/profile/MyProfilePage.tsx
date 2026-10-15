@@ -49,11 +49,10 @@ import { useUsersQuery, useUpdateUserMutation, useUserActivityQuery, toE164Phone
 import { useProspectsQuery } from '@/api/prospects';
 import {
   consolidateAllProspects,
-  consolidateAllAppointments,
   getStaffAssignedProspects,
-  getStaffAssignedAppointments,
 } from '@/utils/prospectAssignment';
-import { useAppointmentsQuery } from '@/api/appointments';
+import { useScopedAppointments } from '@/api/appointments';
+import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import { useDeedsQuery } from '@/api/deeds';
 import { usePayrollQuery, type PayrollRecord } from '@/api/payroll';
 import { useBranchesQuery } from '@/api/branches';
@@ -140,14 +139,7 @@ export const MyProfilePage: React.FC = () => {
   );
   const prospectsLoading = allProspectsLoading || staffProspectsLoading;
 
-  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery(
-    { pageSize: 1000 },
-    Boolean(user?.id)
-  );
-  const { data: staffSpecificAppointments, isLoading: staffAppointmentsLoading } = useAppointmentsQuery(
-    { assignedUserId: user?.id, pageSize: 1000 },
-    Boolean(user?.id)
-  );
+  const { appointments: scopedAppointments, isLoading: appointmentsLoading, allInteractions } = useScopedAppointments();
 
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery(
     {},
@@ -180,27 +172,18 @@ export const MyProfilePage: React.FC = () => {
     );
   }, [allProspectsData, mktProspectsData, csProspectsData, staffSpecificProspects]);
 
-  const allConsolidatedAppointments = useMemo(() => {
-    return consolidateAllAppointments(
-      appointmentsData?.items,
-      staffSpecificAppointments?.items
-    );
-  }, [appointmentsData, staffSpecificAppointments]);
-
   const myProspects = useMemo(() => {
     if (!effectiveUser) return [];
     return getStaffAssignedProspects(allConsolidatedProspects, effectiveUser, branches);
   }, [allConsolidatedProspects, effectiveUser, branches]);
 
   const myAppointments = useMemo(() => {
-    if (!effectiveUser) return [];
-    return getStaffAssignedAppointments(
-      allConsolidatedAppointments,
-      effectiveUser,
-      allConsolidatedProspects,
-      branches
+    const targetUserId = effectiveUser?.id || user?.id;
+    if (!targetUserId) return [];
+    return scopedAppointments.filter(
+      (a) => getAppointmentCreatorId(a, allInteractions) === targetUserId
     );
-  }, [allConsolidatedAppointments, effectiveUser, allConsolidatedProspects, branches]);
+  }, [scopedAppointments, allInteractions, effectiveUser?.id, user?.id]);
   const myAttendance = Array.isArray(attendanceData) ? attendanceData : [];
   const myLeaves = Array.isArray(leaveData) ? leaveData : [];
 

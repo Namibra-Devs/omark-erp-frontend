@@ -29,9 +29,11 @@ import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import {
   useCreateAppointmentMutation,
-  useAppointmentsQuery,
+  useScopedAppointments,
   appointmentsKeys,
 } from '@/api/appointments';
+import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
+import { roleLabels } from '@/constants/enums';
 import { saveStoredInteraction } from '@/utils/interactionStorage';
 import { recordSystemEvent, getStoredNotifications, type SystemNotification } from '@/utils/activityNotificationEngine';
 import { cacheCustomerSummaries, clearCustomerCache } from '@/utils/customerPortalCache';
@@ -168,8 +170,7 @@ export const CustomersPage: React.FC = () => {
   const createPaymentPlan = useCreatePaymentPlanMutation();
   const updatePaymentPlan = useUpdatePaymentPlanMutation();
   const createAppointment = useCreateAppointmentMutation();
-  const { data: appointmentsResponse } = useAppointmentsQuery({ pageSize: 500 });
-  const allAppointments = appointmentsResponse?.items ?? [];
+  const { scopedAppointments: allAppointments } = useScopedAppointments({ pageSize: 1000 });
 
   // Extract data from responses with branch isolation
   const { data: branches = [] } = useBranchesQuery();
@@ -3039,7 +3040,20 @@ const handleAddCustomer = async (values: any) => {
                                 description={
                                   <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
                                     <div>Purpose: {appt.reason || 'General Discussion'}</div>
-                                    {appt.feedback && <div style={{ fontStyle: 'italic' }}>Notes: {appt.feedback}</div>}
+                                    {(() => {
+                                      const creatorId = getAppointmentCreatorId(appt);
+                                      const creator = (usersData?.items ?? []).find((u) => u.id === creatorId);
+                                      const creatorName = creator ? getUserFullName(creator) : (appt.createdByName || 'Staff Member');
+                                      const creatorRole = creator ? ((roleLabels as any)[creator.role] || creator.role) : 'Staff';
+                                      return (
+                                        <div style={{ marginTop: 2 }}>
+                                          <Text type="secondary" style={{ fontSize: 11 }}>Created by: </Text>
+                                          <Text strong style={{ fontSize: 11 }}>{creatorName} </Text>
+                                          <Tag color="geekblue" style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>{creatorRole}</Tag>
+                                        </div>
+                                      );
+                                    })()}
+                                    {appt.feedback && <div style={{ fontStyle: 'italic', marginTop: 2 }}>Notes: {appt.feedback}</div>}
                                   </div>
                                 }
                               />

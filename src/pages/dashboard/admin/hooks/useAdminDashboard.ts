@@ -17,7 +17,7 @@ import {
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import { usePaymentPlansQuery } from '@/api/paymentPlans';
-import { useAppointmentsQuery } from '@/api/appointments';
+import { useScopedAppointments } from '@/api/appointments';
 import { usePropertiesQuery } from '@/api/properties';
 import { useDeedsQuery } from '@/api/deeds';
 import type { Role } from '@/types';
@@ -245,7 +245,7 @@ export const useAdminDashboard = () => {
   // ── Additional live sources for the Recent Activity feed ────────────────
   // There is no activity-log endpoint in this API — these are the real,
   // most-recent rows from each entity type, merged below into one timeline.
-  const { data: appointmentsData, isLoading: appointmentsLoading } = useAppointmentsQuery({ pageSize: 10 });
+  const { scopedAppointments: appointmentsList, isLoading: appointmentsLoading } = useScopedAppointments({ pageSize: 10 });
   const { data: propertiesData, isLoading: propertiesLoading } = usePropertiesQuery({ pageSize: 10 });
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 10 });
 
@@ -384,7 +384,7 @@ export const useAdminDashboard = () => {
     const live = buildLiveActivityLog({
       prospects: prospectsData?.items ?? [],
       customers: customersData?.items ?? [],
-      appointments: appointmentsData?.items ?? [],
+      appointments: appointmentsList,
       properties: propertiesData?.items ?? [],
       deeds: deedsData?.items ?? [],
     });
@@ -401,7 +401,7 @@ export const useAdminDashboard = () => {
     return [...localActivityLogs, ...mappedApiFeed, ...live, ...mockActivityLogs]
       .sort((a, b) => (a.timestamp < b.timestamp ? 1 : -1))
       .slice(0, 30);
-  }, [prospectsData, customersData, appointmentsData, propertiesData, deedsData, localActivityLogs, mockActivityLogs, apiActivityFeed, checkInsRevision]);
+  }, [prospectsData, customersData, appointmentsList, propertiesData, deedsData, localActivityLogs, mockActivityLogs, apiActivityFeed, checkInsRevision]);
 
   const newActivityCount = useMemo(
     () => activityLogs.filter((a) => a.timestamp > lastSeenActivityAt).length,

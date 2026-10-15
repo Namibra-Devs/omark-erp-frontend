@@ -4,6 +4,9 @@ import { getStoredProspects } from '@/api/prospects';
 import { filterEntitiesByBranch, type BranchInfo } from '@/utils/branchIsolation';
 import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
 import { getUserFullName } from '@/api/users';
+import { getStoredInteractions } from '@/utils/interactionStorage';
+import { normalizePhone } from '@/utils/duplicateValidation';
+import dayjs from 'dayjs';
 
 /**
  * Consolidates all prospect lists from various API queries and offline local storage into
@@ -398,7 +401,8 @@ export interface StaffProspectDistribution {
 export function distributeProspectsAcrossMarketingStaff(
   allMarketingProspects: Prospect[],
   marketingStaffUsers: any[],
-  apiMarketers: any[] = []
+  apiMarketers: any[] = [],
+  allAppointments: any[] = []
 ): {
   staffRows: StaffProspectDistribution[];
   unassignedRow: StaffProspectDistribution | null;
@@ -475,8 +479,20 @@ export function distributeProspectsAcrossMarketingStaff(
 
     // Count is strictly based on the prospects added/attributed to this staff member
     const totalProspects = addedProspects.length;
-    const meetingScheduled = addedProspects.filter((p) => p.status === 'meeting_scheduled').length;
-    const meetingCompleted = addedProspects.filter((p) => p.status === 'meeting_completed').length;
+    const staffAppts = Array.isArray(allAppointments) && allAppointments.length > 0
+      ? getStaffAssignedAppointments(allAppointments, staff, allMarketingProspects)
+      : [];
+    const scheduledFromAppts = staffAppts.filter((a) => a.status === 'scheduled' || a.status === 'postponed').length;
+    const completedFromAppts = staffAppts.filter((a) => a.status === 'completed').length;
+
+    const meetingScheduled = Math.max(
+      addedProspects.filter((p) => p.status === 'meeting_scheduled').length,
+      scheduledFromAppts
+    );
+    const meetingCompleted = Math.max(
+      addedProspects.filter((p) => p.status === 'meeting_completed').length,
+      completedFromAppts
+    );
     const converted = Math.max(
       addedProspects.filter((p) => p.status === 'purchased').length,
       (staff.role !== 'marketing_director' ? Math.min(apiRecord?.converted ?? 0, totalProspects) : 0)
@@ -548,7 +564,10 @@ export function isAppointmentAssignedToStaff(
   appointment: any,
   staffUser: any,
   staffProspectIds?: Set<string>,
-  staffCustomerIds?: Set<string>
+  staffCustomerIds?: Set<string>,
+  allInteractions?: any[],
+  allProspects?: Prospect[],
+  allCustomers?: any[]
 ): boolean {
   if (!appointment || !staffUser) return false;
 
@@ -573,44 +592,45 @@ export function isAppointmentAssignedToStaff(
       areIdsEqual(appointment.agentId, staffId) ||
       areIdsEqual(appointment.hostUserId, staffId) ||
       areIdsEqual(appointment.hostId, staffId) ||
+      areIdsEqual(appointment.bookedByUserId, staffId) ||
+      areIdsEqual(appointment.booked_by_user_id, staffId) ||
+      areIdsEqual(appointment.updatedByUserId, staffId) ||
+      areIdsEqual(appointment.updated_by_user_id, staffId) ||
+      areIdsEqual(appointment.feedbackByUserId, staffId) ||
+      areIdsEqual(appointment.feedback_by_user_id, staffId) ||
+      areIdsEqual(appointment.attendedByUserId, staffId) ||
+      areIdsEqual(appointment.attended_by_user_id, staffId) ||
       areIdsEqual(appointment.creator?.id, staffId) ||
+      areIdsEqual(appointment.created_by?.id, staffId) ||
       areIdsEqual(appointment.assignedUser?.id, staffId) ||
+      areIdsEqual(appointment.assigned_user?.id, staffId) ||
       areIdsEqual(appointment.staff?.id, staffId) ||
-      areIdsEqual(appointment.user?.id, staffId)
+      areIdsEqual(appointment.user?.id, staffId) ||
+      areIdsEqual(appointment.host?.id, staffId) ||
+      areIdsEqual(appointment.marketer?.id, staffId)
     ) {
       return true;
     }
   }
 
-  // 2. Prospect ownership check: If appointment belongs to a prospect of this staff member
-  if (
-    appointment.prospectId &&
-    staffProspectIds &&
-    staffProspectIds.has(String(appointment.prospectId).trim())
-  ) {
-    return true;
-  }
-
-  // 3. Customer ownership check: If appointment belongs to a customer of this staff member
-  if (
-    appointment.customerId &&
-    staffCustomerIds &&
-    staffCustomerIds.has(String(appointment.customerId).trim())
-  ) {
-    return true;
-  }
-
-  // 4. Name matching with flexible Akan / Ghanaian spelling normalization
+  // 2. Direct Name matching with flexible Akan / Ghanaian spelling normalization
   const candidateNames = [
     appointment.assignedStaffName,
     appointment.assignedUserName,
     appointment.createdByName,
+    appointment.creatorName,
     appointment.staffName,
     appointment.marketerName,
     appointment.agentName,
     appointment.hostName,
+    appointment.bookedByName,
+    appointment.updatedByName,
+    appointment.attendedByName,
     appointment.staff?.name,
     appointment.creator?.name,
+    appointment.assignedUser?.name,
+    appointment.user?.name,
+    appointment.host?.name,
   ];
 
   for (const cName of candidateNames) {
@@ -619,7 +639,7 @@ export function isAppointmentAssignedToStaff(
     }
   }
 
-  // 5. Email matching
+  // 3. Direct Email matching
   const staffEmail = effectiveUser.email;
   if (staffEmail) {
     const sEmail = String(staffEmail).trim().toLowerCase();
@@ -634,6 +654,96 @@ export function isAppointmentAssignedToStaff(
       if (cEmail && String(cEmail).trim().toLowerCase() === sEmail) {
         return true;
       }
+    }
+  }
+
+  // 4. Prospect ownership check: If appointment belongs to a prospect of this staff member
+  if (
+    appointment.prospectId &&
+    staffProspectIds &&
+    staffProspectIds.has(String(appointment.prospectId).trim())
+  ) {
+    return true;
+  }
+
+  // 5. Customer ownership check: If appointment belongs to a customer of this staff member
+  if (
+    appointment.customerId &&
+    staffCustomerIds &&
+    staffCustomerIds.has(String(appointment.customerId).trim())
+  ) {
+    return true;
+  }
+
+  // 6. Interaction / Communication Trail Attribution:
+  // If this staff member logged any booking interaction, status update note, or feedback
+  // for this appointment (or for its linked prospect/customer), the appointment is theirs!
+  const interactionsPool = Array.isArray(allInteractions) && allInteractions.length > 0
+    ? allInteractions
+    : getStoredInteractions();
+
+  if (interactionsPool && interactionsPool.length > 0) {
+    const hasStaffInteraction = interactionsPool.some((i) => {
+      if (!i) return false;
+      const isLinked =
+        (appointment.id && (areIdsEqual(i.appointmentId, appointment.id) || String(i.id).includes(String(appointment.id)))) ||
+        (appointment.prospectId && areIdsEqual(i.prospectId, appointment.prospectId)) ||
+        (appointment.customerId && areIdsEqual(i.customerId, appointment.customerId));
+
+      if (!isLinked) return false;
+
+      if (staffId && areIdsEqual(i.loggedByUserId, staffId)) return true;
+      if (i.loggedByUserName && isStaffNameMatching(i.loggedByUserName, effectiveUser)) return true;
+      if (staffEmail && i.loggedByUserEmail && String(i.loggedByUserEmail).toLowerCase() === staffEmail.toLowerCase()) return true;
+      return false;
+    });
+
+    if (hasStaffInteraction) {
+      return true;
+    }
+  }
+
+  // 7. Prospect Deep Resolution:
+  // If full prospects list is provided, inspect the linked prospect entity directly
+  if (appointment.prospectId && Array.isArray(allProspects) && allProspects.length > 0) {
+    const matchedProspect = allProspects.find(
+      (p) => p && (areIdsEqual(p.id, appointment.prospectId) ||
+        (appointment.phone && normalizePhone(p.phoneNumber) === normalizePhone(appointment.phone)) ||
+        (appointment.phoneNumber && normalizePhone(p.phoneNumber) === normalizePhone(appointment.phoneNumber)))
+    );
+    if (matchedProspect) {
+      if (isProspectAssignedOrCreatedByStaff(matchedProspect, effectiveUser)) return true;
+      if (isStaffNameMatching(matchedProspect.assignedUserName || (matchedProspect as any).assignedStaffName, effectiveUser)) return true;
+      if (staffId && areIdsEqual(matchedProspect.assignedUserId || (matchedProspect as any).assignedStaffId, staffId)) return true;
+    }
+  }
+
+  // 8. Customer Deep Resolution:
+  if (appointment.customerId && Array.isArray(allCustomers) && allCustomers.length > 0) {
+    const matchedCust = allCustomers.find(
+      (c) => c && (areIdsEqual(c.id, appointment.customerId) ||
+        (appointment.phone && normalizePhone(c.phoneNumber) === normalizePhone(appointment.phone)) ||
+        (appointment.phoneNumber && normalizePhone(c.phoneNumber) === normalizePhone(appointment.phoneNumber)))
+    );
+    if (matchedCust) {
+      if (staffId && (
+        areIdsEqual(matchedCust.assignedUserId, staffId) ||
+        areIdsEqual(matchedCust.createdByUserId, staffId) ||
+        areIdsEqual(matchedCust.marketerId, staffId) ||
+        areIdsEqual(matchedCust.agentId, staffId) ||
+        areIdsEqual(matchedCust.userId, staffId) ||
+        areIdsEqual(matchedCust.staffId, staffId)
+      )) return true;
+      if (isStaffNameMatching(matchedCust.assignedUserName || (matchedCust as any).assignedStaffName || (matchedCust as any).marketerName, effectiveUser)) return true;
+    }
+  }
+
+  // 9. Feedback / Reason text attribution (e.g. "Attended and completed by Cecilia Donkor")
+  const fullStaffName = getUserFullName(effectiveUser);
+  if (fullStaffName && fullStaffName.length >= 3) {
+    const textToCheck = `${appointment.feedback || ''} ${appointment.reason || ''}`.toLowerCase();
+    if (textToCheck.includes(fullStaffName.toLowerCase())) {
+      return true;
     }
   }
 
@@ -699,20 +809,132 @@ export function consolidateAllAppointments(
 }
 
 /**
- * Filters appointments to those belonging to a staff member (directly or via their prospects/customers).
+ * Synthesizes appointments from all possible sources:
+ * 1. API & stored appointment arrays
+ * 2. Booking records tracked in staff interactions (where inter.appointmentId exists or booking interaction)
+ * 3. Prospects whose current status is meeting_scheduled or meeting_completed
+ * 
+ * Ensures all staff and admin dashboards share an identical, complete appointment dataset.
+ */
+export function synthesizeAllAppointments(
+  appointmentSources: (any[] | undefined | null)[],
+  allInteractions: any[] = [],
+  allProspects: Prospect[] = []
+): any[] {
+  const baseAppointments = consolidateAllAppointments(...appointmentSources);
+  const seenIds = new Set<string>(baseAppointments.map((a) => String(a.id)));
+  const seenProspects = new Set<string>(baseAppointments.filter((a) => a.prospectId).map((a) => String(a.prospectId)));
+  const list = [...baseAppointments];
+
+  // 1. Incorporate booking records from interactions
+  const interactionsPool = Array.isArray(allInteractions) && allInteractions.length > 0
+    ? allInteractions
+    : getStoredInteractions();
+
+  interactionsPool.forEach((inter) => {
+    if (!inter) return;
+    const apptId = inter.appointmentId;
+    if (apptId && !seenIds.has(String(apptId))) {
+      seenIds.add(String(apptId));
+      if (inter.prospectId) seenProspects.add(String(inter.prospectId));
+      list.push({
+        id: String(apptId),
+        prospectId: inter.prospectId,
+        customerId: inter.customerId,
+        source: 'staff',
+        scheduledFor: inter.occurredAt || inter.createdAt,
+        status: 'scheduled',
+        reason: inter.response || 'Staff Booking Scheduled',
+        createdByUserId: inter.loggedByUserId,
+        createdByName: inter.loggedByUserName,
+        assignedUserId: inter.loggedByUserId,
+        assignedUserName: inter.loggedByUserName,
+        staffId: inter.loggedByUserId,
+        staffName: inter.loggedByUserName,
+        createdAt: inter.createdAt || inter.occurredAt,
+        updatedAt: inter.createdAt || inter.occurredAt,
+      });
+    }
+  });
+
+  // 2. Incorporate prospects whose status is meeting_scheduled or meeting_completed
+  (allProspects || []).forEach((p) => {
+    if (!p || !p.id) return;
+    const isMeetingStatus =
+      p.status === 'meeting_scheduled' ||
+      p.status === 'meeting_completed' ||
+      (p.status === 'postponed' &&
+        (p.notes?.toLowerCase().includes('meet') ||
+          p.notes?.toLowerCase().includes('appoint') ||
+          p.reasonForContact?.toLowerCase().includes('meet')));
+
+    if (isMeetingStatus && !seenProspects.has(String(p.id))) {
+      seenProspects.add(String(p.id));
+      const meetingId = `prospect_meeting_${p.id}`;
+      if (!seenIds.has(meetingId)) {
+        seenIds.add(meetingId);
+        const mappedStatus =
+          p.status === 'meeting_completed'
+            ? 'completed'
+            : p.status === 'postponed'
+            ? 'postponed'
+            : 'scheduled';
+
+        list.push({
+          id: meetingId,
+          prospectId: p.id,
+          source: 'staff',
+          scheduledFor: p.updatedAt || p.createdAt,
+          status: mappedStatus,
+          reason: p.notes || p.reasonForContact || 'Consultation Meeting Scheduled',
+          createdByUserId: p.assignedUserId || p.createdByUserId,
+          createdByName: (p as any).assignedUserName || (p as any).createdByName,
+          assignedUserId: p.assignedUserId || p.createdByUserId,
+          assignedUserName: (p as any).assignedUserName || (p as any).createdByName,
+          staffId: p.assignedUserId || p.createdByUserId,
+          staffName: (p as any).assignedUserName || (p as any).createdByName,
+          createdAt: p.createdAt,
+          updatedAt: p.updatedAt,
+        });
+      }
+    }
+  });
+
+  return consolidateAllAppointments(list);
+}
+
+/**
+ * Filters appointments to those belonging to a staff member (directly, via their interactions, or via their prospects/customers).
  */
 export function getStaffAssignedAppointments(
   allAppointments: any[],
   staffUser: any,
   allProspects?: Prospect[],
   branches: BranchInfo[] = [],
-  allCustomers?: any[]
+  allCustomers?: any[],
+  allInteractions?: any[]
 ): any[] {
   if (!Array.isArray(allAppointments) || allAppointments.length === 0 || !staffUser) return [];
 
+  const interactionsPool = Array.isArray(allInteractions) && allInteractions.length > 0
+    ? allInteractions
+    : getStoredInteractions();
+
   let staffProspectIds: Set<string> | undefined;
   if (Array.isArray(allProspects) && allProspects.length > 0) {
-    const staffProspects = allProspects.filter((p) => isProspectAssignedOrCreatedByStaff(p, staffUser));
+    const staffProspects = allProspects.filter((p) => {
+      if (isProspectAssignedOrCreatedByStaff(p, staffUser)) return true;
+      if (p.assignedUserName && isStaffNameMatching(p.assignedUserName, staffUser)) return true;
+      if (interactionsPool && interactionsPool.length > 0) {
+        return interactionsPool.some(
+          (i) =>
+            i.prospectId === p.id &&
+            (areIdsEqual(i.loggedByUserId, typeof staffUser === 'string' ? staffUser : staffUser.id) ||
+              isStaffNameMatching(i.loggedByUserName, staffUser))
+        );
+      }
+      return false;
+    });
     staffProspectIds = new Set(staffProspects.map((p) => String(p.id).trim()));
   }
 
@@ -732,13 +954,22 @@ export function getStaffAssignedAppointments(
       ) {
         return true;
       }
+      if (c.assignedUserName && isStaffNameMatching(c.assignedUserName, staffUser)) return true;
       return false;
     });
     staffCustomerIds = new Set(staffCustomers.map((c) => String(c.id).trim()));
   }
 
   return allAppointments.filter((a) =>
-    isAppointmentAssignedToStaff(a, staffUser, staffProspectIds, staffCustomerIds)
+    isAppointmentAssignedToStaff(
+      a,
+      staffUser,
+      staffProspectIds,
+      staffCustomerIds,
+      interactionsPool,
+      allProspects,
+      allCustomers
+    )
   );
 }
 
@@ -750,8 +981,63 @@ export function getStaffAssignedAppointmentCount(
   staffUser: any,
   allProspects?: Prospect[],
   branches: BranchInfo[] = [],
-  allCustomers?: any[]
+  allCustomers?: any[],
+  allInteractions?: any[]
 ): { count: number } {
-  const list = getStaffAssignedAppointments(allAppointments, staffUser, allProspects, branches, allCustomers);
+  const list = getStaffAssignedAppointments(
+    allAppointments,
+    staffUser,
+    allProspects,
+    branches,
+    allCustomers,
+    allInteractions
+  );
   return { count: list.length };
 }
+
+export type AppointmentDueStatus = 'overdue' | 'due_today' | 'upcoming' | 'none';
+
+/**
+ * Determines whether an appointment is overdue, due today, upcoming, or none.
+ * IMPORTANT: Completed, attended, canceled or no_show appointments NEVER create due/overdue flags.
+ */
+export const getAppointmentDueStatus = (appointment: {
+  status?: string;
+  scheduledFor?: string;
+  date?: string;
+  time?: string;
+}): AppointmentDueStatus => {
+  const status = String(appointment.status || '').toLowerCase();
+  // Completed, attended, canceled or no_show appointments must NEVER show due/overdue flags
+  if (status === 'completed' || status === 'canceled' || status === 'no_show') {
+    return 'none';
+  }
+
+  const schedTime = appointment.scheduledFor
+    ? dayjs(appointment.scheduledFor)
+    : (appointment.date && appointment.time ? dayjs(`${appointment.date}T${appointment.time}`) : null);
+
+  if (!schedTime || !schedTime.isValid()) {
+    return 'none';
+  }
+
+  const now = dayjs();
+  const startOfToday = now.startOf('day');
+
+  // If scheduled before today: OVERDUE
+  if (schedTime.isBefore(startOfToday)) {
+    return 'overdue';
+  }
+
+  // If scheduled for today:
+  if (schedTime.isSame(now, 'day')) {
+    // If appointment time has already passed today:
+    if (schedTime.isBefore(now)) {
+      return 'overdue';
+    }
+    // Upcoming today:
+    return 'due_today';
+  }
+
+  return 'upcoming';
+};

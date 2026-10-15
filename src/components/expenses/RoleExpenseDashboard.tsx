@@ -62,6 +62,10 @@ import {
   SwapOutlined,
   ArrowUpOutlined,
   ArrowDownOutlined,
+  ApartmentOutlined,
+  FolderOpenOutlined,
+  CheckSquareOutlined,
+  AuditOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer,
@@ -86,9 +90,17 @@ import {
   type ExpenseEntity,
 } from '@/api/expenses';
 import { useBranchContext } from '@/contexts/BranchContext';
-import { useBranchesQuery } from '@/api/branches';
+import { useBranchesQuery, STANDARD_DEPARTMENTS, type DepartmentEntity } from '@/api/branches';
 import { useUsersQuery, getUserFullName, getUserPhone, type UserEntity } from '@/api/users';
 import { getBranchCanonicalKey } from '@/utils/branchIsolation';
+import { resolveDefaultDepartment, getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import {
+  normalizeDepartmentName,
+  calculateDepartmentSummaries,
+  calculateGrandTotals,
+  type DepartmentSummary,
+  type DynamicGrandTotals,
+} from '@/utils/departmentExpenses';
 import {
   filterExpensesByRole,
   getRoleDashboardConfig,
@@ -108,6 +120,39 @@ const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
 const { TextArea } = Input;
 const { RangePicker } = DatePicker;
+
+export const DEPARTMENT_CONFIG: Record<string, { color: string; bg: string; icon: React.ReactNode }> = {
+  'Marketing & Sales': {
+    color: '#fa8c16',
+    bg: '#fff7e6',
+    icon: <RiseOutlined />,
+  },
+  'Customer Service': {
+    color: '#13c2c2',
+    bg: '#e6fffb',
+    icon: <UserOutlined />,
+  },
+  'Finance & Accounts': {
+    color: '#52c41a',
+    bg: '#f6ffed',
+    icon: <BankOutlined />,
+  },
+  'Operations': {
+    color: '#1890ff',
+    bg: '#e6f7ff',
+    icon: <ShopOutlined />,
+  },
+  'Executive Administration': {
+    color: '#722ed1',
+    bg: '#f9f0ff',
+    icon: <SafetyCertificateOutlined />,
+  },
+  'Administration': {
+    color: '#2f54eb',
+    bg: '#f0f5ff',
+    icon: <FileTextOutlined />,
+  },
+};
 
 const CHART_COLORS = ['#1890ff', '#52c41a', '#fa8c16', '#722ed1', '#13c2c2', '#eb2f96', '#faad14', '#2f54eb'];
 
@@ -196,6 +241,10 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       const branchObj = branches.find((b: any) => b.id === branchId);
       const liveBranchName = expense.branchName || branchObj?.name || 'Kumasi Main';
 
+      const userAssignment = matchedUser ? getStoredUserAssignment(matchedUser.id) : undefined;
+      const assignedDept = userAssignment?.departmentName || userAssignment?.department;
+      const liveDepartment = normalizeDepartmentName(expense.department || assignedDept, liveRole);
+
       return {
         ...expense,
         recordedByUserId: matchedUser?.id || expense.recordedByUserId,
@@ -203,6 +252,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         recordedByUserRole: liveRole,
         branchId,
         branchName: liveBranchName,
+        department: liveDepartment,
       };
     });
   }, [rawExpenses, usersById, usersByName, branches, user?.branchId]);
@@ -304,7 +354,15 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
   const [branchFilter, setBranchFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'weekly' | 'monthly' | 'yearly' | 'custom'>('all');
   const [customDateRange, setCustomDateRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState<dayjs.Dayjs>(() => dayjs());
   const [showAnalytics, setShowAnalytics] = useState(true);
+
+  // ── Department Expense Drawer State ──────────────────────────────────────────
+  const [selectedDepartment, setSelectedDepartment] = useState<string | null>(null);
+  const [departmentDrawerOpen, setDepartmentDrawerOpen] = useState(false);
+  const [departmentSearchText, setDepartmentSearchText] = useState('');
+  const [departmentStatusFilter, setDepartmentStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
+  const [departmentDrawerDateScope, setDepartmentDrawerDateScope] = useState<'current_filter' | 'all_records'>('current_filter');
 
   // Modals
   const [addModalOpen, setAddModalOpen] = useState(false);
@@ -332,17 +390,19 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         }
       } else {
         // In all_time mode, apply general date filters if selected
+        const d = dayjs(e.incurredOn || e.createdAt);
         if (customDateRange && customDateRange[0] && customDateRange[1]) {
-          const d = dayjs(e.incurredOn || e.createdAt);
           if (!d.isValid()) return false;
           if (d.isBefore(customDateRange[0].startOf('day')) || d.isAfter(customDateRange[1].endOf('day'))) return false;
         } else if (dateFilter !== 'all') {
-          const d = dayjs(e.incurredOn || e.createdAt);
           if (!d.isValid()) return false;
           const now = dayjs();
           if (dateFilter === 'today' && !d.isSame(now, 'day')) return false;
           if (dateFilter === 'weekly' && !d.isSame(now, 'week')) return false;
-          if (dateFilter === 'monthly' && !d.isSame(now, 'month')) return false;
+          if (dateFilter === 'monthly') {
+            const targetMonth = selectedMonth || now;
+            if (!d.isSame(targetMonth, 'month') || !d.isSame(targetMonth, 'year')) return false;
+          }
           if (dateFilter === 'yearly' && !d.isSame(now, 'year')) return false;
         }
       }
@@ -357,14 +417,15 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         if (!matchesDirect && !matchesCanon) return false;
       }
 
-      // Search
+      // Search (description, code, category, submitter, department)
       if (searchText.trim()) {
         const q = searchText.trim().toLowerCase();
         const inCat = (e.category || '').toLowerCase().includes(q);
         const inDesc = (e.description || '').toLowerCase().includes(q);
         const inCode = (e.code || '').toLowerCase().includes(q);
         const inUser = (e.recordedByUserName || '').toLowerCase().includes(q);
-        if (!inCat && !inDesc && !inCode && !inUser) return false;
+        const inDept = (e.department || '').toLowerCase().includes(q);
+        if (!inCat && !inDesc && !inCode && !inUser && !inDept) return false;
       }
 
       // Category
@@ -389,9 +450,167 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
     categoryFilter,
     typeFilter,
     dateFilter,
+    selectedMonth,
     customDateRange,
     branches,
   ]);
+
+  // ── Dynamic Department Sub-Totals Calculation (Updates with date filters) ────
+  const departmentSummaries = useMemo(() => {
+    return calculateDepartmentSummaries(baseFilteredExpenses);
+  }, [baseFilteredExpenses]);
+
+  // ── Dynamic Overall Grand Total (Updates dynamically with date filters) ─────
+  const dynamicGrandTotals = useMemo(() => {
+    return calculateGrandTotals(baseFilteredExpenses);
+  }, [baseFilteredExpenses]);
+
+  // Human-readable active date scope label
+  const activeDateScopeLabel = useMemo(() => {
+    if (isDailyMode) {
+      return `Daily: ${dayjs(activeDailyDate).format('MMM D, YYYY')}`;
+    }
+    if (dateFilter === 'today') {
+      return `Today: ${dayjs().format('MMM D, YYYY')}`;
+    }
+    if (dateFilter === 'weekly') {
+      return `This Week (${dayjs().startOf('week').format('MMM D')} - ${dayjs().endOf('week').format('MMM D, YYYY')})`;
+    }
+    if (dateFilter === 'monthly') {
+      return `Monthly: ${selectedMonth.format('MMMM YYYY')}`;
+    }
+    if (dateFilter === 'yearly') {
+      return `Annual: ${dayjs().format('YYYY')}`;
+    }
+    if (dateFilter === 'custom' && customDateRange && customDateRange[0] && customDateRange[1]) {
+      return `${customDateRange[0].format('MMM D')} – ${customDateRange[1].format('MMM D, YYYY')}`;
+    }
+    return 'All-Time Archive';
+  }, [isDailyMode, activeDailyDate, dateFilter, selectedMonth, customDateRange]);
+
+  // ── Department Drawer Filtered Expenses & Summary Stats ─────────────────────
+  const departmentDrawerExpenses = useMemo(() => {
+    if (!selectedDepartment) return [];
+
+    const sourceSet = departmentDrawerDateScope === 'all_records' ? roleFilteredExpenses : baseFilteredExpenses;
+    const deptItems = sourceSet.filter(
+      (e) => normalizeDepartmentName(e.department, e.recordedByUserRole) === selectedDepartment
+    );
+
+    const q = departmentSearchText.trim().toLowerCase();
+    const searched = q
+      ? deptItems.filter((e) => {
+          const inCat = (e.category || '').toLowerCase().includes(q);
+          const inDesc = (e.description || '').toLowerCase().includes(q);
+          const inCode = (e.code || '').toLowerCase().includes(q);
+          const inUser = (e.recordedByUserName || '').toLowerCase().includes(q);
+          return inCat || inDesc || inCode || inUser;
+        })
+      : deptItems;
+
+    if (departmentStatusFilter === 'all') return searched;
+    return searched.filter((e) => e.status === departmentStatusFilter);
+  }, [
+    selectedDepartment,
+    departmentDrawerDateScope,
+    roleFilteredExpenses,
+    baseFilteredExpenses,
+    departmentSearchText,
+    departmentStatusFilter,
+  ]);
+
+  const departmentDrawerStats = useMemo(() => {
+    if (!selectedDepartment) {
+      return { totalGHS: 0, approvedGHS: 0, pendingGHS: 0, rejectedGHS: 0, count: 0, pendingCount: 0 };
+    }
+    const sourceSet = departmentDrawerDateScope === 'all_records' ? roleFilteredExpenses : baseFilteredExpenses;
+    const allInDept = sourceSet.filter(
+      (e) => normalizeDepartmentName(e.department, e.recordedByUserRole) === selectedDepartment
+    );
+
+    let totalMinor = 0;
+    let approvedMinor = 0;
+    let pendingMinor = 0;
+    let rejectedMinor = 0;
+    let pendingCount = 0;
+
+    allInDept.forEach((exp) => {
+      const amt = exp.amountMinor || 0;
+      totalMinor += amt;
+      if (exp.status === 'approved') approvedMinor += amt;
+      else if (exp.status === 'pending') {
+        pendingMinor += amt;
+        pendingCount += 1;
+      } else if (exp.status === 'rejected') rejectedMinor += amt;
+    });
+
+    return {
+      totalGHS: totalMinor / 100,
+      approvedGHS: approvedMinor / 100,
+      pendingGHS: pendingMinor / 100,
+      rejectedGHS: rejectedMinor / 100,
+      count: allInDept.length,
+      pendingCount,
+    };
+  }, [selectedDepartment, departmentDrawerDateScope, roleFilteredExpenses, baseFilteredExpenses]);
+
+  // Batch authorization for all pending items in a department
+  const handleAuthorizeAllInDepartment = async (deptName: string) => {
+    const sourceSet = departmentDrawerDateScope === 'all_records' ? roleFilteredExpenses : baseFilteredExpenses;
+    const pendingItems = sourceSet.filter(
+      (e) => normalizeDepartmentName(e.department, e.recordedByUserRole) === deptName && e.status === 'pending'
+    );
+    if (pendingItems.length === 0) {
+      message.info('No pending requisitions to authorize in this department.');
+      return;
+    }
+
+    try {
+      for (const item of pendingItems) {
+        await decisionMutation.mutateAsync({
+          id: item.id,
+          payload: {
+            decision: 'approved',
+            note: `Departmental batch authorization by ${user?.firstName || 'Admin'} for ${deptName}`,
+          },
+        });
+      }
+      message.success(`Authorized ${pendingItems.length} requisitions for ${deptName}!`);
+      refetch();
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to authorize requisitions');
+    }
+  };
+
+  const handleExportDepartmentExpenses = (deptName: string, items: ExpenseEntity[]) => {
+    if (items.length === 0) {
+      message.warning('No department expenses to export.');
+      return;
+    }
+    const headers = ['Voucher Code', 'Date', 'Department', 'Category', 'Description', 'Amount (GHS)', 'Type', 'Branch', 'Recorded By', 'Role', 'Status'];
+    const rows = items.map((e) => [
+      `"${e.code || ''}"`,
+      `"${e.incurredOn || ''}"`,
+      `"${normalizeDepartmentName(e.department, e.recordedByUserRole)}"`,
+      `"${e.category || ''}"`,
+      `"${(e.description || '').replace(/"/g, '""')}"`,
+      (e.amountMinor / 100).toFixed(2),
+      `"${e.type}"`,
+      `"${e.branchName || ''}"`,
+      `"${e.recordedByUserName || ''}"`,
+      `"${e.recordedByUserRole || ''}"`,
+      `"${e.status}"`,
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `omark_${deptName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_expenses.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    message.success(`Exported ${deptName} expenses as CSV!`);
+  };
 
   // Counts for status tabs
   const counts = useMemo(() => ({
@@ -461,7 +680,9 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
   const handleOpenAddModal = () => {
     const defaultCat = roleConfig.defaultCategories[0] || 'Office Supplies';
     const defaultType = roleLens === 'marketing_director' ? 'external' : 'internal';
+    const initialDept = normalizeDepartmentName(undefined, roleLens === 'all' ? (user?.role as string) : roleLens);
     form.setFieldsValue({
+      department: initialDept,
       category: defaultCat,
       type: defaultType,
       amountGHS: undefined,
@@ -481,6 +702,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
 
       await createExpenseMutation.mutateAsync({
         branchId: values.branchId || user?.branchId,
+        department: values.department,
         category: values.category,
         description: values.description,
         amountMinor: Math.round(values.amountGHS * 100),
@@ -605,6 +827,39 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       ),
     },
     {
+      title: 'Department',
+      key: 'department',
+      width: 165,
+      render: (_: any, record: ExpenseEntity) => {
+        const dept = record.department || normalizeDepartmentName(undefined, record.recordedByUserRole);
+        const cfg = DEPARTMENT_CONFIG[dept] || { color: '#1890ff', bg: '#f0f5ff', icon: <ShopOutlined /> };
+        return (
+          <Tooltip title={`Open ${dept} Expense Drawer & Actions`}>
+            <Tag
+              color={cfg.color}
+              style={{
+                cursor: 'pointer',
+                borderRadius: 12,
+                padding: '2px 8px',
+                fontWeight: 600,
+                fontSize: 11,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+              onClick={() => {
+                setSelectedDepartment(dept);
+                setDepartmentDrawerOpen(true);
+              }}
+            >
+              {cfg.icon}
+              {dept}
+            </Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
       title: 'Branch',
       dataIndex: 'branchName',
       key: 'branchName',
@@ -726,6 +981,154 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
                     setRejectionModalOpen(true);
                   }}
                 />
+              </Tooltip>
+            </>
+          )}
+        </Space>
+      ),
+    },
+  ];
+
+  // ── Department Drawer Columns ───────────────────────────────────────────────
+  const departmentDrawerColumns = [
+    {
+      title: 'Voucher',
+      key: 'voucher',
+      width: 130,
+      render: (_: any, record: ExpenseEntity) => (
+        <div>
+          <Text strong style={{ color: tokens.primary, fontSize: 13 }}>
+            {record.code || `EXP-${record.id.slice(0, 6).toUpperCase()}`}
+          </Text>
+          <div style={{ fontSize: 11, color: '#8c8c8c' }}>
+            {dayjs(record.incurredOn).format('MMM D, YYYY')}
+          </div>
+        </div>
+      ),
+    },
+    {
+      title: 'Category & Purpose',
+      key: 'details',
+      render: (_: any, record: ExpenseEntity) => (
+        <div>
+          <Space size={4} wrap>
+            <Tag color="blue" style={{ borderRadius: 4, fontWeight: 600 }}>
+              {record.category}
+            </Tag>
+            <Tag color={record.type === 'internal' ? 'cyan' : 'purple'} style={{ borderRadius: 4, fontSize: 10 }}>
+              {record.type.toUpperCase()}
+            </Tag>
+          </Space>
+          {record.description && (
+            <Paragraph
+              ellipsis={{ rows: 2, tooltip: record.description }}
+              style={{ fontSize: 12, color: '#595959', margin: '4px 0 0 0' }}
+            >
+              {record.description}
+            </Paragraph>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Submitter & Branch',
+      key: 'submitter',
+      width: 160,
+      render: (_: any, record: ExpenseEntity) => (
+        <div>
+          <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
+            {record.recordedByUserName || 'Staff Member'}
+          </Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>
+            {record.branchName || 'Kumasi Main'} • {(record.recordedByUserRole || 'staff').replace(/_/g, ' ')}
+          </Text>
+        </div>
+      ),
+    },
+    {
+      title: 'Amount (GHS)',
+      dataIndex: 'amountMinor',
+      key: 'amountMinor',
+      width: 130,
+      align: 'right' as const,
+      render: (amountMinor: number) => (
+        <Text strong style={{ fontSize: 14, color: '#111827' }}>
+          ₵ {(amountMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+        </Text>
+      ),
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      width: 115,
+      render: (status: string, record: ExpenseEntity) => {
+        const isApproved = status === 'approved';
+        const isPending = status === 'pending';
+        return (
+          <Tooltip title={record.decisionNote ? `Note: ${record.decisionNote}` : undefined}>
+            <Tag
+              color={isApproved ? 'success' : isPending ? 'warning' : 'error'}
+              icon={isApproved ? <CheckCircleOutlined /> : isPending ? <ClockCircleOutlined /> : <CloseCircleOutlined />}
+              style={{ borderRadius: 12, padding: '2px 8px', fontWeight: 600 }}
+            >
+              {isApproved ? 'Approved' : isPending ? 'Pending' : 'Rejected'}
+            </Tag>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      title: 'Admin Actions',
+      key: 'actions',
+      width: 140,
+      align: 'center' as const,
+      render: (_: any, record: ExpenseEntity) => (
+        <Space size={4}>
+          <Tooltip title="View Printable Voucher">
+            <Button
+              size="small"
+              icon={<FileTextOutlined />}
+              onClick={() => {
+                setSelectedExpense(record);
+                setVoucherDrawerOpen(true);
+              }}
+            />
+          </Tooltip>
+
+          {isAdminOrAccounts && record.status === 'pending' && (
+            <>
+              <Tooltip title="Direct Administrative Approval">
+                <Popconfirm
+                  title="Authorize Department Expense"
+                  description={`Approve ₵ ${(record.amountMinor / 100).toFixed(2)} for ${record.category}?`}
+                  onConfirm={() => handleDecision(record.id, 'approved')}
+                  okText="Authorize"
+                  okButtonProps={{ type: 'primary', style: { background: '#52c41a' } }}
+                >
+                  <Button
+                    size="small"
+                    type="primary"
+                    style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                    icon={<CheckCircleOutlined />}
+                  >
+                    Approve
+                  </Button>
+                </Popconfirm>
+              </Tooltip>
+
+              <Tooltip title="Reject Requisition with Reason">
+                <Button
+                  size="small"
+                  danger
+                  icon={<CloseCircleOutlined />}
+                  onClick={() => {
+                    setExpenseToReject(record);
+                    setRejectionModalOpen(true);
+                  }}
+                >
+                  Reject
+                </Button>
               </Tooltip>
             </>
           )}
@@ -1321,7 +1724,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         bodyStyle={{ padding: '16px 20px' }}
       >
         <Row gutter={[12, 12]} align="middle" justify="space-between">
-          <Col xs={24} md={12}>
+          <Col xs={24} lg={9}>
             <Segmented
               value={statusFilter}
               onChange={(val) => setStatusFilter(val as any)}
@@ -1335,21 +1738,59 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             />
           </Col>
 
-          <Col xs={24} md={12} style={{ textAlign: 'right' }}>
+          <Col xs={24} lg={15} style={{ textAlign: 'right' }}>
             <Space size={8} wrap>
               <Input
-                placeholder="Search descriptions, vouchers, staff..."
+                placeholder="Search vouchers, dept, staff..."
                 prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
-                style={{ width: 220, borderRadius: 8 }}
+                style={{ width: 190, borderRadius: 8 }}
                 allowClear
               />
+
+              {/* Dynamic Date Filter dropdowns (when in Period / All-Time view) */}
+              {!isDailyMode && (
+                <>
+                  <Select
+                    value={dateFilter}
+                    onChange={(val) => setDateFilter(val)}
+                    style={{ width: 145 }}
+                    placeholder="Timeframe"
+                  >
+                    <Option value="all">🌐 All-Time</Option>
+                    <Option value="today">📅 Today</Option>
+                    <Option value="weekly">📅 This Week</Option>
+                    <Option value="monthly">🗓️ Monthly View</Option>
+                    <Option value="yearly">📊 Annual View</Option>
+                    <Option value="custom">📆 Custom Range</Option>
+                  </Select>
+
+                  {dateFilter === 'monthly' && (
+                    <DatePicker
+                      picker="month"
+                      value={selectedMonth}
+                      onChange={(m) => m && setSelectedMonth(m)}
+                      allowClear={false}
+                      style={{ width: 130 }}
+                      format="MMM YYYY"
+                    />
+                  )}
+
+                  {dateFilter === 'custom' && (
+                    <RangePicker
+                      value={customDateRange}
+                      onChange={(r) => setCustomDateRange(r as any)}
+                      style={{ width: 220 }}
+                    />
+                  )}
+                </>
+              )}
 
               <Select
                 value={categoryFilter}
                 onChange={setCategoryFilter}
-                style={{ width: 170 }}
+                style={{ width: 145 }}
                 placeholder="Category"
               >
                 <Option value="all">All Categories</Option>
@@ -1362,7 +1803,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
                 <Select
                   value={branchFilter}
                   onChange={setBranchFilter}
-                  style={{ width: 140 }}
+                  style={{ width: 130 }}
                   placeholder="Branch"
                 >
                   <Option value="all">All Branches</Option>
@@ -1372,6 +1813,118 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
                 </Select>
               )}
             </Space>
+          </Col>
+        </Row>
+      </Card>
+
+      {/* ── Interactive Departmental Sub-Totals Bar ─────────────────────────── */}
+      <Card
+        style={{
+          borderRadius: 14,
+          marginBottom: 16,
+          background: '#ffffff',
+          border: '1px solid #f0f0f0',
+          boxShadow: '0 2px 8px rgba(0,0,0,0.02)',
+        }}
+        bodyStyle={{ padding: '16px 20px' }}
+      >
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+          <Space size={8}>
+            <ApartmentOutlined style={{ color: tokens.primary, fontSize: 16 }} />
+            <Text strong style={{ fontSize: 14, color: '#1f2937' }}>
+              Departmental Expenditure Breakdown & Sub-Totals
+            </Text>
+            <Tag color="blue" style={{ borderRadius: 10, fontSize: 11, fontWeight: 600 }}>
+              {activeDateScopeLabel}
+            </Tag>
+          </Space>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            Click any department card to open its dedicated expense drawer and administrative actions
+          </Text>
+        </div>
+
+        <Row gutter={[10, 10]}>
+          {departmentSummaries.map((dept) => {
+            const cfg = DEPARTMENT_CONFIG[dept.name] || { color: '#1890ff', bg: '#f0f5ff', icon: <ShopOutlined /> };
+            const isSelected = selectedDepartment === dept.name && departmentDrawerOpen;
+            const pendingInDept = dept.items.filter((i) => i.status === 'pending').length;
+
+            return (
+              <Col xs={24} sm={12} md={8} lg={4} key={dept.name}>
+                <div
+                  onClick={() => {
+                    setSelectedDepartment(dept.name);
+                    setDepartmentDrawerOpen(true);
+                  }}
+                  style={{
+                    padding: '12px 14px',
+                    borderRadius: 10,
+                    border: isSelected ? `2px solid ${cfg.color}` : '1px solid #e8eff5',
+                    background: isSelected ? cfg.bg : '#f9fbfd',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+                    position: 'relative',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span style={{ color: cfg.color, fontSize: 14 }}>{cfg.icon}</span>
+                      <Text strong style={{ fontSize: 12, color: '#1f2937' }} ellipsis={{ tooltip: dept.name }}>
+                        {dept.name}
+                      </Text>
+                    </div>
+                    {pendingInDept > 0 && (
+                      <Tooltip title={`${pendingInDept} requisition(s) pending administrative sign-off`}>
+                        <Badge count={pendingInDept} style={{ backgroundColor: '#fa8c16' }} />
+                      </Tooltip>
+                    )}
+                  </div>
+
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#111827', margin: '4px 0 2px 0' }}>
+                    ₵ {(dept.totalMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </div>
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#6b7280' }}>
+                    <span>{dept.count} voucher{dept.count === 1 ? '' : 's'}</span>
+                    <span style={{ color: tokens.primary, fontWeight: 600, fontSize: 10 }}>Open Drawer ➔</span>
+                  </div>
+                </div>
+              </Col>
+            );
+          })}
+
+          {/* Grand Total Tile */}
+          <Col xs={24} sm={12} md={8} lg={4}>
+            <div
+              style={{
+                padding: '12px 14px',
+                borderRadius: 10,
+                border: '1px solid #bfdbfe',
+                background: 'linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%)',
+                position: 'relative',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <BankOutlined style={{ color: '#1d4ed8', fontSize: 14 }} />
+                  <Text strong style={{ fontSize: 12, color: '#1e3a8a' }}>
+                    Grand Total
+                  </Text>
+                </div>
+                <Tag color="blue" style={{ fontSize: 10, padding: '0 6px', margin: 0, fontWeight: 600 }}>
+                  All Depts
+                </Tag>
+              </div>
+
+              <div style={{ fontSize: 16, fontWeight: 900, color: '#1e40af', margin: '4px 0 2px 0' }}>
+                ₵ {dynamicGrandTotals.grandTotalGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 11, color: '#1e40af' }}>
+                <span>{dynamicGrandTotals.grandCount} total records</span>
+                <span style={{ fontWeight: 600 }}>Live Recalc</span>
+              </div>
+            </div>
           </Col>
         </Row>
       </Card>
@@ -1421,6 +1974,164 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             showSizeChanger: true,
             pageSizeOptions: ['10', '20', '50'],
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} records`,
+          }}
+          summary={() => {
+            const activeDepts = departmentSummaries.filter((d) => d.count > 0);
+            if (activeDepts.length === 0) return null;
+
+            return (
+              <Table.Summary fixed>
+                {/* Department Sub-Total Rows */}
+                {activeDepts.map((dept) => {
+                  const cfg = DEPARTMENT_CONFIG[dept.name] || { color: '#1890ff', bg: '#f0f5ff', icon: <ShopOutlined /> };
+                  return (
+                    <Table.Summary.Row
+                      key={dept.name}
+                      style={{
+                        backgroundColor: '#fafbfc',
+                        borderTop: '1px solid #f0f0f0',
+                      }}
+                    >
+                      <Table.Summary.Cell index={0} colSpan={2}>
+                        <Space size={8} wrap>
+                          <Tooltip title={`Open ${dept.name} Expense Drawer`}>
+                            <Tag
+                              color={cfg.color}
+                              style={{
+                                cursor: 'pointer',
+                                padding: '3px 10px',
+                                borderRadius: 12,
+                                fontWeight: 700,
+                                fontSize: 12,
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: 4,
+                              }}
+                              onClick={() => {
+                                setSelectedDepartment(dept.name);
+                                setDepartmentDrawerOpen(true);
+                              }}
+                            >
+                              {cfg.icon}
+                              {dept.name}
+                            </Tag>
+                          </Tooltip>
+                          <Text type="secondary" style={{ fontSize: 12, fontWeight: 500 }}>
+                            Sub-Total ({dept.count} item{dept.count === 1 ? '' : 's'})
+                          </Text>
+                        </Space>
+                      </Table.Summary.Cell>
+
+                      <Table.Summary.Cell index={2} colSpan={3}>
+                        <Space size={8} wrap>
+                          <Tag color="success" style={{ borderRadius: 10, fontSize: 11 }}>
+                            Approved: ₵ {(dept.approvedMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </Tag>
+                          {dept.pendingMinor > 0 && (
+                            <Tag color="warning" style={{ borderRadius: 10, fontSize: 11 }}>
+                              Pending: ₵ {(dept.pendingMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                            </Tag>
+                          )}
+                          {dept.rejectedMinor > 0 && (
+                            <Tag color="error" style={{ borderRadius: 10, fontSize: 11 }}>
+                              Rejected: ₵ {(dept.rejectedMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                            </Tag>
+                          )}
+                        </Space>
+                      </Table.Summary.Cell>
+
+                      <Table.Summary.Cell index={5} align="right">
+                        <div>
+                          <Text strong style={{ fontSize: 13, color: '#111827' }}>
+                            ₵ {(dept.totalMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </Text>
+                        </div>
+                      </Table.Summary.Cell>
+
+                      <Table.Summary.Cell index={6} align="center">
+                        <Tag color="blue" style={{ fontSize: 11 }}>
+                          {dept.count} entries
+                        </Tag>
+                      </Table.Summary.Cell>
+
+                      <Table.Summary.Cell index={7} align="center">
+                        <Button
+                          type="link"
+                          size="small"
+                          icon={<FolderOpenOutlined />}
+                          onClick={() => {
+                            setSelectedDepartment(dept.name);
+                            setDepartmentDrawerOpen(true);
+                          }}
+                          style={{ fontWeight: 600, color: tokens.primary, padding: 0, fontSize: 12 }}
+                        >
+                          View Drawer ➔
+                        </Button>
+                      </Table.Summary.Cell>
+                    </Table.Summary.Row>
+                  );
+                })}
+
+                {/* OVERALL GRAND TOTAL ROW */}
+                <Table.Summary.Row
+                  style={{
+                    backgroundColor: '#f0f7ff',
+                    borderTop: `2px solid ${tokens.primary}`,
+                  }}
+                >
+                  <Table.Summary.Cell index={0} colSpan={2}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <Text strong style={{ fontSize: 13, color: tokens.primary, letterSpacing: 0.3 }}>
+                        🏛️ OVERALL GRAND TOTAL
+                      </Text>
+                      <Tag color="blue" style={{ borderRadius: 12, fontWeight: 700 }}>
+                        {dynamicGrandTotals.grandCount} Requisitions
+                      </Tag>
+                    </div>
+                  </Table.Summary.Cell>
+
+                  <Table.Summary.Cell index={2} colSpan={3}>
+                    <Space size={12} wrap>
+                      <Badge
+                        status="success"
+                        text={
+                          <span style={{ fontSize: 12, fontWeight: 600, color: '#237804' }}>
+                            Approved: ₵ {dynamicGrandTotals.grandApprovedGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                          </span>
+                        }
+                      />
+                      {dynamicGrandTotals.grandPendingMinor > 0 && (
+                        <Badge
+                          status="warning"
+                          text={
+                            <span style={{ fontSize: 12, fontWeight: 600, color: '#ad4e00' }}>
+                              Pending: ₵ {dynamicGrandTotals.grandPendingGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                            </span>
+                          }
+                        />
+                      )}
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        ({activeDateScopeLabel})
+                      </Text>
+                    </Space>
+                  </Table.Summary.Cell>
+
+                  <Table.Summary.Cell index={5} align="right">
+                    <div>
+                      <Text strong style={{ fontSize: 15, color: tokens.primary, fontWeight: 800 }}>
+                        ₵ {dynamicGrandTotals.grandTotalGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </Text>
+                    </div>
+                  </Table.Summary.Cell>
+
+                  <Table.Summary.Cell index={6} colSpan={2} align="center">
+                    <Tag color="processing" style={{ borderRadius: 10, fontWeight: 700 }}>
+                      Dynamic Live Total
+                    </Tag>
+                  </Table.Summary.Cell>
+                </Table.Summary.Row>
+              </Table.Summary>
+            );
           }}
           locale={{
             emptyText: (
@@ -1476,13 +2187,13 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
           <Row gutter={16}>
             <Col span={14}>
               <Form.Item
-                name="category"
-                label="Expense Category"
-                rules={[{ required: true, message: 'Select an expense category' }]}
+                name="department"
+                label="Department"
+                rules={[{ required: true, message: 'Select department' }]}
               >
-                <Select placeholder="Select category">
-                  {roleConfig.defaultCategories.map((c) => (
-                    <Option key={c} value={c}>{c}</Option>
+                <Select placeholder="Select department">
+                  {STANDARD_DEPARTMENTS.map((d) => (
+                    <Option key={d.name} value={d.name}>{d.name}</Option>
                   ))}
                 </Select>
               </Form.Item>
@@ -1497,6 +2208,22 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
                 <Select>
                   <Option value="internal">Internal Overhead</Option>
                   <Option value="external">External Vendor</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col span={24}>
+              <Form.Item
+                name="category"
+                label="Expense Category"
+                rules={[{ required: true, message: 'Select an expense category' }]}
+              >
+                <Select placeholder="Select category">
+                  {roleConfig.defaultCategories.map((c) => (
+                    <Option key={c} value={c}>{c}</Option>
+                  ))}
                 </Select>
               </Form.Item>
             </Col>
@@ -1608,6 +2335,9 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
               <Descriptions.Item label="Incurred Date">
                 {dayjs(selectedExpense.incurredOn).format('MMMM D, YYYY')}
               </Descriptions.Item>
+              <Descriptions.Item label="Department">
+                <Tag color="geekblue">{selectedExpense.department || normalizeDepartmentName(undefined, selectedExpense.recordedByUserRole)}</Tag>
+              </Descriptions.Item>
               <Descriptions.Item label="Category">
                 <Tag color="blue">{selectedExpense.category}</Tag>
               </Descriptions.Item>
@@ -1647,6 +2377,264 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
                 Logged at {dayjs(selectedExpense.createdAt).format('YYYY-MM-DD HH:mm:ss')}
               </Text>
             </div>
+          </div>
+        )}
+      </Drawer>
+
+      {/* ── Department Expense Drawer ───────────────────────────────────────── */}
+      <Drawer
+        title={
+          selectedDepartment ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 10,
+                  background: (DEPARTMENT_CONFIG[selectedDepartment] || { bg: '#e6f7ff' }).bg,
+                  color: (DEPARTMENT_CONFIG[selectedDepartment] || { color: '#1890ff' }).color,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 18,
+                }}
+              >
+                {(DEPARTMENT_CONFIG[selectedDepartment] || { icon: <ApartmentOutlined /> }).icon}
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Text strong style={{ fontSize: 16 }}>
+                    {selectedDepartment}
+                  </Text>
+                  <Tag color="blue" style={{ borderRadius: 10 }}>
+                    {departmentDrawerExpenses.length} Record{departmentDrawerExpenses.length === 1 ? '' : 's'}
+                  </Tag>
+                </div>
+                <Text type="secondary" style={{ fontSize: 11 }}>
+                  Department Operational Expenses & Direct Administrative Oversight
+                </Text>
+              </div>
+            </div>
+          ) : (
+            'Department Expenses'
+          )
+        }
+        open={departmentDrawerOpen && Boolean(selectedDepartment)}
+        onClose={() => {
+          setDepartmentDrawerOpen(false);
+          setDepartmentSearchText('');
+          setDepartmentStatusFilter('all');
+        }}
+        width={720}
+        extra={
+          <Space>
+            {selectedDepartment && (
+              <Button
+                icon={<ExportOutlined />}
+                size="small"
+                onClick={() => handleExportDepartmentExpenses(selectedDepartment, departmentDrawerExpenses)}
+              >
+                Export CSV
+              </Button>
+            )}
+          </Space>
+        }
+      >
+        {selectedDepartment && (
+          <div>
+            {/* Top Stat Summary Strip */}
+            <Row gutter={[10, 10]} style={{ marginBottom: 16 }}>
+              <Col span={6}>
+                <Card size="small" style={{ borderRadius: 10, background: '#fafafa', border: '1px solid #f0f0f0' }}>
+                  <Statistic
+                    title={<Text type="secondary" style={{ fontSize: 11 }}>Department Sub-Total</Text>}
+                    value={departmentDrawerStats.totalGHS}
+                    prefix="₵"
+                    precision={2}
+                    valueStyle={{ fontSize: 16, fontWeight: 700, color: tokens.primary }}
+                  />
+                  <div style={{ fontSize: 10, color: '#8c8c8c' }}>
+                    {departmentDrawerStats.count} total records
+                  </div>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ borderRadius: 10, background: '#f6ffed', border: '1px solid #b7eb8f' }}>
+                  <Statistic
+                    title={<Text type="secondary" style={{ fontSize: 11 }}>Authorized Spend</Text>}
+                    value={departmentDrawerStats.approvedGHS}
+                    prefix="₵"
+                    precision={2}
+                    valueStyle={{ fontSize: 16, fontWeight: 700, color: '#52c41a' }}
+                  />
+                  <div style={{ fontSize: 10, color: '#52c41a' }}>
+                    Approved by accounts
+                  </div>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ borderRadius: 10, background: '#fff7e6', border: '1px solid #ffd591' }}>
+                  <Statistic
+                    title={<Text type="secondary" style={{ fontSize: 11 }}>Pending Sign-Off</Text>}
+                    value={departmentDrawerStats.pendingGHS}
+                    prefix="₵"
+                    precision={2}
+                    valueStyle={{ fontSize: 16, fontWeight: 700, color: '#fa8c16' }}
+                  />
+                  <div style={{ fontSize: 10, color: '#fa8c16' }}>
+                    {departmentDrawerStats.pendingCount} awaiting approval
+                  </div>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ borderRadius: 10, background: '#fff1f0', border: '1px solid #ffa39e' }}>
+                  <Statistic
+                    title={<Text type="secondary" style={{ fontSize: 11 }}>Rejected / Flagged</Text>}
+                    value={departmentDrawerStats.rejectedGHS}
+                    prefix="₵"
+                    precision={2}
+                    valueStyle={{ fontSize: 16, fontWeight: 700, color: '#f5222d' }}
+                  />
+                  <div style={{ fontSize: 10, color: '#f5222d' }}>
+                    Declined requisitions
+                  </div>
+                </Card>
+              </Col>
+            </Row>
+
+            {/* Date Scope Controls inside Drawer */}
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                flexWrap: 'wrap',
+                gap: 8,
+                padding: '8px 12px',
+                background: '#f8fafc',
+                borderRadius: 8,
+                marginBottom: 16,
+                border: '1px solid #e2e8f0',
+              }}
+            >
+              <Space size={6} wrap>
+                <CalendarOutlined style={{ color: tokens.primary }} />
+                <Text strong style={{ fontSize: 12 }}>
+                  Active Scope:
+                </Text>
+                <Tag color="cyan" style={{ borderRadius: 8, fontWeight: 600 }}>
+                  {departmentDrawerDateScope === 'current_filter' ? activeDateScopeLabel : 'All Historical Records'}
+                </Tag>
+              </Space>
+
+              <Segmented
+                size="small"
+                value={departmentDrawerDateScope}
+                onChange={(val) => setDepartmentDrawerDateScope(val as any)}
+                options={[
+                  { label: '📅 Active Filter Scope', value: 'current_filter' },
+                  { label: '🌐 All-Time History', value: 'all_records' },
+                ]}
+                style={{ fontWeight: 600 }}
+              />
+            </div>
+
+            {/* Administrative Batch Action Banner */}
+            {isAdminOrAccounts && departmentDrawerStats.pendingCount > 0 && (
+              <Alert
+                type="warning"
+                showIcon
+                message={
+                  <span style={{ fontWeight: 600 }}>
+                    {departmentDrawerStats.pendingCount} Requisition(s) Pending Administrative Authorization
+                  </span>
+                }
+                description={
+                  <div style={{ marginTop: 4 }}>
+                    Totaling ₵ {departmentDrawerStats.pendingGHS.toFixed(2)} in {selectedDepartment}. You can approve each individually below or authorize all at once.
+                  </div>
+                }
+                action={
+                  <Popconfirm
+                    title={`Authorize All Pending in ${selectedDepartment}?`}
+                    description={`This will immediately approve ${departmentDrawerStats.pendingCount} pending requisitions (₵${departmentDrawerStats.pendingGHS.toFixed(2)}).`}
+                    onConfirm={() => handleAuthorizeAllInDepartment(selectedDepartment)}
+                    okText="Authorize All"
+                    okButtonProps={{ type: 'primary', style: { background: '#52c41a' } }}
+                  >
+                    <Button
+                      size="small"
+                      type="primary"
+                      style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                      icon={<CheckCircleOutlined />}
+                    >
+                      Authorize All ({departmentDrawerStats.pendingCount})
+                    </Button>
+                  </Popconfirm>
+                }
+                style={{ marginBottom: 16, borderRadius: 8 }}
+              />
+            )}
+
+            {/* In-Drawer Search & Status Filters */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+              <Segmented
+                size="small"
+                value={departmentStatusFilter}
+                onChange={(val) => setDepartmentStatusFilter(val as any)}
+                options={[
+                  { label: 'All', value: 'all' },
+                  { label: 'Pending', value: 'pending' },
+                  { label: 'Approved', value: 'approved' },
+                  { label: 'Rejected', value: 'rejected' },
+                ]}
+                style={{ fontWeight: 600 }}
+              />
+
+              <Input
+                placeholder="Search within department..."
+                prefix={<SearchOutlined style={{ color: '#bfbfbf' }} />}
+                value={departmentSearchText}
+                onChange={(e) => setDepartmentSearchText(e.target.value)}
+                size="small"
+                style={{ width: 220, borderRadius: 6 }}
+                allowClear
+              />
+            </div>
+
+            {/* Department Expenses Table */}
+            <Table
+              dataSource={departmentDrawerExpenses}
+              columns={departmentDrawerColumns}
+              rowKey="id"
+              size="small"
+              pagination={{
+                pageSize: 8,
+                showSizeChanger: false,
+                showTotal: (total) => `${total} items`,
+              }}
+              locale={{
+                emptyText: (
+                  <div style={{ padding: '32px 0', textAlign: 'center' }}>
+                    <Empty
+                      description={
+                        <div>
+                          <Text strong style={{ fontSize: 13, display: 'block' }}>
+                            No {selectedDepartment} expenses found
+                          </Text>
+                          <Text type="secondary" style={{ fontSize: 11 }}>
+                            {departmentDrawerDateScope === 'current_filter'
+                              ? 'No entries for this department under current date filters. Try switching to "All-Time History".'
+                              : 'No expenses have been recorded for this department yet.'}
+                          </Text>
+                        </div>
+                      }
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                    />
+                  </div>
+                ),
+              }}
+            />
           </div>
         )}
       </Drawer>

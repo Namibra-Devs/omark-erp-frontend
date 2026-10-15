@@ -72,6 +72,9 @@ import {
   FundProjectionScreenOutlined,
   MoneyCollectOutlined,
   GlobalOutlined,
+  UserOutlined,
+  PhoneOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -82,17 +85,27 @@ import { useMarketingDashboardQuery, useAnalyticsDashboardQuery, type MarketerPe
 import { useUsersQuery, getUserFullName, getRoleColor } from '@/api/users';
 import { useProspectsQuery, useUpdateProspectMutation, getStoredProspects } from '@/api/prospects';
 import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@/api/customers';
-import { useAppointmentsQuery, useCreateAppointmentMutation, useUpdateAppointmentMutation, saveStoredAppointment } from '@/api/appointments';
+import { useScopedAppointments, useCreateAppointmentMutation, useUpdateAppointmentMutation } from '@/api/appointments';
 import { usePropertiesQuery } from '@/api/properties';
-import { useSendBroadcastSMSMutation } from '@/api/notifications';
+import { useSendBroadcastSMSMutation, SMS_BATCH_SIZE, type SMSBatchProgress } from '@/api/notifications';
+import { SMSBatchLoader } from '@/components/shared/SMSBatchLoader';
 import { StatusTag } from '@/components/shared/StatusTag';
-import { prospectStatusLabels } from '@/constants/enums';
+import { prospectStatusLabels, roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { BonusRulesModal } from '@/components/bonus/BonusRulesModal';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
-import { isProspectAssignedOrCreatedByStaff, consolidateAllProspects, distributeProspectsAcrossMarketingStaff } from '@/utils/prospectAssignment';
+import { useAllStaffInteractionsQuery } from '@/api/interactions';
+import {
+  isProspectAssignedOrCreatedByStaff,
+  consolidateAllProspects,
+  distributeProspectsAcrossMarketingStaff,
+  getAppointmentDueStatus,
+  type AppointmentDueStatus,
+} from '@/utils/prospectAssignment';
+import { getAppointmentCreatorId, isAppointmentEditableByUser } from '@/utils/appointmentScoping';
+import type { Role } from '@/types';
 import {
   type MarketingCampaign,
   type MarketingTask,
@@ -283,11 +296,11 @@ export const MarketingDashboardPage: React.FC = () => {
     Boolean(user?.id)
   );
   const { data: allCustomersData, refetch: refetchCustomers } = useCustomersQuery({ pageSize: 10000 });
-  const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 1000 });
+  const { scopedAppointments: appointments, refetch: refetchAppointments } = useScopedAppointments({ pageSize: 1000 });
+  const { interactions: allInteractions, refetch: refetchInteractions } = useAllStaffInteractionsQuery();
   const { data: branches = [] } = useBranchesQuery();
   const { data: propertiesData } = usePropertiesQuery({ pageSize: 200 });
 
-  const appointments = appointmentsData?.items ?? [];
   const allCustomers = allCustomersData?.items ?? [];
   const properties = propertiesData?.items ?? [];
 
@@ -327,6 +340,12 @@ export const MarketingDashboardPage: React.FC = () => {
       return false;
     });
   }, [allProspectsData, mktProspectsData, directorProspectsData, marketingDirectorUser]);
+
+  // Current staff member's personal appointments (creator-scoped)
+  const myStaffAppointments = useMemo(() => {
+    if (!user?.id) return [];
+    return appointments.filter((a) => getAppointmentCreatorId(a, allInteractions) === user.id);
+  }, [appointments, user?.id, allInteractions]);
 
   const liveMarketingProspectsCount = useMemo(() => {
     return Math.max(allMarketingProspects.length, mktProspectsData?.total ?? 0);
@@ -431,6 +450,7 @@ export const MarketingDashboardPage: React.FC = () => {
       refetchDirectorProspects(),
       refetchCustomers(),
       refetchAppointments(),
+      refetchInteractions(),
       refetchUsers(),
     ]);
     handleRefreshMarketingStorage();
@@ -529,9 +549,10 @@ export const MarketingDashboardPage: React.FC = () => {
     return distributeProspectsAcrossMarketingStaff(
       allMarketingProspects,
       marketingStaffUsers,
-      marketingApiData?.marketers || []
+      marketingApiData?.marketers || [],
+      appointments
     );
-  }, [allMarketingProspects, marketingStaffUsers, marketingApiData]);
+  }, [allMarketingProspects, marketingStaffUsers, marketingApiData, appointments]);
 
   // Combined data for table view so all rows amount to the total marketing prospects (364)
   const allMarketerTableData = useMemo(() => {
@@ -554,6 +575,7 @@ export const MarketingDashboardPage: React.FC = () => {
   const [broadcastModalOpen, setBroadcastModalOpen] = useState(false);
   const [boardReportModalOpen, setBoardReportModalOpen] = useState(false);
   const [broadcastLoading, setBroadcastLoading] = useState(false);
+  const [broadcastProgress, setBroadcastProgress] = useState<SMSBatchProgress | null>(null);
 
   // Forms
   const [campaignForm] = Form.useForm();
@@ -567,16 +589,32 @@ export const MarketingDashboardPage: React.FC = () => {
   const updateAppointmentMutation = useUpdateAppointmentMutation();
   const sendBroadcastSMSMutation = useSendBroadcastSMSMutation();
 
-  // Real-time synchronization for appointment updates
+  // Real-time synchronization for appointment and interaction updates
   useEffect(() => {
     const handleAppointmentsChange = () => {
       refetchAppointments();
+      refetchInteractions();
+    };
+    const handleInteractionsChange = () => {
+      refetchAppointments();
+      refetchInteractions();
     };
     window.addEventListener('omark-appointments-changed', handleAppointmentsChange);
+    window.addEventListener('omark-interactions-changed', handleInteractionsChange);
     return () => {
       window.removeEventListener('omark-appointments-changed', handleAppointmentsChange);
+      window.removeEventListener('omark-interactions-changed', handleInteractionsChange);
     };
-  }, [refetchAppointments]);
+  }, [refetchAppointments, refetchInteractions]);
+
+  // Appointments Tab States
+  const isMarketingManagement =
+    (user?.role as string) === 'marketing_director' ||
+    (user?.role as string) === 'admin' ||
+    (user?.role as string) === 'super_admin';
+  const [appointmentScope, setAppointmentScope] = useState<'personal' | 'all'>('personal');
+  const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<string>('all');
+  const [appointmentSearchText, setAppointmentSearchText] = useState<string>('');
 
   // Filter States for Prospects Tab
   const [prospectSearch, setProspectSearch] = useState('');
@@ -645,6 +683,18 @@ export const MarketingDashboardPage: React.FC = () => {
 
       if (values.channel === 'sms' && recipientPhones.length > 0) {
         const msg = values.messageText.trim().slice(0, 480);
+        const totalBatches = Math.max(1, Math.ceil(recipientPhones.length / SMS_BATCH_SIZE));
+        setBroadcastProgress({
+          currentBatch: 1,
+          totalBatches,
+          processedRecipients: 0,
+          totalRecipients: recipientPhones.length,
+          percent: 0,
+          isComplete: false,
+          batchSize: Math.min(SMS_BATCH_SIZE, recipientPhones.length),
+          statusText: `Initializing batch 1 of ${totalBatches}...`,
+        });
+
         await sendBroadcastSMSMutation.mutateAsync({
           audience: 'prospects',
           message: msg,
@@ -653,9 +703,13 @@ export const MarketingDashboardPage: React.FC = () => {
           phoneNumbers: recipientPhones,
           recipients: recipientPhones,
           senderId: 'OMARK ESTATES',
+          onProgress: (progress) => {
+            setBroadcastProgress(progress);
+          },
         });
       }
 
+      const totalBatches = Math.max(1, Math.ceil(recipientPhones.length / SMS_BATCH_SIZE));
       const newRecord: BroadcastRecord = {
         id: `bc-${Date.now()}`,
         title: values.title,
@@ -677,8 +731,12 @@ export const MarketingDashboardPage: React.FC = () => {
       setBroadcasts(updatedBroadcasts);
       localStorage.setItem('omark_marketing_broadcasts', JSON.stringify(updatedBroadcasts));
 
+      const batchNote =
+        values.channel === 'sms' && recipientPhones.length > SMS_BATCH_SIZE
+          ? ` in ${totalBatches} sequential batches of 500`
+          : '';
       message.success(
-        `Broadcast sent successfully to ${newRecord.recipientCount} prospects via ${values.channel.toUpperCase()}!`
+        `Broadcast sent successfully to ${newRecord.recipientCount} prospects via ${values.channel.toUpperCase()}${batchNote}!`
       );
       setBroadcastModalOpen(false);
       broadcastForm.resetFields();
@@ -686,6 +744,7 @@ export const MarketingDashboardPage: React.FC = () => {
       message.error(err?.message || 'Failed to send broadcast');
     } finally {
       setBroadcastLoading(false);
+      setBroadcastProgress(null);
     }
   };
 
@@ -921,39 +980,32 @@ export const MarketingDashboardPage: React.FC = () => {
       const reasonText = values.title || 'Marketing Site Inspection / Lead Consultation';
       const conductingStaffId = values.staffId || user?.id;
 
-      const existing = existingAppointmentForProspect ||
-        appointments.find(
-          (a) => a.prospectId === values.prospectId && a.status !== 'canceled' && a.status !== 'completed'
-        );
+      const targetTime = dayjs(scheduledIso);
+      const sameSlotAppt = appointments.find(
+        (a) =>
+          a.prospectId === values.prospectId &&
+          getAppointmentCreatorId(a, allInteractions) === user?.id &&
+          dayjs(a.scheduledFor).isSame(targetTime, 'minute') &&
+          a.status !== 'canceled' &&
+          a.status !== 'completed'
+      );
 
-      if (existing) {
-        // Overwrite existing appointment record to prevent duplicate entries
+      if (sameSlotAppt) {
         await updateAppointmentMutation.mutateAsync({
-          id: existing.id,
+          id: sameSlotAppt.id,
           payload: {
             scheduledFor: scheduledIso,
             status: 'scheduled',
             feedback: values.notes || reasonText,
           },
         });
-        saveStoredAppointment({
-          ...existing,
-          scheduledFor: scheduledIso,
-          reason: reasonText,
-          feedback: values.notes || existing.feedback,
-          status: 'scheduled',
-          assignedUserId: conductingStaffId,
-          staffId: conductingStaffId,
-          updatedAt: new Date().toISOString(),
-        });
-        message.success('Appointment date updated and record overwritten successfully!');
+        message.success('Personal appointment in this slot updated successfully.');
       } else {
         await createAppointmentMutation.mutateAsync({
           scheduledFor: scheduledIso,
           prospectId: values.prospectId,
           reason: reasonText,
           assignedUserId: conductingStaffId,
-          staffId: conductingStaffId,
         });
         message.success('Appointment booked successfully!');
       }
@@ -983,6 +1035,229 @@ export const MarketingDashboardPage: React.FC = () => {
       message.error(err?.message || 'Failed to assign prospect');
     }
   };
+
+  // Filtered Appointments for the Appointments & Site Visits Tab
+  const effectiveDashboardAppointments = useMemo(() => {
+    const baseList =
+      appointmentScope === 'all' && isMarketingManagement
+        ? appointments
+        : myStaffAppointments;
+
+    return baseList.filter((appt) => {
+      // Status filter
+      if (appointmentStatusFilter === 'overdue') {
+        if (getAppointmentDueStatus(appt) !== 'overdue') return false;
+      } else if (appointmentStatusFilter === 'due_today') {
+        if (getAppointmentDueStatus(appt) !== 'due_today') return false;
+      } else if (appointmentStatusFilter !== 'all') {
+        if (appt.status !== appointmentStatusFilter) return false;
+      }
+
+      // Search text
+      if (appointmentSearchText.trim()) {
+        const q = appointmentSearchText.toLowerCase();
+        const matchedP = allMarketingProspects.find((p) => p.id === appt.prospectId);
+        const name = `${matchedP?.firstName || ''} ${matchedP?.lastName || ''} ${(appt as any).clientName || ''} ${(appt as any).name || ''}`.toLowerCase();
+        const phone = `${matchedP?.phoneNumber || ''} ${(appt as any).phone || ''}`.toLowerCase();
+        const reason = (appt.reason || '').toLowerCase();
+        if (!name.includes(q) && !phone.includes(q) && !reason.includes(q)) {
+          return false;
+        }
+      }
+
+      return true;
+    }).sort((a, b) => {
+      const aDue = getAppointmentDueStatus(a);
+      const bDue = getAppointmentDueStatus(b);
+      const priorityMap: Record<AppointmentDueStatus, number> = {
+        overdue: 1,
+        due_today: 2,
+        upcoming: 3,
+        none: 4,
+      };
+      const diff = priorityMap[aDue] - priorityMap[bDue];
+      if (diff !== 0) return diff;
+      const tA = dayjs(a.scheduledFor || (a as any).date).unix();
+      const tB = dayjs(b.scheduledFor || (b as any).date).unix();
+      return tB - tA;
+    });
+  }, [
+    appointmentScope,
+    isMarketingManagement,
+    appointments,
+    myStaffAppointments,
+    appointmentStatusFilter,
+    appointmentSearchText,
+    allMarketingProspects,
+  ]);
+
+  const appointmentBreakdown = useMemo(() => {
+    const targetList = appointmentScope === 'all' && isMarketingManagement ? appointments : myStaffAppointments;
+    return {
+      total: targetList.length,
+      dueToday: targetList.filter((a) => getAppointmentDueStatus(a) === 'due_today').length,
+      overdue: targetList.filter((a) => getAppointmentDueStatus(a) === 'overdue').length,
+      scheduled: targetList.filter((a) => a.status === 'scheduled').length,
+      completed: targetList.filter((a) => a.status === 'completed').length,
+      postponed: targetList.filter((a) => a.status === 'postponed').length,
+      canceled: targetList.filter((a) => a.status === 'canceled').length,
+    };
+  }, [appointmentScope, isMarketingManagement, appointments, myStaffAppointments]);
+
+  const appointmentColumns = [
+    {
+      title: 'Prospect / Client',
+      key: 'client',
+      width: 220,
+      render: (_: any, record: any) => {
+        const matchedP = allMarketingProspects.find((p) => p.id === record.prospectId);
+        const name = matchedP
+          ? `${matchedP.firstName || ''} ${matchedP.lastName || ''}`.trim()
+          : record.clientName || record.name || 'Prospect Client';
+        const phone = matchedP?.phoneNumber || record.phone || 'No phone recorded';
+        return (
+          <Space>
+            <Avatar style={{ backgroundColor: '#0284c7' }} icon={<UserOutlined />} />
+            <div>
+              <Text strong>{name}</Text>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                <PhoneOutlined /> {phone}
+              </div>
+            </div>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Scheduled Date & Time',
+      key: 'scheduledFor',
+      width: 220,
+      render: (_: any, record: any) => {
+        const dueStatus = getAppointmentDueStatus(record);
+        const d = dayjs(record.scheduledFor || record.date);
+        return (
+          <Space direction="vertical" size={2}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Text strong>{d.isValid() ? d.format('ddd, MMM D, YYYY') : 'Date N/A'}</Text>
+              {dueStatus === 'due_today' && (
+                <Tag color="warning" icon={<ClockCircleOutlined />} style={{ margin: 0, fontWeight: 700 }}>
+                  DUE TODAY
+                </Tag>
+              )}
+              {dueStatus === 'overdue' && (
+                <Tag color="error" icon={<WarningOutlined />} style={{ margin: 0, fontWeight: 700 }}>
+                  OVERDUE
+                </Tag>
+              )}
+            </div>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              <ClockCircleOutlined /> {d.isValid() ? d.format('h:mm A') : record.time || ''}
+            </Text>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Purpose / Location',
+      key: 'reason',
+      render: (_: any, record: any) => (
+        <div>
+          <Text strong style={{ color: '#0f172a' }}>{record.reason || 'Site Inspection / Consultation'}</Text>
+          {record.feedback && (
+            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
+              📝 {record.feedback}
+            </div>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: 'Created by',
+      key: 'createdBy',
+      width: 180,
+      render: (_: any, record: any) => {
+        const creatorId = getAppointmentCreatorId(record, allInteractions);
+        if (!creatorId) {
+          return (
+            <Space direction="vertical" size={0}>
+              <Text strong style={{ fontSize: 13, color: '#8c8c8c' }}>
+                {record.source === 'website' ? 'Website Booking' : 'Unassigned / System'}
+              </Text>
+              <Tag color="default" style={{ fontSize: 10, margin: 0 }}>
+                {record.source === 'website' ? 'Website' : 'Orphan'}
+              </Tag>
+            </Space>
+          );
+        }
+        const matchedUser = allUsers.find((u) => u.id === creatorId);
+        const staffName = matchedUser
+          ? getUserFullName(matchedUser)
+          : record.createdByName || record.staffName || 'Marketing Staff';
+        const role = matchedUser ? (roleLabels[matchedUser.role as Role] || matchedUser.role) : 'Marketing Staff';
+        return (
+          <Space direction="vertical" size={0}>
+            <Text strong style={{ fontSize: 13 }}>{staffName}</Text>
+            <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>{role}</Tag>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Status',
+      key: 'status',
+      width: 120,
+      render: (_: any, record: any) => <StatusTag status={record.status || 'scheduled'} type="appointment" />,
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      width: 160,
+      render: (_: any, record: any) => {
+        const matchedP = allMarketingProspects.find((p) => p.id === record.prospectId);
+        const isEditable = isAppointmentEditableByUser(record, user, allUsers, allInteractions);
+        if (!isEditable) {
+          return <Text type="secondary" style={{ fontSize: 12 }}>View only</Text>;
+        }
+        return (
+          <Space size={8}>
+            <Tooltip title="Reschedule Date">
+              <Button
+                size="small"
+                icon={<CalendarOutlined />}
+                onClick={() => handleOpenAppointmentModal(matchedP || { id: record.prospectId, name: record.clientName })}
+              >
+                Reschedule
+              </Button>
+            </Tooltip>
+            {record.status !== 'completed' && (
+              <Tooltip title="Mark Attended & Completed">
+                <Button
+                  size="small"
+                  type="primary"
+                  ghost
+                  icon={<CheckCircleOutlined />}
+                  onClick={async () => {
+                    try {
+                      await updateAppointmentMutation.mutateAsync({
+                        id: record.id,
+                        payload: { status: 'completed' },
+                      });
+                      message.success('Appointment marked as attended & completed!');
+                      refetchAppointments();
+                      refetchInteractions();
+                      window.dispatchEvent(new Event('omark-appointments-changed'));
+                    } catch (err: any) {
+                      message.error(err?.message || 'Failed to update appointment');
+                    }
+                  }}
+                />
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    },
+  ];
 
   // Filtered Prospects
   const filteredProspects = useMemo(() => {
@@ -1953,6 +2228,54 @@ export const MarketingDashboardPage: React.FC = () => {
                   </Col>
                 </Row>
 
+                {/* ── Upcoming Scheduled Appointments & Inspections ─────────────────── */}
+                <Card
+                  title={
+                    <Space>
+                      <CalendarOutlined style={{ color: '#0284c7' }} />
+                      <span>Upcoming Appointments & Site Visits ({myStaffAppointments.length})</span>
+                    </Space>
+                  }
+                  extra={
+                    <Space>
+                      <Button
+                        type="primary"
+                        ghost
+                        size="small"
+                        icon={<PlusOutlined />}
+                        onClick={() => handleOpenAppointmentModal()}
+                      >
+                        Book Inspection / Meeting
+                      </Button>
+                      <Button type="link" size="small" onClick={() => setActiveTab('appointments')}>
+                        View All ({appointments.length}) &rarr;
+                      </Button>
+                    </Space>
+                  }
+                  style={{ marginTop: 24, borderRadius: 14, boxShadow: '0 2px 10px rgba(0,0,0,0.03)', border: '1px solid #e2e8f0' }}
+                >
+                  <Table
+                    dataSource={effectiveDashboardAppointments.slice(0, 5)}
+                    columns={appointmentColumns}
+                    rowKey="id"
+                    pagination={false}
+                    size="small"
+                    scroll={{ x: 700 }}
+                    locale={{
+                      emptyText: (
+                        <Empty
+                          description="No appointments scheduled yet"
+                          image={Empty.PRESENTED_IMAGE_SIMPLE}
+                        >
+                          <Button type="primary" size="small" icon={<CalendarOutlined />} onClick={() => handleOpenAppointmentModal()}>
+                            Schedule Your First Site Inspection
+                          </Button>
+                        </Empty>
+                      ),
+                    }}
+                  />
+                </Card>
+
                 {/* ── Marketing Staff Oversight & Prospect Distribution Snapshot ───── */}
                 <Card
                   title={
@@ -2112,6 +2435,141 @@ export const MarketingDashboardPage: React.FC = () => {
                   />
                 </Card>
               </>
+            ),
+          },
+          {
+            key: 'appointments',
+            label: (
+              <span>
+                <CalendarOutlined /> Appointments & Site Visits
+                <Badge
+                  count={myStaffAppointments.length}
+                  overflowCount={999}
+                  style={{ backgroundColor: '#0284c7', marginLeft: 6 }}
+                />
+              </span>
+            ),
+            children: (
+              <Card
+                title={
+                  <Space>
+                    <CalendarOutlined style={{ color: '#0284c7' }} />
+                    <span>
+                      {appointmentScope === 'personal'
+                        ? `My Scheduled Appointments & Site Inspections (${myStaffAppointments.length})`
+                        : `All Marketing Staff Appointments & Site Inspections (${appointments.length})`}
+                    </span>
+                  </Space>
+                }
+                extra={
+                  <Space wrap>
+                    {isMarketingManagement && (
+                      <Segmented
+                        value={appointmentScope}
+                        onChange={(val) => setAppointmentScope(val as 'personal' | 'all')}
+                        options={[
+                          { label: `My Appointments (${myStaffAppointments.length})`, value: 'personal' },
+                          { label: `All Staff (${appointments.length})`, value: 'all' },
+                        ]}
+                      />
+                    )}
+                    <Button
+                      type="primary"
+                      icon={<PlusOutlined />}
+                      onClick={() => handleOpenAppointmentModal()}
+                      style={{ background: '#0284c7', borderColor: '#0284c7' }}
+                    >
+                      Book Inspection
+                    </Button>
+                  </Space>
+                }
+                style={{ borderRadius: 14, boxShadow: '0 2px 10px rgba(0,0,0,0.03)', border: '1px solid #e2e8f0' }}
+              >
+                {/* Status Filter Chips and Search */}
+                <Row gutter={[12, 12]} style={{ marginBottom: 16 }} align="middle">
+                  <Col xs={24} md={8}>
+                    <Input
+                      placeholder="Search by client name, phone, or location..."
+                      prefix={<SearchOutlined />}
+                      value={appointmentSearchText}
+                      onChange={(e) => setAppointmentSearchText(e.target.value)}
+                      allowClear
+                    />
+                  </Col>
+                  <Col xs={24} md={16}>
+                    <Space wrap>
+                      <Button
+                        size="small"
+                        type={appointmentStatusFilter === 'all' ? 'primary' : 'default'}
+                        onClick={() => setAppointmentStatusFilter('all')}
+                      >
+                        All ({appointmentBreakdown.total})
+                      </Button>
+                      <Button
+                        size="small"
+                        danger={appointmentBreakdown.overdue > 0}
+                        type={appointmentStatusFilter === 'overdue' ? 'primary' : 'default'}
+                        onClick={() => setAppointmentStatusFilter('overdue')}
+                      >
+                        ⚠️ Overdue ({appointmentBreakdown.overdue})
+                      </Button>
+                      <Button
+                        size="small"
+                        style={{
+                          borderColor: appointmentStatusFilter === 'due_today' ? '#d97706' : undefined,
+                          color: appointmentStatusFilter === 'due_today' ? '#d97706' : undefined,
+                        }}
+                        type={appointmentStatusFilter === 'due_today' ? 'primary' : 'default'}
+                        onClick={() => setAppointmentStatusFilter('due_today')}
+                      >
+                        ⏰ Due Today ({appointmentBreakdown.dueToday})
+                      </Button>
+                      <Button
+                        size="small"
+                        type={appointmentStatusFilter === 'scheduled' ? 'primary' : 'default'}
+                        onClick={() => setAppointmentStatusFilter('scheduled')}
+                      >
+                        Scheduled ({appointmentBreakdown.scheduled})
+                      </Button>
+                      <Button
+                        size="small"
+                        type={appointmentStatusFilter === 'completed' ? 'primary' : 'default'}
+                        onClick={() => setAppointmentStatusFilter('completed')}
+                      >
+                        Completed ({appointmentBreakdown.completed})
+                      </Button>
+                    </Space>
+                  </Col>
+                </Row>
+
+                <Table
+                  dataSource={effectiveDashboardAppointments}
+                  columns={appointmentColumns}
+                  rowKey="id"
+                  pagination={{ pageSize: 8 }}
+                  scroll={{ x: 800 }}
+                  locale={{
+                    emptyText: (
+                      <Empty
+                        description={
+                          appointmentSearchText
+                            ? 'No appointments match your search filter'
+                            : 'No appointments or inspections scheduled yet'
+                        }
+                        image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      >
+                        <Button
+                          type="primary"
+                          icon={<CalendarOutlined />}
+                          onClick={() => handleOpenAppointmentModal()}
+                        >
+                          Book Site Inspection or Consultation
+                        </Button>
+                      </Empty>
+                    ),
+                  }}
+                />
+              </Card>
             ),
           },
           {
@@ -3068,7 +3526,9 @@ export const MarketingDashboardPage: React.FC = () => {
           </Space>
         }
         open={broadcastModalOpen}
-        onCancel={() => setBroadcastModalOpen(false)}
+        onCancel={() => !broadcastLoading && setBroadcastModalOpen(false)}
+        closable={!broadcastLoading}
+        maskClosable={!broadcastLoading}
         footer={null}
         destroyOnClose
         width={620}
@@ -3086,13 +3546,13 @@ export const MarketingDashboardPage: React.FC = () => {
           }}
         >
           <Form.Item name="title" label="Campaign Title / Subject" rules={[{ required: true }]}>
-            <Input placeholder="e.g., Weekend Bus Tour Announcement" />
+            <Input placeholder="e.g., Weekend Bus Tour Announcement" disabled={broadcastLoading} />
           </Form.Item>
 
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="channel" label="Delivery Channel" rules={[{ required: true }]}>
-                <Select>
+                <Select disabled={broadcastLoading}>
                   <Option value="sms">📱 SMS Broadcast (Sender ID: OMARK ESTATES)</Option>
                   <Option value="whatsapp">💬 WhatsApp Outreach Link</Option>
                 </Select>
@@ -3100,7 +3560,7 @@ export const MarketingDashboardPage: React.FC = () => {
             </Col>
             <Col span={12}>
               <Form.Item name="segment" label="Target Audience Segment" rules={[{ required: true }]}>
-                <Select>
+                <Select disabled={broadcastLoading}>
                   <Option value="all">👥 All Marketing Prospects ({allMarketingProspects.length})</Option>
                   <Option value="new">🆕 New Uncontacted Leads Only ({stalledLeads.length})</Option>
                   <Option value="visited">🏛️ Inspected Leads (Pending Closing)</Option>
@@ -3113,16 +3573,32 @@ export const MarketingDashboardPage: React.FC = () => {
             name="messageText"
             label="Broadcast Message Copy"
             rules={[{ required: true, message: 'Please enter broadcast message text' }]}
-            help="Keep under 160 characters for 1-part SMS delivery."
+            help="Keep under 160 characters for 1-part SMS delivery. SMS broadcasts are sent in sequential batches of 500."
           >
-            <TextArea rows={4} maxLength={320} showCount />
+            <TextArea rows={4} maxLength={320} showCount disabled={broadcastLoading} />
           </Form.Item>
+
+          {broadcastProgress && (
+            <SMSBatchLoader progress={broadcastProgress} />
+          )}
 
           <div style={{ textAlign: 'right', marginTop: 16 }}>
             <Space>
-              <Button onClick={() => setBroadcastModalOpen(false)}>Cancel</Button>
-              <Button type="primary" htmlType="submit" loading={broadcastLoading} icon={<SendOutlined />}>
-                Launch Broadcast Now
+              <Button onClick={() => setBroadcastModalOpen(false)} disabled={broadcastLoading}>
+                Cancel
+              </Button>
+              <Button
+                type="primary"
+                htmlType="submit"
+                loading={broadcastLoading}
+                disabled={broadcastLoading}
+                icon={<SendOutlined />}
+              >
+                {broadcastLoading && broadcastProgress
+                  ? `Sending Batch ${broadcastProgress.currentBatch} of ${broadcastProgress.totalBatches}...`
+                  : broadcastLoading
+                  ? 'Dispatching Broadcast...'
+                  : 'Launch Broadcast Now'}
               </Button>
             </Space>
           </div>

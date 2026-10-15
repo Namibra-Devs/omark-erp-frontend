@@ -283,7 +283,7 @@ test('Prospect Form Attribution: Marketing Director, Branch Manager, and Secreta
 
 // ── Appointment Attribution & Personal Visibility Tests ─────────────────────
 
-function isAppointmentAssignedToStaff(appointment, staffUser, staffProspectIds, staffCustomerIds) {
+function isAppointmentAssignedToStaff(appointment, staffUser, staffProspectIds, staffCustomerIds, allInteractions = []) {
   if (!appointment || !staffUser) return false;
   const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
 
@@ -303,9 +303,13 @@ function isAppointmentAssignedToStaff(appointment, staffUser, staffProspectIds, 
       areIdsEqual(appointment.hostUserId, staffId) ||
       areIdsEqual(appointment.hostId, staffId) ||
       areIdsEqual(appointment.creator?.id, staffId) ||
+      areIdsEqual(appointment.created_by?.id, staffId) ||
       areIdsEqual(appointment.assignedUser?.id, staffId) ||
       areIdsEqual(appointment.staff?.id, staffId) ||
-      areIdsEqual(appointment.user?.id, staffId)
+      areIdsEqual(appointment.user?.id, staffId) ||
+      areIdsEqual(appointment.bookedByUserId, staffId) ||
+      areIdsEqual(appointment.updatedByUserId, staffId) ||
+      areIdsEqual(appointment.feedbackByUserId, staffId)
     ) {
       return true;
     }
@@ -331,10 +335,13 @@ function isAppointmentAssignedToStaff(appointment, staffUser, staffProspectIds, 
     appointment.assignedStaffName,
     appointment.assignedUserName,
     appointment.createdByName,
+    appointment.creatorName,
     appointment.staffName,
     appointment.marketerName,
     appointment.agentName,
     appointment.hostName,
+    appointment.bookedByName,
+    appointment.updatedByName,
     appointment.staff?.name,
     appointment.creator?.name,
   ];
@@ -345,15 +352,39 @@ function isAppointmentAssignedToStaff(appointment, staffUser, staffProspectIds, 
     }
   }
 
+  // Interaction check
+  if (Array.isArray(allInteractions) && allInteractions.length > 0) {
+    const hasInteraction = allInteractions.some((i) => {
+      const isLinked =
+        (appointment.id && (areIdsEqual(i.appointmentId, appointment.id) || String(i.id).includes(String(appointment.id)))) ||
+        (appointment.prospectId && areIdsEqual(i.prospectId, appointment.prospectId));
+      if (!isLinked) return false;
+      return (
+        areIdsEqual(i.loggedByUserId, staffId) ||
+        isStaffNameMatching(i.loggedByUserName, staffUser)
+      );
+    });
+    if (hasInteraction) return true;
+  }
+
   return false;
 }
 
-function getStaffAssignedAppointments(allAppointments, staffUser, allProspects = [], branches = [], allCustomers = []) {
+function getStaffAssignedAppointments(allAppointments, staffUser, allProspects = [], branches = [], allCustomers = [], allInteractions = []) {
   if (!Array.isArray(allAppointments) || allAppointments.length === 0 || !staffUser) return [];
 
   let staffProspectIds;
   if (Array.isArray(allProspects) && allProspects.length > 0) {
-    const staffProspects = allProspects.filter((p) => isProspectAssignedOrCreatedByStaff(p, staffUser));
+    const staffProspects = allProspects.filter((p) => {
+      if (isProspectAssignedOrCreatedByStaff(p, staffUser)) return true;
+      if (p.assignedUserName && isStaffNameMatching(p.assignedUserName, staffUser)) return true;
+      if (Array.isArray(allInteractions) && allInteractions.length > 0) {
+        return allInteractions.some(
+          (i) => i.prospectId === p.id && (areIdsEqual(i.loggedByUserId, staffUser.id) || isStaffNameMatching(i.loggedByUserName, staffUser))
+        );
+      }
+      return false;
+    });
     staffProspectIds = new Set(staffProspects.map((p) => String(p.id).trim()));
   }
 
@@ -379,7 +410,7 @@ function getStaffAssignedAppointments(allAppointments, staffUser, allProspects =
   }
 
   return allAppointments.filter((a) =>
-    isAppointmentAssignedToStaff(a, staffUser, staffProspectIds, staffCustomerIds)
+    isAppointmentAssignedToStaff(a, staffUser, staffProspectIds, staffCustomerIds, allInteractions)
   );
 }
 
@@ -518,6 +549,124 @@ test('Management Appointment Scope: Admin and Branch Manager can toggle between 
   assert.equal(allView.length, 3);
 });
 
+test('Staff & Admin Appointment Consistency: Appointments booked or logged with interactions by staff appear accurately on both Admin and Staff accounts', () => {
+  const staffCecilia = {
+    id: 'user-cecilia-01',
+    firstName: 'Cecilia',
+    lastName: 'Donkor',
+    name: 'CECILIA DONKOR',
+    role: 'marketing_staff',
+    branchId: 'branch-kumasi-main',
+  };
+
+  const adminUser = {
+    id: 'user-admin-01',
+    firstName: 'Kindo',
+    lastName: 'Original',
+    role: 'admin',
+    branchId: 'head-office',
+  };
+
+  const prospects = [
+    { id: 'pros-abdul', firstName: 'MR.', lastName: 'ABDUL', phoneNumber: '+233246298320', assignedUserName: 'CECILIA DONKOR', source: 'marketing' },
+    { id: 'pros-micheal', firstName: 'MR.', lastName: 'MICHEAL', phoneNumber: '+233244478565', source: 'marketing' },
+  ];
+
+  // Appointments created in the system (e.g. at head office or by admin)
+  const allAppointments = [
+    {
+      id: 'app-abdul',
+      prospectId: 'pros-abdul',
+      branchId: 'head-office',
+      scheduledFor: '2026-10-14T10:30:00Z',
+      status: 'scheduled',
+      source: 'staff',
+      feedback: 'No show. Client has rescheduled to Wednesday, 14th Oct, 2026, 10:30AM',
+      reason: '[marketing] Site Inspection & Property Viewing',
+      createdByUserId: 'user-admin-01',
+    },
+    {
+      id: 'app-micheal',
+      prospectId: 'pros-micheal',
+      branchId: 'head-office',
+      scheduledFor: '2026-10-14T08:20:00Z',
+      status: 'scheduled',
+      source: 'staff',
+      reason: 'Site visit & payment plan discussion',
+      createdByUserId: 'user-admin-01',
+    },
+    {
+      id: 'app-other-staff',
+      prospectId: 'pros-other',
+      branchId: 'head-office',
+      scheduledFor: '2026-10-14T12:00:00Z',
+      status: 'scheduled',
+      source: 'staff',
+      assignedUserId: 'other-user-99',
+    },
+  ];
+
+  // Audit trail / interactions logged by Cecilia Donkor
+  const allInteractions = [
+    {
+      id: 'inter-1',
+      appointmentId: 'app-abdul',
+      prospectId: 'pros-abdul',
+      loggedByUserId: 'user-cecilia-01',
+      loggedByUserName: 'CECILIA DONKOR',
+      interactionType: 'booking',
+      response: 'Staff Booking Scheduled',
+    },
+    {
+      id: 'inter-2',
+      appointmentId: 'app-abdul',
+      prospectId: 'pros-abdul',
+      loggedByUserId: 'user-cecilia-01',
+      loggedByUserName: 'CECILIA DONKOR',
+      interactionType: 'status_update',
+      response: 'No show. Client has rescheduled to Wednesday, 14th Oct, 2026, 10:30AM',
+    },
+    {
+      id: 'inter-3',
+      appointmentId: 'app-micheal',
+      prospectId: 'pros-micheal',
+      loggedByUserId: 'user-cecilia-01',
+      loggedByUserName: 'CECILIA DONKOR',
+      interactionType: 'booking',
+      response: 'Site visit & payment plan discussion',
+    },
+  ];
+
+  // 1. On Staff Account (Cecilia Donkor), personal appointments must return Abdul and Micheal
+  const ceciliaPersonal = getStaffAssignedAppointments(
+    allAppointments,
+    staffCecilia,
+    prospects,
+    [{ id: 'branch-kumasi-main', name: 'Kumasi Main Branch' }],
+    [],
+    allInteractions
+  );
+
+  assert.equal(ceciliaPersonal.length, 2);
+  assert.deepEqual(ceciliaPersonal.map((a) => a.id).sort(), ['app-abdul', 'app-micheal']);
+
+  // 2. On Admin Account, Admin can see all branch/company bookings
+  const adminViewAll = allAppointments;
+  assert.equal(adminViewAll.length, 3);
+
+  // 3. Admin viewing Cecilia's profile gets the exact same 2 appointments
+  const adminViewingCecilia = getStaffAssignedAppointments(
+    allAppointments,
+    staffCecilia,
+    prospects,
+    [],
+    [],
+    allInteractions
+  );
+  assert.equal(adminViewingCecilia.length, 2);
+  assert.deepEqual(adminViewingCecilia.map((a) => a.id).sort(), ['app-abdul', 'app-micheal']);
+});
+
 // Deduplication function mirrored from src/api/appointments.ts
 function deduplicateAppointmentsList(appointments) {
   if (!Array.isArray(appointments) || appointments.length === 0) return [];
@@ -650,6 +799,69 @@ test('Duplicate Prevention: Customers with duplicate active appointments are con
   assert.equal(deduplicated[0].status, 'scheduled');
   assert.equal(deduplicated[0].scheduledFor, '2026-10-28T10:00:00.000Z');
 });
+
+test('Admin Table Master Oversight vs Staff Dashboard Appointments: Admin sees all appointments by default, Staff sees captured appointments', () => {
+  const adminUser = { id: 'admin-1', role: 'admin', firstName: 'Super', lastName: 'Admin' };
+  const staffA = { id: 'staff-a', role: 'marketing_staff', firstName: 'Kwame', lastName: 'Nkrumah' };
+  const staffB = { id: 'staff-b', role: 'marketing_staff', firstName: 'Yaa', lastName: 'Asantewaa' };
+
+  // Simulated Appointments collection across all staff
+  const companyAppointments = [
+    {
+      id: 'appt-1',
+      prospectId: 'pros-1',
+      assignedUserId: 'staff-a',
+      scheduledFor: '2026-10-15T09:00:00Z',
+      status: 'scheduled',
+      reason: 'Site Inspection',
+    },
+    {
+      id: 'appt-2',
+      prospectId: 'pros-2',
+      assignedUserId: 'staff-b',
+      scheduledFor: '2026-10-15T11:00:00Z',
+      status: 'scheduled',
+      reason: 'Office Presentation',
+    },
+    {
+      id: 'appt-3',
+      prospectId: 'pros-3',
+      createdByUserId: 'staff-a',
+      scheduledFor: '2026-10-16T14:00:00Z',
+      status: 'completed',
+      reason: 'Follow-up Consultation',
+    },
+  ];
+
+  // Helper determining initial scope based on user role (mirroring AppointmentsPage.tsx)
+  const getInitialAppointmentScope = (user) => {
+    return user?.role === 'admin' || user?.role === 'super_admin' ? 'all' : 'personal';
+  };
+
+  // 1. Admin defaults to 'all' and sees all staff appointments on table
+  const adminInitialScope = getInitialAppointmentScope(adminUser);
+  assert.equal(adminInitialScope, 'all');
+
+  const adminAppointmentsView = adminInitialScope === 'all'
+    ? companyAppointments
+    : getStaffAssignedAppointments(companyAppointments, adminUser);
+  assert.equal(adminAppointmentsView.length, 3);
+  assert.deepEqual(adminAppointmentsView.map((a) => a.id), ['appt-1', 'appt-2', 'appt-3']);
+
+  // 2. Staff A opens dashboard/table and defaults to 'personal', seeing only their 2 appointments
+  const staffAInitialScope = getInitialAppointmentScope(staffA);
+  assert.equal(staffAInitialScope, 'personal');
+
+  const staffAAppointments = getStaffAssignedAppointments(companyAppointments, staffA);
+  assert.equal(staffAAppointments.length, 2);
+  assert.deepEqual(staffAAppointments.map((a) => a.id).sort(), ['appt-1', 'appt-3']);
+
+  // 3. Staff B opens dashboard/table and sees only their 1 appointment
+  const staffBAppointments = getStaffAssignedAppointments(companyAppointments, staffB);
+  assert.equal(staffBAppointments.length, 1);
+  assert.equal(staffBAppointments[0].id, 'appt-2');
+});
+
 
 
 

@@ -64,17 +64,20 @@ import {
 import { useCustomersQuery } from '@/api/customers';
 import {
   appointmentsKeys,
-  useAppointmentsQuery,
+  useScopedAppointments,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
-  saveStoredAppointment,
   type Appointment,
 } from '@/api/appointments';
 import { useQueryClient } from '@tanstack/react-query';
 import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
+import { useAllStaffInteractionsQuery } from '@/api/interactions';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { isProspectAssignedOrCreatedByStaff, consolidateAllProspects } from '@/utils/prospectAssignment';
+import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
+import { roleLabels } from '@/constants/enums';
+import type { Role } from '@/types';
 import {
   createDuplicatePhoneRule,
   createDuplicateNameRule,
@@ -218,15 +221,22 @@ export const ProspectsPage: React.FC = () => {
 
   const { data: branches = [] } = useBranchesQuery();
 
-  // Appointments Query to track due dates
-  const { data: appointmentsData, refetch: refetchAppointments } = useAppointmentsQuery({ pageSize: 500 });
-  const appointments = appointmentsData?.items ?? [];
+  // Scoped Appointments Query
+  const { appointments, refetch: refetchAppointments, allUsers } = useScopedAppointments({ pageSize: 1000 });
+  const { interactions: allInteractions, refetch: refetchAllInteractions } = useAllStaffInteractionsQuery();
 
   useEffect(() => {
-    const handleAptsChanged = () => refetchAppointments();
+    const handleAptsChanged = () => {
+      refetchAppointments();
+      refetchAllInteractions();
+    };
     window.addEventListener('omark-appointments-changed', handleAptsChanged);
-    return () => window.removeEventListener('omark-appointments-changed', handleAptsChanged);
-  }, [refetchAppointments]);
+    window.addEventListener('omark-interactions-changed', handleAptsChanged);
+    return () => {
+      window.removeEventListener('omark-appointments-changed', handleAptsChanged);
+      window.removeEventListener('omark-interactions-changed', handleAptsChanged);
+    };
+  }, [refetchAppointments, refetchAllInteractions]);
 
   // Drawer Selected Prospect Interactions Query
   const {
@@ -1348,6 +1358,19 @@ export const ProspectsPage: React.FC = () => {
                             <div style={{ marginTop: 4 }}>
                               <Text style={{ fontSize: 12 }}>{apt.reason || 'Client Consultation / Site Inspection'}</Text>
                             </div>
+                            {(() => {
+                              const creatorId = getAppointmentCreatorId(apt, allInteractions);
+                              const creatorUser = creatorId ? allUsers.find((u) => u.id === creatorId) : null;
+                              const creatorName = creatorUser ? getUserFullName(creatorUser) : (apt.createdByName || 'Staff Member');
+                              const creatorRole = creatorUser ? (roleLabels[creatorUser.role as Role] || creatorUser.role) : 'Staff';
+                              return (
+                                <div style={{ marginTop: 2 }}>
+                                  <Text type="secondary" style={{ fontSize: 11 }}>Created by: </Text>
+                                  <Text strong style={{ fontSize: 11 }}>{creatorName} </Text>
+                                  <Tag color="geekblue" style={{ fontSize: 10, margin: 0, padding: '0 4px' }}>{creatorRole}</Tag>
+                                </div>
+                              );
+                            })()}
                           </div>
                         </div>
                       </Timeline.Item>
@@ -2095,33 +2118,29 @@ export const ProspectsPage: React.FC = () => {
                 ? `[${values.source || 'marketing'}] ${values.reason.trim()}`
                 : `[${values.source || 'marketing'}] Site inspection and sales consultation`;
 
-              const existing = existingApptForProspectModal ||
-                appointments.find(
-                  (a) => a.prospectId === targetId && a.status !== 'canceled' && a.status !== 'completed'
-                );
+              const targetTime = dayjs(values.scheduledFor);
+              const sameSlotAppt = appointments.find(
+                (a) =>
+                  a.prospectId === targetId &&
+                  getAppointmentCreatorId(a, allInteractions) === user?.id &&
+                  dayjs(a.scheduledFor).isSame(targetTime, 'minute') &&
+                  a.status !== 'canceled' &&
+                  a.status !== 'completed'
+              );
 
               const target = allExistingProspects.find((p) => p.id === targetId) || appointmentTargetProspect;
 
-              if (existing) {
+              if (sameSlotAppt) {
                 await updateAppointmentMutation.mutateAsync({
-                  id: existing.id,
+                  id: sameSlotAppt.id,
                   payload: {
                     status: 'scheduled',
                     scheduledFor: values.scheduledFor.toISOString(),
                     feedback: reasonText,
                   },
                 });
-                saveStoredAppointment({
-                  ...existing,
-                  status: 'scheduled',
-                  scheduledFor: values.scheduledFor.toISOString(),
-                  reason: reasonText,
-                  assignedUserId: values.staffId || existing.assignedUserId,
-                  staffId: values.staffId || existing.staffId,
-                  updatedAt: new Date().toISOString(),
-                });
                 message.success(
-                  `Appointment date updated and record overwritten for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
+                  `Personal appointment updated for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
                 );
               } else {
                 await createAppointment.mutateAsync({
@@ -2129,7 +2148,6 @@ export const ProspectsPage: React.FC = () => {
                   scheduledFor: values.scheduledFor.toISOString(),
                   reason: reasonText,
                   assignedUserId: values.staffId || user?.id,
-                  staffId: values.staffId || user?.id,
                 });
                 message.success(
                   `Appointment booked successfully for ${target ? `${target.firstName} ${target.lastName}` : 'Prospect'} on ${dayjs(values.scheduledFor).format('MMM D, YYYY h:mm A')}!`
