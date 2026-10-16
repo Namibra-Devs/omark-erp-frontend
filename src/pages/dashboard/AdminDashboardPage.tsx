@@ -1,22 +1,14 @@
 // src/pages/dashboard/AdminDashboardPage.tsx
 import React, { useState } from 'react';
-import { Tabs, Typography, Space, Button, Alert, Badge, message, Tooltip } from 'antd';
+import { Tabs, Typography, Space, Button, Badge, message, Tooltip } from 'antd';
 import {
   DashboardOutlined,
   UserOutlined,
   ReloadOutlined,
   ExportOutlined,
-  PlusOutlined,
   BellOutlined,
-  SafetyOutlined,
   BarChartOutlined,
   TrophyOutlined,
-  SettingOutlined,
-  UserAddOutlined,
-  HistoryOutlined,
-  DollarOutlined,
-  CalendarOutlined,
-  IdcardOutlined,
   NotificationOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
@@ -41,7 +33,6 @@ import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
-import { ExpenseOverviewChartsAndStats } from '@/components/expenses/ExpenseOverviewChartsAndStats';
 
 const { Title, Text } = Typography;
 
@@ -188,13 +179,10 @@ export const AdminDashboardPage: React.FC = () => {
           <div style={{ marginBottom: 20 }}>
             <AppointmentCommunicationHistory />
           </div>
-          <div style={{ marginBottom: 20 }}>
-            <ExpenseOverviewChartsAndStats />
-          </div>
-          <div style={{ marginBottom: 20 }}>
+          <div id="role-expenses-section" style={{ marginBottom: 20, scrollMarginTop: 80 }}>
             <RoleFilteredExpensesTable />
           </div>
-          <div style={{ marginBottom: 20 }}>
+          <div id="client-check-ins-section" style={{ marginBottom: 20, scrollMarginTop: 80 }}>
             <ClientCheckInsTable />
           </div>
           <CrossSystemActivity stats={mockActivityStats} branchName={myBranchName} />
@@ -246,74 +234,6 @@ export const AdminDashboardPage: React.FC = () => {
           }}
           onDeleteUser={deleteUser}
           onToggleStatus={toggleUserStatus}
-        />
-      ),
-    },
-    {
-      key: 'interactions',
-      label: (
-        <span className="adp-tab-label">
-          <HistoryOutlined />
-          Staff Interactions
-        </span>
-      ),
-      children: (
-        <ProspectInteractionsTimeline
-          title="Staff Prospect Interactions Timeline — Dedicated View"
-          style={{ marginBottom: 20 }}
-        />
-      ),
-    },
-    {
-      key: 'appointment-comms',
-      label: (
-        <span className="adp-tab-label">
-          <CalendarOutlined />
-          Appointments & History
-        </span>
-      ),
-      children: (
-        <AppointmentCommunicationHistory
-          title="Appointment Communication History & Complete Audit Trail — Dedicated View"
-          style={{ marginBottom: 20 }}
-        />
-      ),
-    },
-    {
-      key: 'role-expenses',
-      label: (
-        <span className="adp-tab-label">
-          <DollarOutlined />
-          Role-Filtered Expenses
-        </span>
-      ),
-      children: (
-        <RoleFilteredExpensesTable
-          title="Role-Filtered Expense Tracking & Disbursement — Dedicated View"
-          style={{ marginBottom: 20 }}
-        />
-      ),
-    },
-    {
-      key: 'client-check-ins',
-      label: (
-        <span className="adp-tab-label">
-          <IdcardOutlined />
-          Client Check-Ins
-          {activeVisitorsCount > 0 && (
-            <Badge
-              count={activeVisitorsCount}
-              size="small"
-              style={{ backgroundColor: '#52c41a', marginLeft: 4 }}
-              title={`${activeVisitorsCount} visitors currently on premises`}
-            />
-          )}
-        </span>
-      ),
-      children: (
-        <ClientCheckInsTable
-          title="Front-Desk Client & Visitor Check-Ins — Dedicated Management"
-          style={{ marginBottom: 20 }}
         />
       ),
     },
@@ -432,49 +352,6 @@ export const AdminDashboardPage: React.FC = () => {
               </Button>
             </Tooltip>
 
-            <Button
-              icon={<NotificationOutlined style={{ color: '#0284c7' }} />}
-              onClick={() => setActiveTab('broadcast-outreach')}
-              style={{ borderRadius: 8, borderColor: '#0284c7', color: '#0284c7', fontWeight: 600 }}
-            >
-              Holiday Broadcast
-            </Button>
-
-            <Button
-              icon={<UserAddOutlined />}
-              onClick={() => setAddProspectModal(true)}
-              style={{ borderRadius: 8 }}
-            >
-              Add Prospect
-            </Button>
-
-            <Button
-              icon={<PlusOutlined />}
-              onClick={() => setAddCustomerModal(true)}
-              style={{ borderRadius: 8, background: '#52c41a', borderColor: '#52c41a', color: '#fff' }}
-            >
-              Add Customer
-            </Button>
-
-            <Button
-              icon={<IdcardOutlined />}
-              onClick={() => setActiveTab('client-check-ins')}
-              style={{ borderRadius: 8 }}
-            >
-              Client Check-Ins
-              {activeVisitorsCount > 0 && (
-                <Badge count={activeVisitorsCount} size="small" style={{ backgroundColor: '#52c41a', marginLeft: 6 }} />
-              )}
-            </Button>
-
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => setAddUserModal(true)}
-              style={{ borderRadius: 8, fontWeight: 600 }}
-            >
-              Add Staff
-            </Button>
           </Space>
         </div>
       </div>
@@ -493,8 +370,18 @@ export const AdminDashboardPage: React.FC = () => {
           onAddProspect={() => setAddProspectModal(true)}
           onAddCustomer={() => setAddCustomerModal(true)}
           onBroadcastOutreach={() => setActiveTab('broadcast-outreach')}
-          onRoleExpenses={() => setActiveTab('role-expenses')}
-          onClientCheckIns={() => setActiveTab('client-check-ins')}
+          onRoleExpenses={() => {
+            setActiveTab('1');
+            setTimeout(() => {
+              document.getElementById('role-expenses-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+          }}
+          onClientCheckIns={() => {
+            setActiveTab('1');
+            setTimeout(() => {
+              document.getElementById('client-check-ins-section')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }, 100);
+          }}
           activeCheckInsCount={activeVisitorsCount}
         />
       </div>

@@ -4,6 +4,7 @@ import { Alert } from 'antd';
 import { useAuth } from '@/contexts/AuthContext';
 import { EXPENSES_ALLOWED_ROLES } from '@/constants/enums';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
+import { ExpenseOverviewChartsAndStats } from '@/components/expenses/ExpenseOverviewChartsAndStats';
 
 export const ExpensesPage: React.FC = () => {
   const { hasRole } = useAuth();
@@ -24,6 +25,7 @@ export const ExpensesPage: React.FC = () => {
 
   return (
     <div style={{ padding: '8px 4px' }}>
+      <ExpenseOverviewChartsAndStats showNavigationLink={false} style={{ marginBottom: 20 }} />
       <RoleExpenseDashboard />
     </div>
   );

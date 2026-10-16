@@ -80,6 +80,7 @@ import {
 } from '@/utils/expenseRoleIsolation';
 import type { Role } from '@/types';
 import { tokens } from '@/constants/tokens';
+import { ExpenseAccordionView } from './ExpenseAccordionView';
 
 dayjs.extend(relativeTime);
 
@@ -1441,248 +1442,192 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         </div>
       </Card>
 
-      {/* ── Main Data Table (All Expenses with Subtotals & Overall Totals) ───── */}
-      <Card
-        title={
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-            <Space size={8}>
-              <FileTextOutlined style={{ color: tokens.primary }} />
-              <Text strong style={{ fontSize: 14 }}>
-                Corporate Master Expense Ledger
-              </Text>
-              <Tag color="blue" style={{ borderRadius: 10, fontWeight: 600 }}>
-                {activeDateScopeLabel}
-              </Tag>
-              <Tag color="cyan" style={{ borderRadius: 10 }}>
-                {finalExpenses.length} Record{finalExpenses.length === 1 ? '' : 's'}
-              </Tag>
-            </Space>
-
-            <Space size={8}>
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                Overall Outlay: <Text strong style={{ color: tokens.primary }}>₵ {dynamicGrandTotals.grandTotalGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}</Text>
-              </Text>
-            </Space>
-          </div>
-        }
-        style={{
-          borderRadius: 14,
-          border: '1px solid #f0f0f0',
-          boxShadow: '0 4px 16px rgba(0,0,0,0.03)',
+      {/* ── Main Accordion Tracking View (Month → Staff/Role → Day → Rows) ── */}
+      <ExpenseAccordionView
+        expenses={finalExpenses}
+        loading={isLoading}
+        isAdminOrAccounts={isAdminOrAccounts}
+        currentUserId={user?.id}
+        usersById={usersById}
+        usersByName={usersByName}
+        activeDateScopeLabel={activeDateScopeLabel}
+        onViewVoucher={(record) => {
+          setSelectedExpense(record);
+          setVoucherDrawerOpen(true);
         }}
-        bodyStyle={{ padding: 0 }}
-      >
-        <Table
-          dataSource={finalExpenses}
-          columns={columns}
-          rowKey="id"
-          loading={isLoading}
-          scroll={{ x: 1120 }}
-          pagination={{
-            pageSize: 10,
-            showSizeChanger: true,
-            pageSizeOptions: ['10', '20', '50'],
-            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} records`,
-          }}
-          summary={() => {
-            // Total columns = 7:
-            // 0: Voucher (width 140)
-            // 1: Category & Details (width 250)
-            // 2: Department (width 140)
-            // 3: Submitter & Branch (width 170)
-            // 4: Amount (width 150, align: right)
-            // 5: Status (width 120, align: center)
-            // 6: Actions (width 155, align: center)
-            return (
-              <Table.Summary fixed>
-                {/* ── 4 Department Sub-Total Rows (Secretary, BM, Marketing, Admin) ── */}
-                {fourDepartmentSummaries.map((dept) => {
-                  const cfg = FOUR_DEPARTMENT_UI_CONFIG[dept.key];
-                  return (
-                    <Table.Summary.Row
-                      key={dept.key}
-                      style={{
-                        backgroundColor: '#fafbfc',
-                        borderTop: '1px solid #f0f0f0',
-                      }}
-                    >
-                      {/* Cols 0 & 1: Department Name & Subtotal Badge */}
-                      <Table.Summary.Cell index={0} colSpan={2}>
-                        <Space size={8} wrap>
-                          <Tag
-                            color={cfg.color}
-                            style={{
-                              cursor: 'pointer',
-                              padding: '3px 10px',
-                              borderRadius: 12,
-                              fontWeight: 700,
-                              fontSize: 12,
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 6,
-                            }}
-                            onClick={() => {
-                              setSelectedDepartment(dept.key);
-                              setDepartmentDrawerOpen(true);
-                            }}
-                          >
-                            {cfg.icon}
-                            {cfg.name} Sub-Total
-                          </Tag>
-                          <Text type="secondary" style={{ fontSize: 12, fontWeight: 500 }}>
-                            ({dept.count} item{dept.count === 1 ? '' : 's'})
-                          </Text>
-                        </Space>
-                      </Table.Summary.Cell>
-
-                      {/* Cols 2 & 3: Approved / Pending / Rejected Breakdown */}
-                      <Table.Summary.Cell index={2} colSpan={2}>
-                        <Space size={8} wrap>
-                          <Tag color="success" style={{ borderRadius: 10, fontSize: 11 }}>
-                            Approved: ₵ {(dept.approvedMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                          </Tag>
-                          {dept.pendingMinor > 0 && (
-                            <Tag color="warning" style={{ borderRadius: 10, fontSize: 11 }}>
-                              Pending: ₵ {(dept.pendingMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </Tag>
-                          )}
-                          {dept.rejectedMinor > 0 && (
-                            <Tag color="error" style={{ borderRadius: 10, fontSize: 11 }}>
-                              Rejected: ₵ {(dept.rejectedMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </Tag>
-                          )}
-                        </Space>
-                      </Table.Summary.Cell>
-
-                      {/* Col 4: Subtotal Amount in GHS (Aligns directly under Amount column with nowrap!) */}
-                      <Table.Summary.Cell index={4} align="right">
-                        <div style={{ whiteSpace: 'nowrap' }}>
-                          <Text strong style={{ fontSize: 14, color: '#111827', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                            ₵ {(dept.totalMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                          </Text>
-                        </div>
-                      </Table.Summary.Cell>
-
-                      {/* Col 5: Entry count (Aligns under Status column) */}
-                      <Table.Summary.Cell index={5} align="center">
-                        <Tag color="blue" style={{ fontSize: 11, borderRadius: 8 }}>
-                          {dept.count} entries
-                        </Tag>
-                      </Table.Summary.Cell>
-
-                      {/* Col 6: Action button (Aligns under Actions column) */}
-                      <Table.Summary.Cell index={6} align="center">
-                        <Button
-                          type="link"
-                          size="small"
-                          icon={<FolderOpenOutlined />}
-                          onClick={() => {
-                            setSelectedDepartment(dept.key);
-                            setDepartmentDrawerOpen(true);
-                          }}
-                          style={{ fontWeight: 600, color: cfg.color, padding: 0, fontSize: 12 }}
-                        >
-                          View Drawer ➔
-                        </Button>
-                      </Table.Summary.Cell>
-                    </Table.Summary.Row>
-                  );
-                })}
-
-                {/* ── OVERALL GRAND TOTAL ROW (Reflects Active Period) ── */}
+        onApproveExpense={(id) => handleDecision(id, 'approved')}
+        onRejectExpense={(record) => {
+          setExpenseToReject(record);
+          setRejectionModalOpen(true);
+        }}
+        onSelectDepartment={(deptKey) => {
+          setSelectedDepartment(deptKey);
+          setDepartmentDrawerOpen(true);
+        }}
+        flatColumns={columns}
+        flatSummary={() => (
+          <Table.Summary fixed>
+            {/* ── 4 Department Sub-Total Rows (Secretary, BM, Marketing, Admin) ── */}
+            {fourDepartmentSummaries.map((dept) => {
+              const cfg = FOUR_DEPARTMENT_UI_CONFIG[dept.key];
+              return (
                 <Table.Summary.Row
+                  key={dept.key}
                   style={{
-                    backgroundColor: '#f0f7ff',
-                    borderTop: `2px solid ${tokens.primary}`,
+                    backgroundColor: '#fafbfc',
+                    borderTop: '1px solid #f0f0f0',
                   }}
                 >
-                  {/* Cols 0 & 1: Grand Total Title */}
+                  {/* Cols 0 & 1: Department Name & Subtotal Badge */}
                   <Table.Summary.Cell index={0} colSpan={2}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                      <Text strong style={{ fontSize: 13, color: tokens.primary, letterSpacing: 0.3 }}>
-                        🏛️ OVERALL GRAND TOTAL
-                      </Text>
-                      <Tag color="blue" style={{ borderRadius: 12, fontWeight: 700 }}>
-                        {dynamicGrandTotals.grandCount} Requisitions
+                    <Space size={8} wrap>
+                      <Tag
+                        color={cfg.color}
+                        style={{
+                          cursor: 'pointer',
+                          padding: '3px 10px',
+                          borderRadius: 12,
+                          fontWeight: 700,
+                          fontSize: 12,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
+                        onClick={() => {
+                          setSelectedDepartment(dept.key);
+                          setDepartmentDrawerOpen(true);
+                        }}
+                      >
+                        {cfg.icon}
+                        {cfg.name} Sub-Total
                       </Tag>
-                    </div>
+                      <Text type="secondary" style={{ fontSize: 12, fontWeight: 500 }}>
+                        ({dept.count} item{dept.count === 1 ? '' : 's'})
+                      </Text>
+                    </Space>
                   </Table.Summary.Cell>
 
-                  {/* Cols 2 & 3: Approved & Pending summary badges */}
+                  {/* Cols 2 & 3: Approved / Pending / Rejected Breakdown */}
                   <Table.Summary.Cell index={2} colSpan={2}>
-                    <Space size={12} wrap>
-                      <Badge
-                        status="success"
-                        text={
-                          <span style={{ fontSize: 12, fontWeight: 600, color: '#237804', whiteSpace: 'nowrap' }}>
-                            Approved: ₵ {dynamicGrandTotals.grandApprovedGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                          </span>
-                        }
-                      />
-                      {dynamicGrandTotals.grandPendingMinor > 0 && (
-                        <Badge
-                          status="warning"
-                          text={
-                            <span style={{ fontSize: 12, fontWeight: 600, color: '#ad4e00', whiteSpace: 'nowrap' }}>
-                              Pending: ₵ {dynamicGrandTotals.grandPendingGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                            </span>
-                          }
-                        />
+                    <Space size={8} wrap>
+                      <Tag color="success" style={{ borderRadius: 10, fontSize: 11 }}>
+                        Approved: ₵ {(dept.approvedMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </Tag>
+                      {dept.pendingMinor > 0 && (
+                        <Tag color="warning" style={{ borderRadius: 10, fontSize: 11 }}>
+                          Pending: ₵ {(dept.pendingMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </Tag>
+                      )}
+                      {dept.rejectedMinor > 0 && (
+                        <Tag color="error" style={{ borderRadius: 10, fontSize: 11 }}>
+                          Rejected: ₵ {(dept.rejectedMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </Tag>
                       )}
                     </Space>
                   </Table.Summary.Cell>
 
-                  {/* Col 4: Overall Grand Total Amount (Aligns directly under Amount column with nowrap!) */}
+                  {/* Col 4: Subtotal Amount in GHS (Aligns directly under Amount column with nowrap!) */}
                   <Table.Summary.Cell index={4} align="right">
                     <div style={{ whiteSpace: 'nowrap' }}>
-                      <Text strong style={{ fontSize: 15, color: tokens.primary, fontWeight: 800, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
-                        ₵ {dynamicGrandTotals.grandTotalGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      <Text strong style={{ fontSize: 14, color: '#111827', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                        ₵ {(dept.totalMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
                       </Text>
                     </div>
                   </Table.Summary.Cell>
 
-                  {/* Cols 5 & 6: Active Period Scope Tag & Live Recalc */}
-                  <Table.Summary.Cell index={5} colSpan={2} align="center">
-                    <Space size={6} wrap>
-                      <Tag color="cyan" style={{ borderRadius: 10, fontSize: 11, fontWeight: 600, margin: 0 }}>
-                        {activeDateScopeLabel}
-                      </Tag>
-                      <Tag color="processing" style={{ borderRadius: 10, fontWeight: 700, margin: 0 }}>
-                        Live Recalc
-                      </Tag>
-                    </Space>
+                  {/* Col 5: Entry count (Aligns under Status column) */}
+                  <Table.Summary.Cell index={5} align="center">
+                    <Tag color="blue" style={{ fontSize: 11, borderRadius: 8 }}>
+                      {dept.count} entries
+                    </Tag>
+                  </Table.Summary.Cell>
+
+                  {/* Col 6: Action button (Aligns under Actions column) */}
+                  <Table.Summary.Cell index={6} align="center">
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<FolderOpenOutlined />}
+                      onClick={() => {
+                        setSelectedDepartment(dept.key);
+                        setDepartmentDrawerOpen(true);
+                      }}
+                      style={{ fontWeight: 600, color: cfg.color, padding: 0, fontSize: 12 }}
+                    >
+                      View Drawer ➔
+                    </Button>
                   </Table.Summary.Cell>
                 </Table.Summary.Row>
-              </Table.Summary>
-            );
-          }}
-          locale={{
-            emptyText: (
-              <div style={{ padding: '48px 0' }}>
-                <Empty
-                  description={
-                    <div>
-                      <Text strong style={{ display: 'block', fontSize: 14 }}>
-                        No expense records match your current filters
-                      </Text>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
-                        Try adjusting your search, department, or periodic filter.
-                      </Text>
-                      {isAnyFilterActive && (
-                        <div style={{ marginTop: 12 }}>
-                          <Button size="small" icon={<ClearOutlined />} onClick={handleClearFilters}>
-                            Clear All Filters
-                          </Button>
-                        </div>
-                      )}
-                    </div>
-                  }
-                />
-              </div>
-            ),
-          }}
-        />
-      </Card>
+              );
+            })}
+
+            {/* ── OVERALL GRAND TOTAL ROW (Reflects Active Period) ── */}
+            <Table.Summary.Row
+              style={{
+                backgroundColor: '#f0f7ff',
+                borderTop: `2px solid ${tokens.primary}`,
+              }}
+            >
+              {/* Cols 0 & 1: Grand Total Title */}
+              <Table.Summary.Cell index={0} colSpan={2}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <Text strong style={{ fontSize: 13, color: tokens.primary, letterSpacing: 0.3 }}>
+                    🏛️ OVERALL GRAND TOTAL
+                  </Text>
+                  <Tag color="blue" style={{ borderRadius: 12, fontWeight: 700 }}>
+                    {dynamicGrandTotals.grandCount} Requisitions
+                  </Tag>
+                </div>
+              </Table.Summary.Cell>
+
+              {/* Cols 2 & 3: Approved & Pending summary badges */}
+              <Table.Summary.Cell index={2} colSpan={2}>
+                <Space size={12} wrap>
+                  <Badge
+                    status="success"
+                    text={
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#237804', whiteSpace: 'nowrap' }}>
+                        Approved: ₵ {dynamicGrandTotals.grandApprovedGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                      </span>
+                    }
+                  />
+                  {dynamicGrandTotals.grandPendingMinor > 0 && (
+                    <Badge
+                      status="warning"
+                      text={
+                        <span style={{ fontSize: 12, fontWeight: 600, color: '#ad4e00', whiteSpace: 'nowrap' }}>
+                          Pending: ₵ {dynamicGrandTotals.grandPendingGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                        </span>
+                      }
+                    />
+                  )}
+                </Space>
+              </Table.Summary.Cell>
+
+              {/* Col 4: Overall Grand Total Amount (Aligns directly under Amount column with nowrap!) */}
+              <Table.Summary.Cell index={4} align="right">
+                <div style={{ whiteSpace: 'nowrap' }}>
+                  <Text strong style={{ fontSize: 15, color: tokens.primary, fontWeight: 800, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                    ₵ {dynamicGrandTotals.grandTotalGHS.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                  </Text>
+                </div>
+              </Table.Summary.Cell>
+
+              {/* Cols 5 & 6: Active Period Scope Tag & Live Recalc */}
+              <Table.Summary.Cell index={5} colSpan={2} align="center">
+                <Space size={6} wrap>
+                  <Tag color="cyan" style={{ borderRadius: 10, fontSize: 11, fontWeight: 600, margin: 0 }}>
+                    {activeDateScopeLabel}
+                  </Tag>
+                  <Tag color="processing" style={{ borderRadius: 10, fontWeight: 700, margin: 0 }}>
+                    Live Recalc
+                  </Tag>
+                </Space>
+              </Table.Summary.Cell>
+            </Table.Summary.Row>
+          </Table.Summary>
+        )}
+      />
 
       {/* ── DEPARTMENT DRAWER (Opens when Department button is clicked) ───── */}
       <Drawer
@@ -1916,19 +1861,26 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
               />
             </div>
 
-            {/* Department Expenses Table (Optimized with dedicated drawerColumns & horizontal scroll) */}
-            <Table
-              dataSource={departmentDrawerExpenses}
-              columns={drawerColumns}
-              rowKey="id"
-              size="small"
-              scroll={{ x: 720 }}
-              pagination={{
-                pageSize: 8,
-                showSizeChanger: false,
-                showTotal: (total) => `${total} items`,
+            {/* Department Expenses Accordion View (Month → Staff/Role → Day → Rows) */}
+            <ExpenseAccordionView
+              expenses={departmentDrawerExpenses}
+              loading={false}
+              isAdminOrAccounts={isAdminOrAccounts}
+              currentUserId={user?.id}
+              usersById={usersById}
+              usersByName={usersByName}
+              activeDateScopeLabel={`${selectedDeptConfig.name} (${departmentDrawerDateScope === 'current_filter' ? activeDateScopeLabel : 'All-Time'})`}
+              onViewVoucher={(record) => {
+                setSelectedExpense(record);
+                setVoucherDrawerOpen(true);
               }}
-              summary={() => {
+              onApproveExpense={(id) => handleDecision(id, 'approved')}
+              onRejectExpense={(record) => {
+                setExpenseToReject(record);
+                setRejectionModalOpen(true);
+              }}
+              flatColumns={drawerColumns}
+              flatSummary={() => {
                 const totalMinor = departmentDrawerExpenses.reduce((sum, e) => sum + (e.amountMinor || 0), 0);
                 const approvedCount = departmentDrawerExpenses.filter((e) => e.status === 'approved').length;
                 const pendingCount = departmentDrawerExpenses.filter((e) => e.status === 'pending').length;
@@ -1968,37 +1920,17 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
                   </Table.Summary>
                 );
               }}
-              locale={{
-                emptyText: (
-                  <div style={{ padding: '32px 0', textAlign: 'center' }}>
-                    <Empty
-                      description={
-                        <div>
-                          <Text strong style={{ fontSize: 13, display: 'block' }}>
-                            No {selectedDeptConfig.name} expenses found
-                          </Text>
-                          <Text type="secondary" style={{ fontSize: 11 }}>
-                            {departmentDrawerDateScope === 'current_filter'
-                              ? 'No entries for this department under current date filters.'
-                              : 'No expenses have been recorded for this department yet.'}
-                          </Text>
-                          {departmentDrawerDateScope === 'current_filter' && (
-                            <div style={{ marginTop: 10 }}>
-                              <Button
-                                size="small"
-                                onClick={() => setDepartmentDrawerDateScope('all_records')}
-                              >
-                                Switch to All-Time History
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-                      }
-                      image={Empty.PRESENTED_IMAGE_SIMPLE}
-                    />
-                  </div>
-                ),
-              }}
+              customDayColumns={drawerColumns}
+              emptyExtra={
+                departmentDrawerDateScope === 'current_filter' ? (
+                  <Button
+                    size="small"
+                    onClick={() => setDepartmentDrawerDateScope('all_records')}
+                  >
+                    Switch to All-Time History
+                  </Button>
+                ) : undefined
+              }
             />
           </div>
         )}
@@ -2143,6 +2075,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         open={voucherDrawerOpen}
         onClose={() => setVoucherDrawerOpen(false)}
         width={500}
+        zIndex={1070}
         extra={
           <Button
             type="primary"

@@ -2,7 +2,6 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Row, Col, Typography, Tag, Tooltip, Skeleton } from 'antd';
 import { 
-  RiseOutlined, 
   UserOutlined, 
   TeamOutlined, 
   DollarOutlined,
@@ -11,6 +10,7 @@ import {
   MinusOutlined,
   InfoCircleOutlined,
   UserAddOutlined,
+  RightOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { tokens } from '@/constants/tokens';
@@ -27,7 +27,7 @@ interface StatsCardsProps {
     totalCustomers: number;
     totalPaymentPlans?: number;
     activePaymentPlans?: number;
-    monthlyRevenue: number;
+    monthlyRevenue?: number;
     growthRate: number;
     pendingNotifications?: number;
   };
@@ -42,11 +42,6 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
     const timer = setTimeout(() => setVisible(true), 100);
     return () => clearTimeout(timer);
   }, []);
-
-  const formatCurrency = (amount: number) => {
-    if (amount === 0) return 'GHS 0';
-    return `GHS ${(amount / 100).toLocaleString()}`;
-  };
 
   const getGrowthColor = (growth: number) => {
     if (growth > 0) return '#52c41a';
@@ -66,6 +61,7 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
     return '0%';
   };
 
+  // 4 Core Balanced Stats Cards (Monthly Revenue removed from top; Prospects unlinked)
   const statsCards = [
     {
       key: 'users',
@@ -73,25 +69,26 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
       value: stats.totalUsers || 0,
       icon: <UserOutlined />,
       color: tokens.primary,
-      bg: `${tokens.primary}15`,
-      subtext: `${stats.activeUsers || 0} active`,
+      bg: '#e6f7ff',
+      subtext: `${stats.activeUsers || 0} active in system`,
       growth: stats.growthRate || 0,
-      description: 'Total registered users in the system',
+      description: 'Total registered system users across all roles and branches',
       delay: 0,
       link: '/admin/users',
     },
     {
       key: 'prospects',
-      title: 'Marketing Prospects',
-      value: stats.marketingProspects ?? 0,
+      title: 'Total Prospects',
+      value: stats.totalProspects ?? ((stats.marketingProspects ?? 0) + (stats.csProspects ?? 0)),
       icon: <TeamOutlined />,
-      color: '#1890ff',
-      bg: '#1890ff15',
-      subtext: `${stats.totalProspects ?? ((stats.marketingProspects ?? 0) + (stats.csProspects ?? 0))} total (${stats.csProspects ?? 0} CS)`,
+      color: '#fa8c16',
+      bg: '#fff7e6',
+      subtext: `${stats.marketingProspects ?? 0} Marketing • ${stats.csProspects ?? 0} Customer Service`,
       growth: 0,
-      description: 'Active marketing prospects overseen by Director & team',
+      description: 'Total lead volume across Marketing and Customer Service pipelines',
       delay: 100,
-      link: '/marketing/prospects',
+      // Intentionally unlinked as requested: "remove the total prospects stats card link"
+      link: undefined,
     },
     {
       key: 'customers',
@@ -99,46 +96,34 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
       value: stats.totalCustomers || 0,
       icon: <UserAddOutlined />,
       color: '#52c41a',
-      bg: '#52c41a15',
-      subtext: 'Converted customers',
+      bg: '#f6ffed',
+      subtext: 'Converted property buyers',
       growth: 0,
-      description: 'Customers with active accounts',
+      description: 'Converted customers with registered buyer profiles and deeds',
       delay: 200,
       link: '/customers',
     },
     {
       key: 'payment-plans',
-      title: 'Active Plans',
+      title: 'Active Payment Plans',
       value: stats.activePaymentPlans || 0,
       icon: <DollarOutlined />,
-      color: '#fa8c16',
-      bg: '#fa8c1615',
-      subtext: `${stats.totalPaymentPlans || stats.activePaymentPlans || 0} total plans`,
+      color: '#722ed1',
+      bg: '#f9f0ff',
+      subtext: `${stats.totalPaymentPlans || stats.activePaymentPlans || 0} total plans logged`,
       growth: 0,
-      description: 'Active installment payment plans',
+      description: 'Active installment and milestone payment contracts',
       delay: 300,
       link: '/payment-plans',
-    },
-    {
-      key: 'revenue',
-      title: 'Monthly Revenue',
-      value: formatCurrency(stats.monthlyRevenue || 0),
-      icon: <RiseOutlined />,
-      color: '#722ed1',
-      bg: '#722ed115',
-      subtext: 'Current month',
-      growth: 0,
-      description: 'Total revenue this month',
-      delay: 400,
     },
   ];
 
   if (loading) {
     return (
       <Row gutter={[16, 16]}>
-        {[1, 2, 3, 4, 5].map(i => (
-          <Col xs={24} sm={12} lg={i === 5 ? 6 : 4} style={{ flex: 1, minWidth: 200 }} key={i}>
-            <Card>
+        {[1, 2, 3, 4].map((i) => (
+          <Col xs={24} sm={12} lg={6} xl={6} key={i}>
+            <Card style={{ borderRadius: 12, border: '1px solid #f0f0f0' }}>
               <Skeleton active paragraph={{ rows: 2 }} />
             </Card>
           </Col>
@@ -150,89 +135,129 @@ export const StatsCards: React.FC<StatsCardsProps> = ({ stats, loading }) => {
   return (
     <Row gutter={[16, 16]}>
       {statsCards.map((stat) => (
-        <Col xs={24} sm={12} lg={4} xl={4} style={{ flex: 1, minWidth: 200 }} key={stat.key}>
+        <Col xs={24} sm={12} lg={6} xl={6} key={stat.key}>
           <Card
             onClick={() => stat.link && navigate(stat.link)}
             style={{
               height: '100%',
-              borderRadius: 12,
-              border: '1px solid #f0f0f0',
+              borderRadius: 14,
+              border: '1px solid #eef2f6',
+              borderTop: `3px solid ${stat.color}`,
+              background: 'linear-gradient(180deg, #ffffff 0%, #fafbfc 100%)',
               cursor: stat.link ? 'pointer' : 'default',
-              transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)',
+              transition: 'all 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
               opacity: visible ? 1 : 0,
-              transform: visible ? 'translateY(0)' : 'translateY(20px)',
+              transform: visible ? 'translateY(0)' : 'translateY(16px)',
               transitionDelay: `${stat.delay}ms`,
+              boxShadow: '0 2px 6px rgba(0,0,0,0.02)',
             }}
+            bodyStyle={{ padding: '18px 20px' }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.08)';
-              e.currentTarget.style.transform = 'translateY(-4px)';
+              if (stat.link) {
+                e.currentTarget.style.boxShadow = '0 10px 24px rgba(0,0,0,0.08)';
+                e.currentTarget.style.transform = 'translateY(-3px)';
+                e.currentTarget.style.borderColor = stat.color;
+              }
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.boxShadow = 'none';
-              e.currentTarget.style.transform = 'translateY(0)';
+              if (stat.link) {
+                e.currentTarget.style.boxShadow = '0 2px 6px rgba(0,0,0,0.02)';
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.borderColor = '#eef2f6';
+              }
             }}
           >
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            {/* Header: Title + Icon Badge */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
               <div style={{ flex: 1 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Text type="secondary" style={{ fontSize: 14, fontWeight: 500 }}>
+                  <Text strong style={{ fontSize: 13, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
                     {stat.title}
                   </Text>
                   <Tooltip title={stat.description}>
-                    <InfoCircleOutlined style={{ fontSize: 12, color: '#bbb' }} />
+                    <InfoCircleOutlined style={{ fontSize: 12, color: '#94a3b8', cursor: 'help' }} />
                   </Tooltip>
                 </div>
-                <div style={{ 
-                  fontSize: 28, 
-                  fontWeight: 'bold', 
-                  marginTop: 8,
-                  color: '#1a1a2e',
-                  lineHeight: 1.2,
-                }}>
-                  {stat.value}
-                </div>
-                <div style={{ marginTop: 4 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {stat.subtext}
-                  </Text>
+
+                <div
+                  style={{ 
+                    fontSize: 30, 
+                    fontWeight: 800, 
+                    marginTop: 8,
+                    color: '#0f172a',
+                    lineHeight: 1.15,
+                    letterSpacing: '-0.5px',
+                    fontVariantNumeric: 'tabular-nums',
+                  }}
+                >
+                  {stat.value.toLocaleString()}
                 </div>
               </div>
-              <div style={{
-                width: 48,
-                height: 48,
-                borderRadius: 12,
-                background: stat.bg,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontSize: 24,
-                color: stat.color,
-                flexShrink: 0,
-              }}>
+
+              <div
+                style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 14,
+                  background: stat.bg,
+                  color: stat.color,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 22,
+                  flexShrink: 0,
+                  boxShadow: `0 2px 8px ${stat.color}25`,
+                }}
+              >
                 {stat.icon}
               </div>
             </div>
-            
-            <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <Tag 
-                  color={getGrowthColor(stat.growth)} 
-                  style={{ 
-                    fontSize: 12, 
+
+            {/* Footer Metadata & Indicator */}
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 10,
+                borderTop: '1px solid #f1f5f9',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+                gap: 6,
+              }}
+            >
+              <Text type="secondary" style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>
+                {stat.subtext}
+              </Text>
+
+              {stat.link ? (
+                <span
+                  style={{
+                    fontSize: 12,
                     fontWeight: 600,
-                    margin: 0,
+                    color: stat.color,
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 4,
+                    gap: 3,
                   }}
                 >
-                  {getGrowthIcon(stat.growth)}
-                  {getGrowthLabel(stat.growth)}
+                  View <RightOutlined style={{ fontSize: 10 }} />
+                </span>
+              ) : (
+                <Tag
+                  style={{
+                    borderRadius: 6,
+                    fontSize: 10,
+                    fontWeight: 600,
+                    color: '#64748b',
+                    margin: 0,
+                    border: 'none',
+                    background: '#f1f5f9',
+                  }}
+                >
+                  Overview
                 </Tag>
-                <Text type="secondary" style={{ fontSize: 12 }}>
-                  vs last month
-                </Text>
-              </div>
+              )}
             </div>
           </Card>
         </Col>

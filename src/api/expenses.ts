@@ -489,6 +489,32 @@ export function useExpensesQuery(params?: ExpensesListParams) {
           serverExpenses = [];
         }
 
+        // Walk remaining pages if dataset is multi-page and no single page was explicitly requested
+        const totalPages = unwrapped?.totalPages || raw?.meta?.totalPages || raw?.totalPages || 1;
+        if (totalPages > 1 && !params?.page) {
+          const pagePromises: Promise<any[]>[] = [];
+          for (let p = 2; p <= Math.min(totalPages, 10); p++) {
+            pagePromises.push(
+              apiClient.get<ApiResponse<ExpenseEntity[]>>('/expenses', {
+                params: { ...queryParams, page: p },
+              }).then((pageRes) => {
+                const pUnwrapped = unwrapList(pageRes);
+                const pData = unwrapData(pageRes);
+                const pRaw = pageRes?.data as any;
+                if (Array.isArray(pUnwrapped?.items)) return pUnwrapped.items;
+                if (Array.isArray(pData)) return pData;
+                if (Array.isArray(pRaw?.items)) return pRaw.items;
+                if (Array.isArray(pRaw)) return pRaw;
+                return [];
+              }).catch(() => [])
+            );
+          }
+          const additionalPages = await Promise.all(pagePromises);
+          for (const pageItems of additionalPages) {
+            candidates.push(...pageItems);
+          }
+        }
+
         // Filter out dummy repeated fuel placeholders
         candidates = candidates.filter((c) => !isDummyFuelExpense(c));
 
