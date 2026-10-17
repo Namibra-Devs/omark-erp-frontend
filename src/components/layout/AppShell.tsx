@@ -5,6 +5,7 @@ import { Outlet } from 'react-router-dom';
 import { NavMenu } from './NavMenu';
 import { TopHeader } from './TopHeader';
 import { rehydrateAllPaymentPlansData } from '@/utils/paymentPlansStorage';
+import { rehydrateAllExpensesData } from '@/utils/expensesStorage';
 
 const { Sider, Content } = Layout;
 
@@ -16,6 +17,7 @@ export const AppShell: React.FC = () => {
 
   useEffect(() => {
     rehydrateAllPaymentPlansData().catch(() => {});
+    rehydrateAllExpensesData().catch(() => {});
   }, []);
 
   return (

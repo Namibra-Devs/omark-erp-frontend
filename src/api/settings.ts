@@ -10,6 +10,8 @@ export interface AppSettings {
   paymentPlanOverrides?: Record<string, any>;
   customerPlans?: Record<string, any>;
   customerPortalCache?: Record<string, any>;
+  expensesStore?: any[];
+  deletedExpenseIds?: string[];
   [key: string]: any;
 }
 

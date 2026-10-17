@@ -4,26 +4,43 @@ import apiClient, { unwrapData, unwrapList, type ListResult } from '@/api/client
 import type { ApiResponse } from '@/types';
 import dayjs from 'dayjs';
 
-export interface ExpenseEntity {
-  id: string;
-  code?: string;
-  category: string;
-  type: 'internal' | 'external';
-  amountMinor: number;
-  incurredOn: string;
-  branchId?: string;
-  branchName?: string;
-  department?: string;
-  description?: string;
-  status: 'pending' | 'approved' | 'rejected';
-  recordedByUserId?: string;
-  recordedByUserName?: string;
-  recordedByUserRole?: string;
-  decisionNote?: string;
-  decidedAt?: string;
-  createdAt: string;
-  updatedAt: string;
-}
+export type { ExpenseEntity } from '@/utils/expensesStorage';
+export {
+  EXPENSES_STORAGE_KEY,
+  DELETED_EXPENSES_STORAGE_KEY,
+  IDB_DB_NAME,
+  IDB_STORE_NAME,
+  EXPENSES_CHANGE_EVENT,
+  isDummyFuelExpense,
+  DEFAULT_ROLE_OPERATIONAL_EXPENSES,
+  normalizeExpenseEntity,
+  getIndexedDBExpenses,
+  setIndexedDBExpenses,
+  getDeletedExpenseIds,
+  recordDeletedExpenseId,
+  syncExpensesToBackend,
+  mergeExpenses,
+  getStoredExpenses,
+  saveStoredExpense,
+  saveStoredExpenses,
+  deleteStoredExpense,
+  rehydrateAllExpensesData,
+} from '@/utils/expensesStorage';
+import { fetchAppSettings, updateAppSettings } from '@/api/settings';
+import {
+  type ExpenseEntity,
+  isDummyFuelExpense,
+  normalizeExpenseEntity,
+  getStoredExpenses,
+  saveStoredExpense,
+  saveStoredExpenses,
+  deleteStoredExpense,
+  mergeExpenses,
+  setSettingsApiHandlers,
+} from '@/utils/expensesStorage';
+
+// Connect server settings persistence to storage engine
+setSettingsApiHandlers(fetchAppSettings, updateAppSettings);
 
 export interface ExpensesListParams {
   type?: 'internal' | 'external';
@@ -53,405 +70,11 @@ export interface ExpenseDecisionPayload {
   note?: string;
 }
 
-export const EXPENSES_STORAGE_KEY = 'omark_expenses_records_store';
-
-export function isDummyFuelExpense(expense: any): boolean {
-  if (!expense) return false;
-  const code = String(expense.code || '').toUpperCase();
-  const desc = String(expense.description || '').trim().toUpperCase();
-  const name = String(expense.recordedByUserName || '').trim().toLowerCase();
-
-  // Filter out repeated placeholder ATM-EXP-* FUEL records with generic "Staff Member"
-  if (
-    code.startsWith('ATM-EXP-') &&
-    (desc === 'FUEL' || desc === '') &&
-    (!expense.recordedByUserId || name === 'staff member' || name === '')
-  ) {
-    return true;
-  }
-  return false;
-}
-
-export const DEFAULT_ROLE_OPERATIONAL_EXPENSES: ExpenseEntity[] = [
-  // ── Today's Fresh Cycle Operational Expenses ──────────────────────────────
-  {
-    id: 'exp-role-sec-today',
-    code: 'EXP-SEC-TODAY-001',
-    category: 'Client Hospitality',
-    type: 'internal',
-    amountMinor: 32000, // GHS 320.00
-    incurredOn: dayjs().format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Executive client lounge refreshments, mineral water packs & coffee beans for morning meetings',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().toISOString(),
-    updatedAt: dayjs().toISOString(),
-  },
-  {
-    id: 'exp-role-bm-today',
-    code: 'EXP-BM-TODAY-001',
-    category: 'Power & Fuel',
-    type: 'internal',
-    amountMinor: 65000, // GHS 650.00
-    incurredOn: dayjs().format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Standby generator diesel fuel replenishment for showroom continuity',
-    status: 'pending',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().toISOString(),
-    updatedAt: dayjs().toISOString(),
-  },
-  {
-    id: 'exp-role-mkt-today',
-    code: 'EXP-MKT-TODAY-001',
-    category: 'Digital Media Ads',
-    type: 'external',
-    amountMinor: 120000, // GHS 1,200.00
-    incurredOn: dayjs().format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Social media sponsored video ad promotion for weekend land exhibition',
-    status: 'pending',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().toISOString(),
-    updatedAt: dayjs().toISOString(),
-  },
-
-  // ── Secretary Role Expenses ───────────────────────────────────────────────
-  {
-    id: 'exp-role-sec-001',
-    code: 'EXP-SEC-2026-001',
-    category: 'Client Hospitality',
-    type: 'internal',
-    amountMinor: 145000, // GHS 1,450.00
-    incurredOn: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Executive client lounge refreshments, mineral water packs & coffee beans for investor meetings',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(1, 'day').toISOString(),
-    updatedAt: dayjs().subtract(1, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-sec-002',
-    code: 'EXP-SEC-2026-002',
-    category: 'Office Supplies',
-    type: 'internal',
-    amountMinor: 85000, // GHS 850.00
-    incurredOn: dayjs().subtract(3, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Corporate visitor logbooks, branded presentation folders, toner cartridges & paperwork reams',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(3, 'day').toISOString(),
-    updatedAt: dayjs().subtract(3, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-sec-003',
-    code: 'EXP-SEC-2026-003',
-    category: 'Courier & Dispatch',
-    type: 'internal',
-    amountMinor: 65000, // GHS 650.00
-    incurredOn: dayjs().subtract(5, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Express international courier dispatch of executed land deeds & indentures to diaspora buyers',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(5, 'day').toISOString(),
-    updatedAt: dayjs().subtract(5, 'day').toISOString(),
-  },
-
-  // ── Marketing Director Role Expenses ──────────────────────────────────────
-  {
-    id: 'exp-role-mkt-001',
-    code: 'EXP-MKT-2026-001',
-    category: 'Mega Billboard & Out-Of-Home',
-    type: 'external',
-    amountMinor: 1250000, // GHS 12,500.00
-    incurredOn: dayjs().subtract(2, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Airport bypass highway mega-billboard hoarding rental & night illumination maintenance',
-    status: 'approved',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(2, 'day').toISOString(),
-    updatedAt: dayjs().subtract(2, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-mkt-002',
-    code: 'EXP-MKT-2026-002',
-    category: 'Property Expo & Roadshow',
-    type: 'external',
-    amountMinor: 680000, // GHS 6,800.00
-    incurredOn: dayjs().subtract(4, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Accra International Conference Centre Real Estate Summit exhibition booth & roll-up banners',
-    status: 'approved',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(4, 'day').toISOString(),
-    updatedAt: dayjs().subtract(4, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-mkt-003',
-    code: 'EXP-MKT-2026-003',
-    category: 'Digital Media Ads',
-    type: 'external',
-    amountMinor: 420000, // GHS 4,200.00
-    incurredOn: dayjs().subtract(6, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Targeted Google search and social media promotional campaigns for gated community plots',
-    status: 'approved',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(6, 'day').toISOString(),
-    updatedAt: dayjs().subtract(6, 'day').toISOString(),
-  },
-
-  // ── Branch Manager Role Expenses ──────────────────────────────────────────
-  {
-    id: 'exp-role-bm-001',
-    code: 'EXP-BM-2026-001',
-    category: 'Power & Fuel',
-    type: 'internal',
-    amountMinor: 240000, // GHS 2,400.00
-    incurredOn: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Diesel delivery for 60kVA standby generator to maintain uninterrupted showroom operations',
-    status: 'approved',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(1, 'day').toISOString(),
-    updatedAt: dayjs().subtract(1, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-bm-002',
-    code: 'EXP-BM-2026-002',
-    category: 'Logistics & Transit',
-    type: 'internal',
-    amountMinor: 180000, // GHS 1,800.00
-    incurredOn: dayjs().subtract(3, 'day').format('YYYY-MM-DD'),
-    branchId: 'b3',
-    branchName: 'Takoradi Branch',
-    description: 'Client site inspection utility vehicle fuel, expressway tolls & weekend site viewing transport',
-    status: 'approved',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(3, 'day').toISOString(),
-    updatedAt: dayjs().subtract(3, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-bm-003',
-    code: 'EXP-BM-2026-003',
-    category: 'Premises Repairs',
-    type: 'internal',
-    amountMinor: 120000, // GHS 1,200.00
-    incurredOn: dayjs().subtract(7, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Branch showroom air conditioning preventive servicing and compound security light repairs',
-    status: 'approved',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(7, 'day').toISOString(),
-    updatedAt: dayjs().subtract(7, 'day').toISOString(),
-  },
-
-  // ── Accounts & Finance Role Expenses ──────────────────────────────────────
-  {
-    id: 'exp-role-acc-001',
-    code: 'EXP-ACC-2026-001',
-    category: 'Legal & Regulatory',
-    type: 'internal',
-    amountMinor: 350000, // GHS 3,500.00
-    incurredOn: dayjs().subtract(2, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Official title search fees, cadastral survey verification & zoning clearances at Lands Commission',
-    status: 'approved',
-    recordedByUserRole: 'accounts',
-    createdAt: dayjs().subtract(2, 'day').toISOString(),
-    updatedAt: dayjs().subtract(2, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-acc-002',
-    code: 'EXP-ACC-2026-002',
-    category: 'Audit & Compliance',
-    type: 'internal',
-    amountMinor: 210000, // GHS 2,100.00
-    incurredOn: dayjs().subtract(8, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'GRA stamp duty assessment filing and quarterly tax compliance documentation retainers',
-    status: 'approved',
-    recordedByUserRole: 'accounts',
-    createdAt: dayjs().subtract(8, 'day').toISOString(),
-    updatedAt: dayjs().subtract(8, 'day').toISOString(),
-  },
-
-  // ── Administration Role Expenses ──────────────────────────────────────────
-  {
-    id: 'exp-role-adm-001',
-    code: 'EXP-ADM-2026-001',
-    category: 'Cloud & IT Systems',
-    type: 'internal',
-    amountMinor: 560000, // GHS 5,600.00
-    incurredOn: dayjs().subtract(5, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Omark ERP cloud server hosting, automated daily backups & enterprise SSL security certificate renewal',
-    status: 'approved',
-    recordedByUserRole: 'admin',
-    createdAt: dayjs().subtract(5, 'day').toISOString(),
-    updatedAt: dayjs().subtract(5, 'day').toISOString(),
-  },
-];
-
-export function getStoredExpenses(): ExpenseEntity[] {
-  try {
-    const raw = localStorage.getItem(EXPENSES_STORAGE_KEY);
-    if (!raw) {
-      return [];
-    }
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) {
-      // Purge any legacy mock seed data and the repeated dummy "ATM-EXP" fuel placeholders
-      const clean = parsed.filter((item: any) => {
-        if (!item || !item.id) return false;
-        const id = String(item.id);
-        if (
-          id.startsWith('exp-sec-') ||
-          id.startsWith('exp-mkt-') ||
-          id.startsWith('exp-bm-') ||
-          id.startsWith('exp-acc-') ||
-          id.startsWith('appr-seed-') ||
-          isDummyFuelExpense(item)
-        ) {
-          return false;
-        }
-        return true;
-      });
-      if (clean.length !== parsed.length) {
-        localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(clean));
-      }
-      return clean;
-    }
-    return [];
-  } catch (err) {
-    console.warn('[Omark Expenses] Failed to read stored expenses:', err);
-    return [];
-  }
-}
-
-export function saveStoredExpense(expense: ExpenseEntity): void {
-  try {
-    const list = getStoredExpenses();
-    const existingIndex = list.findIndex((e) => e.id === expense.id);
-    let next: ExpenseEntity[];
-    if (existingIndex >= 0) {
-      next = [...list];
-      next[existingIndex] = expense;
-    } else {
-      next = [expense, ...list];
-    }
-    localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(next));
-    window.dispatchEvent(new Event('omark-expenses-changed'));
-  } catch (err) {
-    console.warn('[Omark Expenses] Failed to save expense locally:', err);
-  }
-}
-
 export const expensesKeys = {
   all: ['expenses'] as const,
   lists: () => [...expensesKeys.all, 'list'] as const,
   list: (params?: ExpensesListParams) => [...expensesKeys.lists(), params ?? {}] as const,
 };
-
-export function normalizeExpenseEntity(raw: any): ExpenseEntity {
-  if (!raw) return raw;
-  const id = String(raw.id || raw._id || `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`);
-
-  // Handle amountMinor vs amount
-  let amountMinor = 0;
-  if (typeof raw.amountMinor === 'number' && !isNaN(raw.amountMinor)) {
-    amountMinor = raw.amountMinor;
-  } else if (raw.amountMinor != null && !isNaN(Number(raw.amountMinor))) {
-    amountMinor = Number(raw.amountMinor);
-  } else if (raw.amount != null && !isNaN(Number(raw.amount))) {
-    amountMinor = Math.round(Number(raw.amount) * 100);
-  } else if (raw.amountPesewas != null && !isNaN(Number(raw.amountPesewas))) {
-    amountMinor = Number(raw.amountPesewas);
-  }
-
-  // Handle incurredOn
-  const incurredOn =
-    raw.incurredOn ||
-    raw.incurredDate ||
-    raw.date ||
-    raw.createdAt ||
-    new Date().toISOString();
-
-  // Handle status casing
-  let status: 'pending' | 'approved' | 'rejected' = 'pending';
-  const rawStatus = String(raw.status || '').toLowerCase().trim();
-  if (rawStatus === 'approved' || rawStatus === 'authorized') {
-    status = 'approved';
-  } else if (rawStatus === 'rejected' || rawStatus === 'declined') {
-    status = 'rejected';
-  } else {
-    status = 'pending';
-  }
-
-  // Handle code
-  const code = raw.code || raw.voucherNo || raw.reference || `EXP-${id.slice(-4).toUpperCase()}`;
-
-  const type: 'internal' | 'external' =
-    String(raw.type || '').toLowerCase() === 'external' ? 'external' : 'internal';
-
-  return {
-    id,
-    code,
-    category: raw.category || 'General Operations',
-    type,
-    amountMinor,
-    incurredOn: dayjs(incurredOn).isValid() ? dayjs(incurredOn).format('YYYY-MM-DD') : incurredOn,
-    branchId: raw.branchId || (typeof raw.branch === 'object' ? raw.branch?.id : raw.branch) || undefined,
-    branchName: raw.branchName || (typeof raw.branch === 'object' ? raw.branch?.name : undefined) || undefined,
-    department: raw.department || undefined,
-    description: raw.description || raw.notes || raw.title || undefined,
-    status,
-    recordedByUserId:
-      raw.recordedByUserId ||
-      raw.userId ||
-      raw.createdById ||
-      raw.createdByUserId ||
-      (typeof raw.createdBy === 'object' ? raw.createdBy?.id : (typeof raw.createdBy === 'string' ? raw.createdBy : undefined)) ||
-      (typeof raw.user === 'object' ? raw.user?.id : undefined) ||
-      undefined,
-    recordedByUserName:
-      raw.recordedByUserName ||
-      raw.userName ||
-      raw.createdByName ||
-      (typeof raw.createdBy === 'object' ? (raw.createdBy?.name || `${raw.createdBy?.firstName || ''} ${raw.createdBy?.lastName || ''}`.trim()) : undefined) ||
-      (typeof raw.user === 'object' ? (raw.user?.name || `${raw.user?.firstName || ''} ${raw.user?.lastName || ''}`.trim()) : undefined) ||
-      undefined,
-    recordedByUserRole:
-      raw.recordedByUserRole ||
-      raw.userRole ||
-      raw.role ||
-      (typeof raw.createdBy === 'object' ? raw.createdBy?.role : undefined) ||
-      (typeof raw.user === 'object' ? raw.user?.role : undefined) ||
-      undefined,
-    decisionNote: raw.decisionNote || raw.rejectionNote || undefined,
-    decidedAt: raw.decidedAt || undefined,
-    createdAt: raw.createdAt || new Date().toISOString(),
-    updatedAt: raw.updatedAt || new Date().toISOString(),
-  };
-}
 
 export function useExpensesQuery(params?: ExpensesListParams) {
   return useQuery({
@@ -527,35 +150,16 @@ export function useExpensesQuery(params?: ExpensesListParams) {
         console.warn('[Omark Expenses] Live backend /expenses fetch error:', err?.message || err);
       }
 
-      const localExpenses = getStoredExpenses()
-        .filter((e) => !isDummyFuelExpense(e))
-        .map(normalizeExpenseEntity);
+      const localExpenses = getStoredExpenses();
       let all: ExpenseEntity[] = [];
 
-      if (serverExpenses !== null) {
-        if (serverExpenses.length > 0) {
-          try {
-            const existingList = getStoredExpenses().filter((e) => !isDummyFuelExpense(e));
-            const existingMap = new Map(existingList.map((e) => [e.id, e]));
-            serverExpenses.forEach((se) => existingMap.set(se.id, se));
-            localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(Array.from(existingMap.values())));
-          } catch {
-            // ignore silent sync
-          }
-        }
-        const serverIds = new Set(serverExpenses.map((e) => e.id));
-        const unsyncedLocal = localExpenses.filter((e) => !serverIds.has(e.id));
-        all = [...serverExpenses, ...unsyncedLocal];
+      if (serverExpenses !== null && serverExpenses.length > 0) {
+        all = mergeExpenses(serverExpenses, localExpenses);
+        // Persist reconciled dataset across IndexedDB, localStorage, and server settings
+        saveStoredExpenses(all).catch(() => {});
       } else {
         all = localExpenses;
       }
-
-      // If all contains no expenses or misses roles, supplement with DEFAULT_ROLE_OPERATIONAL_EXPENSES
-      const presentRoles = new Set(all.map((e) => (e.recordedByUserRole || '').toLowerCase()));
-      const supplemental = DEFAULT_ROLE_OPERATIONAL_EXPENSES.filter(
-        (def) => !presentRoles.has((def.recordedByUserRole || '').toLowerCase())
-      );
-      all = [...all, ...supplemental];
 
       all.sort((a, b) => dayjs(b.incurredOn || b.createdAt).valueOf() - dayjs(a.incurredOn || a.createdAt).valueOf());
 
@@ -693,10 +297,11 @@ export function useDeleteExpenseMutation() {
       try {
         const res = await apiClient.delete<ApiResponse<{ deleted: boolean }>>(`/expenses/${id}`);
         return unwrapData(res);
+      } catch (err) {
+        console.warn(`[Omark Expenses] Backend /expenses/${id} delete warning; applying locally:`, err);
+        return { deleted: true };
       } finally {
-        const list = getStoredExpenses().filter((e) => e.id !== id);
-        localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(list));
-        window.dispatchEvent(new Event('omark-expenses-changed'));
+        deleteStoredExpense(id);
       }
     },
     onSuccess: () => {
