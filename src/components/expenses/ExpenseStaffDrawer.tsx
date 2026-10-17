@@ -8,6 +8,8 @@ import {
   PercentageOutlined,
   DollarOutlined,
   CloseOutlined,
+  FullscreenOutlined,
+  FullscreenExitOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import type { ExpenseEntity } from '@/api/expenses';
@@ -20,6 +22,7 @@ import {
 } from '@/utils/expenseGrouping';
 import type { FourMainDepartmentKey } from '@/utils/departmentExpenses';
 import { ExpenseDayAccordion } from './ExpenseDayAccordion';
+import { ExpenseDetailModal } from './ExpenseDetailModal';
 import { tokens } from '@/constants/tokens';
 
 const { Title, Text, Paragraph } = Typography;
@@ -57,6 +60,10 @@ export const ExpenseStaffDrawer: React.FC<ExpenseStaffDrawerProps> = ({
 }) => {
   // Month selector inside drawer defaulting to current month
   const [selectedMonth, setSelectedMonth] = useState<dayjs.Dayjs>(() => dayjs());
+  // Drawer expansion state for larger screen view
+  const [isExpanded, setIsExpanded] = useState(false);
+  // Selected expense for full expanded screen view modal
+  const [detailExpense, setDetailExpense] = useState<ExpenseEntity | null>(null);
 
   // Reset to current month when targetGroup changes
   useEffect(() => {
@@ -142,10 +149,30 @@ export const ExpenseStaffDrawer: React.FC<ExpenseStaffDrawerProps> = ({
         </div>
       }
       placement="right"
-      width={720}
+      width={isExpanded ? '95vw' : Math.min(760, typeof window !== 'undefined' ? window.innerWidth - 32 : 760)}
       zIndex={1060}
       onClose={onClose}
       open={open}
+      extra={
+        <Space size={8}>
+          <Tooltip title={isExpanded ? 'Collapse to standard drawer width' : 'Expand drawer to larger screen view without scrolling limitations'}>
+            <Button
+              size="small"
+              icon={isExpanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+              onClick={() => setIsExpanded(!isExpanded)}
+              style={{
+                fontWeight: 600,
+                borderRadius: 6,
+                borderColor: isExpanded ? '#3b82f6' : '#cbd5e1',
+                color: isExpanded ? '#1d4ed8' : '#334155',
+                background: isExpanded ? '#eff6ff' : '#ffffff',
+              }}
+            >
+              {isExpanded ? 'Standard Width' : 'Expand View'}
+            </Button>
+          </Tooltip>
+        </Space>
+      }
       styles={{
         header: { padding: '16px 20px', borderBottom: '1px solid #f0f0f0' },
         body: { padding: '16px 20px', backgroundColor: '#f8fafc' },
@@ -306,13 +333,26 @@ export const ExpenseStaffDrawer: React.FC<ExpenseStaffDrawerProps> = ({
             day={day}
             defaultExpanded={idx === 0} // expand the newest day by default
             isAdminOrAccounts={isAdminOrAccounts}
-            onViewVoucher={onViewVoucher}
+            onViewVoucher={(record) => {
+              setDetailExpense(record);
+              onViewVoucher(record);
+            }}
             onApproveExpense={onApproveExpense}
             onRejectExpense={onRejectExpense}
             onSelectDepartment={onSelectDepartment}
           />
         ))
       )}
+
+      {/* ── Large Screen Expanded Expense Detail Modal ──────────────────────── */}
+      <ExpenseDetailModal
+        open={Boolean(detailExpense)}
+        expense={detailExpense}
+        onClose={() => setDetailExpense(null)}
+        isAdminOrAccounts={isAdminOrAccounts}
+        onApprove={onApproveExpense}
+        onReject={onRejectExpense}
+      />
     </Drawer>
   );
 };

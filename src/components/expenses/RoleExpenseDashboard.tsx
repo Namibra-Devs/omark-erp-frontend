@@ -49,6 +49,9 @@ import {
   TeamOutlined,
   FolderOpenOutlined,
   ClearOutlined,
+  FullscreenOutlined,
+  FullscreenExitOutlined,
+  EyeOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -81,6 +84,7 @@ import {
 import type { Role } from '@/types';
 import { tokens } from '@/constants/tokens';
 import { ExpenseAccordionView } from './ExpenseAccordionView';
+import { ExpenseDetailModal } from './ExpenseDetailModal';
 
 dayjs.extend(relativeTime);
 
@@ -293,6 +297,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
   // ── Department Expense Drawer State (4 Buttons: Secretary, BM, Marketing, Admin) ──
   const [selectedDepartment, setSelectedDepartment] = useState<FourMainDepartmentKey | null>(null);
   const [departmentDrawerOpen, setDepartmentDrawerOpen] = useState(false);
+  const [isDeptDrawerExpanded, setIsDeptDrawerExpanded] = useState(false);
   const [hoveredDept, setHoveredDept] = useState<string | null>(null);
   const [departmentSearchText, setDepartmentSearchText] = useState('');
   const [departmentStatusFilter, setDepartmentStatusFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all');
@@ -687,9 +692,18 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       width: 140,
       render: (_: any, record: ExpenseEntity) => (
         <div>
-          <Text strong style={{ color: tokens.primary, fontSize: 13 }} copyable>
-            {record.code || `EXP-${record.id.slice(0, 6).toUpperCase()}`}
-          </Text>
+          <Tooltip title="View complete details on large screen without scrolling">
+            <Text
+              strong
+              style={{ color: tokens.primary, fontSize: 13, cursor: 'pointer' }}
+              onClick={() => {
+                setSelectedExpense(record);
+                setVoucherDrawerOpen(true);
+              }}
+            >
+              {record.code || `EXP-${record.id.slice(0, 6).toUpperCase()}`}
+            </Text>
+          </Tooltip>
           <div style={{ fontSize: 11, color: '#8c8c8c' }}>
             {dayjs(record.incurredOn).format('MMM D, YYYY')}
           </div>
@@ -809,19 +823,32 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 155,
+      width: 175,
       align: 'center' as const,
       render: (_: any, record: ExpenseEntity) => (
         <Space size={4}>
-          <Tooltip title="View Printable Voucher">
+          <Tooltip title="Expand full record details on large screen without scrolling">
             <Button
               size="small"
-              icon={<FileTextOutlined />}
+              icon={<EyeOutlined />}
+              style={{
+                borderRadius: 6,
+                fontWeight: 600,
+                fontSize: 12,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                borderColor: '#bfdbfe',
+                color: '#1d4ed8',
+                background: '#eff6ff',
+              }}
               onClick={() => {
                 setSelectedExpense(record);
                 setVoucherDrawerOpen(true);
               }}
-            />
+            >
+              View More
+            </Button>
           </Tooltip>
 
           {isAdminOrAccounts && record.status === 'pending' && (
@@ -873,9 +900,18 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       width: 130,
       render: (_: any, record: ExpenseEntity) => (
         <div>
-          <Text strong style={{ color: tokens.primary, fontSize: 13 }} copyable>
-            {record.code || `EXP-${record.id.slice(0, 6).toUpperCase()}`}
-          </Text>
+          <Tooltip title="View complete details on large screen without scrolling">
+            <Text
+              strong
+              style={{ color: tokens.primary, fontSize: 13, cursor: 'pointer' }}
+              onClick={() => {
+                setSelectedExpense(record);
+                setVoucherDrawerOpen(true);
+              }}
+            >
+              {record.code || `EXP-${record.id.slice(0, 6).toUpperCase()}`}
+            </Text>
+          </Tooltip>
           <div style={{ fontSize: 11, color: '#8c8c8c' }}>
             {dayjs(record.incurredOn).format('MMM D, YYYY')}
           </div>
@@ -958,19 +994,32 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 120,
+      width: 175,
       align: 'center' as const,
       render: (_: any, record: ExpenseEntity) => (
         <Space size={4}>
-          <Tooltip title="View Printable Voucher">
+          <Tooltip title="Expand full record details on large screen without scrolling">
             <Button
               size="small"
-              icon={<FileTextOutlined />}
+              icon={<EyeOutlined />}
+              style={{
+                borderRadius: 6,
+                fontWeight: 600,
+                fontSize: 12,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                borderColor: '#bfdbfe',
+                color: '#1d4ed8',
+                background: '#eff6ff',
+              }}
               onClick={() => {
                 setSelectedExpense(record);
                 setVoucherDrawerOpen(true);
               }}
-            />
+            >
+              View More
+            </Button>
           </Tooltip>
 
           {isAdminOrAccounts && record.status === 'pending' && (
@@ -1673,10 +1722,26 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
           setDepartmentSearchText('');
           setDepartmentStatusFilter('all');
         }}
-        width={Math.min(780, typeof window !== 'undefined' ? window.innerWidth - 32 : 780)}
+        width={isDeptDrawerExpanded ? '95vw' : Math.min(840, typeof window !== 'undefined' ? window.innerWidth - 32 : 840)}
         placement="right"
         extra={
           <Space>
+            <Tooltip title={isDeptDrawerExpanded ? 'Collapse to standard drawer width' : 'Expand drawer to larger screen view without scrolling limitations'}>
+              <Button
+                size="small"
+                icon={isDeptDrawerExpanded ? <FullscreenExitOutlined /> : <FullscreenOutlined />}
+                onClick={() => setIsDeptDrawerExpanded(!isDeptDrawerExpanded)}
+                style={{
+                  fontWeight: 600,
+                  borderRadius: 6,
+                  borderColor: isDeptDrawerExpanded ? '#3b82f6' : '#cbd5e1',
+                  color: isDeptDrawerExpanded ? '#1d4ed8' : '#334155',
+                  background: isDeptDrawerExpanded ? '#eff6ff' : '#ffffff',
+                }}
+              >
+                {isDeptDrawerExpanded ? 'Standard Width' : 'Expand View'}
+              </Button>
+            </Tooltip>
             {selectedDepartment && (
               <Button
                 icon={<PlusOutlined />}
@@ -2069,90 +2134,21 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         </Form>
       </Modal>
 
-      {/* ── Voucher Drawer (Printable Detail View) ─────────────────────────── */}
-      <Drawer
-        title="Official Expenditure Voucher"
+      {/* ── Large Screen Expanded Expense Detail View (No scrolling limitations) ── */}
+      <ExpenseDetailModal
         open={voucherDrawerOpen}
-        onClose={() => setVoucherDrawerOpen(false)}
-        width={500}
-        zIndex={1070}
-        extra={
-          <Button
-            type="primary"
-            icon={<PrinterOutlined />}
-            onClick={() => window.print()}
-          >
-            Print Voucher
-          </Button>
-        }
-      >
-        {selectedExpense && (
-          <div style={{ padding: '4px 0' }}>
-            <div style={{ textAlign: 'center', marginBottom: 24, borderBottom: '2px solid #f0f0f0', paddingBottom: 16 }}>
-              <Title level={4} style={{ margin: 0, color: tokens.primary }}>
-                OMARK REAL ESTATE ERP
-              </Title>
-              <Text type="secondary" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>
-                Official Financial Disbursement Voucher
-              </Text>
-              <div style={{ marginTop: 8 }}>
-                <Tag color={selectedExpense.status === 'approved' ? 'success' : selectedExpense.status === 'pending' ? 'warning' : 'error'} style={{ fontSize: 12, padding: '4px 12px' }}>
-                  STATUS: {selectedExpense.status.toUpperCase()}
-                </Tag>
-              </div>
-            </div>
-
-            <Descriptions column={1} bordered size="small">
-              <Descriptions.Item label="Voucher No.">
-                <Text strong copyable>{selectedExpense.code || selectedExpense.id}</Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Incurred Date">
-                {dayjs(selectedExpense.incurredOn).format('MMMM D, YYYY')}
-              </Descriptions.Item>
-              <Descriptions.Item label="Department">
-                <Tag color="geekblue">{selectedExpense.department || normalizeDepartmentName(undefined, selectedExpense.recordedByUserRole)}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Category">
-                <Tag color="blue">{selectedExpense.category}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Requisition Type">
-                <Tag color="purple">{selectedExpense.type.toUpperCase()}</Tag>
-              </Descriptions.Item>
-              <Descriptions.Item label="Branch Location">
-                {selectedExpense.branchName || 'Kumasi Main'}
-              </Descriptions.Item>
-              <Descriptions.Item label="Submitted By">
-                <Text strong>{selectedExpense.recordedByUserName || 'Staff Member'}</Text>
-                <div style={{ fontSize: 11, color: '#8c8c8c', textTransform: 'capitalize' }}>
-                  Role: {(selectedExpense.recordedByUserRole || 'Staff').replace(/_/g, ' ')}
-                </div>
-              </Descriptions.Item>
-              <Descriptions.Item label="Total Amount">
-                <Text strong style={{ fontSize: 18, color: '#1f1f1f', fontVariantNumeric: 'tabular-nums' }}>
-                  ₵ {(selectedExpense.amountMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2 })}
-                </Text>
-              </Descriptions.Item>
-              <Descriptions.Item label="Purpose / Description">
-                {selectedExpense.description || 'No description provided'}
-              </Descriptions.Item>
-              {selectedExpense.decisionNote && (
-                <Descriptions.Item label="Authorization Note">
-                  <Text type="secondary">{selectedExpense.decisionNote}</Text>
-                </Descriptions.Item>
-              )}
-            </Descriptions>
-
-            <div style={{ marginTop: 32, padding: 16, background: '#fafafa', borderRadius: 8, textAlign: 'center' }}>
-              <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-                System-generated audit trail from Omark Real Estate ERP.
-              </Text>
-              <Text type="secondary" style={{ fontSize: 10 }}>
-                Logged at {dayjs(selectedExpense.createdAt).format('YYYY-MM-DD HH:mm:ss')}
-              </Text>
-            </div>
-          </div>
-        )}
-      </Drawer>
+        onClose={() => {
+          setVoucherDrawerOpen(false);
+          setSelectedExpense(null);
+        }}
+        expense={selectedExpense}
+        isAdminOrAccounts={isAdminOrAccounts}
+        onApprove={(id) => handleDecision(id, 'approved')}
+        onReject={(record) => {
+          setExpenseToReject(record);
+          setRejectionModalOpen(true);
+        }}
+      />
 
       {/* ── Rejection Note Modal ───────────────────────────────────────────── */}
       <Modal

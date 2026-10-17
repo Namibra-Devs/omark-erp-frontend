@@ -6,6 +6,7 @@ import {
   DownOutlined,
   RightOutlined,
   FileTextOutlined,
+  EyeOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
   ClockCircleOutlined,
@@ -51,9 +52,15 @@ export const ExpenseDayAccordion: React.FC<ExpenseDayAccordionProps> = ({
       width: 140,
       render: (_: any, record: ExpenseEntity) => (
         <div>
-          <Text strong style={{ color: tokens.primary, fontSize: 13 }} copyable>
-            {record.code || `EXP-${record.id.slice(0, 6).toUpperCase()}`}
-          </Text>
+          <Tooltip title="Click to view full expense record">
+            <Text
+              strong
+              style={{ color: tokens.primary, fontSize: 13, cursor: 'pointer' }}
+              onClick={() => onViewVoucher(record)}
+            >
+              {record.code || `EXP-${record.id.slice(0, 6).toUpperCase()}`}
+            </Text>
+          </Tooltip>
           <div style={{ fontSize: 11, color: '#8c8c8c' }}>
             {dayjs(record.incurredOn).format('MMM D, YYYY')}
           </div>
@@ -189,16 +196,29 @@ export const ExpenseDayAccordion: React.FC<ExpenseDayAccordionProps> = ({
     {
       title: 'Actions',
       key: 'actions',
-      width: 155,
+      width: 175,
       align: 'center' as const,
       render: (_: any, record: ExpenseEntity) => (
         <Space size={4}>
-          <Tooltip title="View Printable Voucher">
+          <Tooltip title="Expand full record details on large screen without scrolling">
             <Button
               size="small"
-              icon={<FileTextOutlined />}
+              icon={<EyeOutlined />}
+              style={{
+                borderRadius: 6,
+                fontWeight: 600,
+                fontSize: 12,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                borderColor: '#bfdbfe',
+                color: '#1d4ed8',
+                background: '#eff6ff',
+              }}
               onClick={() => onViewVoucher(record)}
-            />
+            >
+              View More
+            </Button>
           </Tooltip>
 
           {isAdminOrAccounts && record.status === 'pending' && (
