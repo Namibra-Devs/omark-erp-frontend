@@ -37,6 +37,7 @@ import { getStoredEntityBranch, recordEntityBranch, getBranchCanonicalKey } from
 
 import { getStoredActivities } from '@/utils/activityNotificationEngine';
 import { getCheckIns, visitorCategoryLabels } from '@/utils/visitorCheckIns';
+import { computeMonthlyCustomerRevenue } from '@/utils/monthlyCustomerRevenue';
 
 // There is no activity-log endpoint anywhere in this API — "recent
 // activity" spanning attendance/payroll/prospects/appointments/properties/customers/deeds is
@@ -342,9 +343,17 @@ export const useAdminDashboard = () => {
 
   const totalPaymentPlans = Math.max(apiStats?.totalPaymentPlans ?? 0, calculatedTotalPlans);
   const activePaymentPlans = Math.max(apiStats?.activePaymentPlans ?? 0, calculatedActivePlans);
-  const monthlyRevenue = (apiStats?.monthlyRevenue && apiStats.monthlyRevenue > 0)
-    ? apiStats.monthlyRevenue
-    : calculatedPlanRevenue;
+
+  // Real-time calculation of new customer monthly revenue
+  const customerRevenueSummary = computeMonthlyCustomerRevenue({
+    customers: customersData?.items ?? [],
+    paymentPlans: rawPaymentPlans,
+    properties: propertiesData?.items ?? [],
+  });
+
+  const effectiveMonthlyRevenue = customerRevenueSummary.currentMonthRevenueMinor > 0
+    ? customerRevenueSummary.currentMonthRevenueMinor
+    : ((apiStats?.monthlyRevenue && apiStats.monthlyRevenue > 0) ? apiStats.monthlyRevenue : calculatedPlanRevenue);
 
   // ── Map API stats to SystemStats shape ────────────────────────────────
   const stats: SystemStats = {
@@ -359,8 +368,8 @@ export const useAdminDashboard = () => {
     totalDeeds: apiStats?.totalDeeds ?? 0,
     totalNotifications: apiStats?.totalNotifications ?? 0,
     pendingNotifications: apiStats?.pendingNotifications ?? 0,
-    monthlyRevenue: apiStats?.monthlyRevenue ?? 0,
-    growthRate: apiStats?.growthRate ?? 0,
+    monthlyRevenue: effectiveMonthlyRevenue,
+    growthRate: customerRevenueSummary.growthRatePercent || apiStats?.growthRate || 0,
     conversionRate: apiStats?.conversionRate ?? 0,
   };
 
@@ -864,5 +873,6 @@ export const useAdminDashboard = () => {
     addActivityLog,
     exportData,
     refreshDashboard,
+    customerRevenueSummary,
   };
 };

@@ -33,6 +33,7 @@ import { AddProspectModal } from '@/components/shared/AddProspectModal';
 import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
 import { ProspectInteractionsTimeline } from '@/components/dashboard/ProspectInteractionsTimeline';
+import { MonthlyCustomerRevenueDrawer } from './admin/components/MonthlyCustomerRevenueDrawer';
 
 const { Title, Text } = Typography;
 
@@ -123,6 +124,7 @@ export const AdminDashboardPage: React.FC = () => {
   const [bonusRulesModal, setBonusRulesModal] = useState(false);
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
+  const [monthlyRevenueDrawerOpen, setMonthlyRevenueDrawerOpen] = useState(false);
 
   // Live visitor check-in records and on-premises counter
   const { records: visitorRecords } = useCheckIns();
@@ -358,7 +360,11 @@ export const AdminDashboardPage: React.FC = () => {
 
       {/* ── STATS ────────────────────────────────────────────────────────── */}
       <div className="adp-stats">
-        <StatsCards stats={stats} loading={loading} />
+        <StatsCards
+          stats={stats}
+          loading={loading}
+          onOpenMonthlyRevenue={() => setMonthlyRevenueDrawerOpen(true)}
+        />
       </div>
 
       {/* ── QUICK ACTIONS ────────────────────────────────────────────────── */}
@@ -442,6 +448,12 @@ export const AdminDashboardPage: React.FC = () => {
         onSuccess={() => {
           refreshDashboard();
         }}
+      />
+
+      {/* ── Monthly Customer Revenue Tracker Drawer with Monthly Folding Accordions ── */}
+      <MonthlyCustomerRevenueDrawer
+        open={monthlyRevenueDrawerOpen}
+        onClose={() => setMonthlyRevenueDrawerOpen(false)}
       />
     </div>
   );
