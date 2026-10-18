@@ -225,3 +225,99 @@ test('Monthly Revenue: Incorporates paid installments recorded in overrides', ()
   assert.equal(octGroup.newCustomers[0].transactions[0].type, 'down_payment');
   assert.equal(octGroup.newCustomers[0].transactions[1].type, 'installment');
 });
+
+test('Monthly Revenue: Generates rich descriptions for Month accordions and Customer accordions', () => {
+  const mockCustomers = [
+    {
+      id: 'cust-desc-1',
+      firstName: 'Kojo',
+      lastName: 'Appiah',
+      phoneNumber: '+233249998877',
+      address: 'Airport Hills, Accra',
+      type: 'payment_plan',
+      propertyId: 'prop-desc-1',
+      createdAt: '2026-10-08T12:00:00Z',
+    },
+    {
+      id: 'cust-desc-2',
+      firstName: 'Ama',
+      lastName: 'Serwaa',
+      phoneNumber: '+233241113355',
+      address: 'Cantonments, Accra',
+      type: 'outright',
+      propertyId: 'prop-desc-2',
+      createdAt: '2026-10-14T15:00:00Z',
+    },
+  ];
+
+  const mockPlans = [
+    {
+      id: 'plan-desc-1',
+      customerId: 'cust-desc-1',
+      propertyId: 'prop-desc-1',
+      totalAmountMinor: 50000000, // ₵ 500,000
+      downPaymentMinor: 10000000, // ₵ 100,000
+      balanceMinor: 40000000,
+      monthlyAmountMinor: 5000000,
+      numMonths: 8,
+      status: 'active',
+    },
+  ];
+
+  const mockProperties = [
+    {
+      id: 'prop-desc-1',
+      houseNumber: '15',
+      offerNumber: 'OFF-15',
+      priceMinor: 50000000,
+      currency: 'GHS',
+      description: '4-Bedroom Luxury Executive Villa',
+    },
+    {
+      id: 'prop-desc-2',
+      houseNumber: '22',
+      offerNumber: 'OFF-22',
+      priceMinor: 35000000,
+      currency: 'GHS',
+      description: '3-Bedroom Penthouse with Ocean View',
+    },
+  ];
+
+  const summary = computeMonthlyCustomerRevenue({
+    customers: mockCustomers,
+    paymentPlans: mockPlans,
+    properties: mockProperties,
+  });
+
+  const octGroup = summary.months.find((m) => m.monthKey === '2026-10');
+  assert.ok(octGroup, 'October group should exist');
+
+  // Month accordion description
+  assert.ok(octGroup.description, 'Month group must have a narrative description');
+  assert.ok(octGroup.description.includes('October 2026'), 'Month description includes month name');
+  assert.ok(octGroup.description.includes('Logged 2 new customer acquisition'), 'Month description notes customer count');
+  assert.ok(octGroup.description.includes('outright purchase'), 'Month description notes outright purchase');
+  assert.ok(octGroup.description.includes('installment plan'), 'Month description notes installment plan');
+  assert.ok(octGroup.description.includes('₵ 450,000.00'), 'Month description includes total credited revenue');
+
+  // Customer accordion description
+  const kojo = octGroup.newCustomers.find((c) => c.customerName === 'Kojo Appiah');
+  assert.ok(kojo, 'Kojo record should exist');
+  assert.ok(kojo.description, 'Customer must have an acquisition agreement description');
+  assert.ok(kojo.description.includes('Structured purchase agreement'), 'Describes installment purchase');
+  assert.ok(kojo.description.includes('House 15 • Offer OFF-15'), 'Describes property unit');
+  assert.ok(kojo.description.includes('4-Bedroom Luxury Executive Villa'), 'Includes property description');
+  assert.ok(kojo.description.includes('₵ 100,000.00'), 'Includes down payment amount');
+  assert.ok(kojo.description.includes('8-month installment schedule'), 'Includes payment plan duration');
+
+  // Transaction description
+  assert.ok(kojo.transactions[0].description, 'Transaction must have a description');
+  assert.ok(kojo.transactions[0].description.includes('Initial commitment deposit'), 'Transaction description clarifies memo');
+
+  // Outright customer description
+  const ama = octGroup.newCustomers.find((c) => c.customerName === 'Ama Serwaa');
+  assert.ok(ama, 'Ama record should exist');
+  assert.ok(ama.description.includes('Outright purchase agreement'), 'Describes outright purchase');
+  assert.ok(ama.description.includes('3-Bedroom Penthouse with Ocean View'), 'Includes penthouse details');
+  assert.ok(ama.description.includes('settled in full'), 'Mentions settled in full');
+});
