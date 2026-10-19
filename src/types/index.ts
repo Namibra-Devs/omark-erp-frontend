@@ -173,6 +173,8 @@ export interface PaymentPlan {
   id: string;
   customerId: string;
   propertyId: string;
+  branchId?: string;
+  branch?: string;
   totalAmountMinor: number;
   downPaymentMinor: number;
   balanceMinor: number;

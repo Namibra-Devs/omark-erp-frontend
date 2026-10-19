@@ -158,8 +158,17 @@ export const AccountsDashboardPage: React.FC = () => {
   const defaulters = filterEntitiesByBranch(rawDefaulters, user, branches);
   const dueSoon = filterEntitiesByBranch(rawDueSoon, user, branches);
 
-  const activePlansCount = paymentPlans.length;
-  const calculatedMonthlyRevenue = paymentPlans.reduce(
+  const isPlanActive = (p: any): boolean => {
+    if (!p) return false;
+    const s = String(p.status || '').toLowerCase().trim();
+    if (s === 'completed' || s === 'cancelled') return false;
+    if (s === 'active') return true;
+    return p.balanceMinor === undefined || p.balanceMinor > 0;
+  };
+
+  const activePaymentPlans = paymentPlans.filter(isPlanActive);
+  const activePlansCount = activePaymentPlans.length;
+  const calculatedMonthlyRevenue = activePaymentPlans.reduce(
     (sum: number, p: any) => sum + (p.monthlyInstallmentMinor || Math.round((p.totalAmountMinor || 1200000) / (p.numMonths || 12))),
     0
   );

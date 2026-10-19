@@ -306,12 +306,13 @@ export const SecretaryDashboardPage: React.FC = () => {
   // Combine rawPaymentPlans with any customers of type 'payment_plan' who have active plans
   const allRawPaymentPlans: PaymentPlan[] = useMemo(() => {
     const plansMap = new Map<string, PaymentPlan>();
+    const seenCustomerIds = new Set<string>();
 
     rawPaymentPlans.forEach((p: any) => {
       const overrides = getPlanPaymentOverrides(p.id);
       let adjustedBalanceMinor = p.balanceMinor;
       let adjustedProgressPercent = p.progressPercent;
-      let adjustedStatus = p.status;
+      let adjustedStatus: PaymentPlanStatus = p.status || 'active';
 
       if (overrides) {
         const totalPaidMinor = Object.values(overrides.paidInstallments || {}).reduce(
@@ -332,31 +333,38 @@ export const SecretaryDashboardPage: React.FC = () => {
         }
       }
 
-      const updatedPlan: PaymentPlan = {
-        ...p,
-        balanceMinor: adjustedBalanceMinor,
-        progressPercent: adjustedProgressPercent,
-        progressBand: getProgressBand(adjustedProgressPercent),
-        status: adjustedStatus,
-      };
-
       const custIdKey = (
         p.customerId ||
         (p as any).customer_id ||
         (typeof (p as any).customer === 'string' ? (p as any).customer : (p as any).customer?.id) ||
         ''
       )?.toString().trim().toLowerCase();
+
+      const cust = custIdKey ? customerMap[custIdKey] : undefined;
+      const prop = p.propertyId ? propertyMap[p.propertyId] : undefined;
+      const branchId = p.branchId || cust?.branchId || cust?.branch || prop?.branchId;
+
+      const updatedPlan: PaymentPlan = {
+        ...p,
+        branchId: branchId || p.branchId,
+        balanceMinor: adjustedBalanceMinor,
+        progressPercent: adjustedProgressPercent,
+        progressBand: getProgressBand(adjustedProgressPercent),
+        status: adjustedStatus,
+      };
+
+      // Canonical key per plan is its unique plan ID to avoid duplicate map entries
+      const planKey = (p.id || `plan-${custIdKey}`).toString().toLowerCase();
+      plansMap.set(planKey, updatedPlan);
+
       if (custIdKey) {
-        plansMap.set(custIdKey, updatedPlan);
-      }
-      if (p.id) {
-        plansMap.set(p.id.toLowerCase(), updatedPlan);
+        seenCustomerIds.add(custIdKey);
       }
     });
 
     rawCustomers.forEach((c: any) => {
       const cleanCId = (c.id || '').trim().toLowerCase();
-      if (cleanCId && plansMap.has(cleanCId)) return;
+      if (cleanCId && seenCustomerIds.has(cleanCId)) return;
       const directMatch = rawPaymentPlans.find((p: any) => {
         const pCustId = (
           p.customerId ||
@@ -408,6 +416,7 @@ export const SecretaryDashboardPage: React.FC = () => {
         id: planId,
         customerId: c.id,
         propertyId: c.propertyId || '',
+        branchId: c.branchId || c.branch || prop?.branchId,
         totalAmountMinor,
         downPaymentMinor,
         balanceMinor: finalBalance,
@@ -422,11 +431,12 @@ export const SecretaryDashboardPage: React.FC = () => {
         updatedAt: c.updatedAt || new Date().toISOString(),
       };
 
-      plansMap.set(c.id, syntheticPlan);
+      plansMap.set(planId.toString().toLowerCase(), syntheticPlan);
+      seenCustomerIds.add(cleanCId);
     });
 
     return Array.from(plansMap.values());
-  }, [rawPaymentPlans, rawCustomers, propertyMap]);
+  }, [rawPaymentPlans, rawCustomers, propertyMap, customerMap]);
 
   const customers = filterEntitiesByBranch(rawCustomers, user, branches);
   const paymentPlans = filterEntitiesByBranch(allRawPaymentPlans, user, branches);
@@ -579,8 +589,20 @@ export const SecretaryDashboardPage: React.FC = () => {
     ? Math.round((secretaryConverted.length / secretaryProspects.length) * 1000) / 10
     : 0;
 
-  const activePlansCount = paymentPlans.length;
-  const calculatedMonthlyRevenue = paymentPlans.reduce(
+  const isPlanActive = (p: any): boolean => {
+    if (!p) return false;
+    const s = String(p.status || '').toLowerCase().trim();
+    if (s === 'completed' || s === 'cancelled') return false;
+    if (s === 'active') return true;
+    return p.balanceMinor === undefined || p.balanceMinor > 0;
+  };
+
+  const activePaymentPlans = useMemo(() => {
+    return paymentPlans.filter(isPlanActive);
+  }, [paymentPlans]);
+
+  const activePlansCount = activePaymentPlans.length;
+  const calculatedMonthlyRevenue = activePaymentPlans.reduce(
     (sum: number, p: any) => sum + (p.monthlyAmountMinor || p.monthlyInstallmentMinor || Math.round((p.totalAmountMinor || 1200000) / (p.numMonths || 12))),
     0
   );
@@ -1329,7 +1351,23 @@ export const SecretaryDashboardPage: React.FC = () => {
               value={dashboard.activePlans}
               prefix={<DollarOutlined style={{ color: '#52c41a', marginRight: 6 }} />}
               valueStyle={{ color: '#52c41a', fontWeight: 700 }}
+              suffix={
+                paymentPlans.length > dashboard.activePlans ? (
+                  <span style={{ fontSize: 13, color: '#8c8c8c', fontWeight: 400 }}>
+                    / {paymentPlans.length}
+                  </span>
+                ) : undefined
+              }
             />
+            {paymentPlans.length > dashboard.activePlans ? (
+              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
+                {paymentPlans.length - dashboard.activePlans} completed / inactive
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
+                Active installment contracts
+              </div>
+            )}
           </Card>
         </Col>
         <Col xs={24} sm={12} lg={4}>
