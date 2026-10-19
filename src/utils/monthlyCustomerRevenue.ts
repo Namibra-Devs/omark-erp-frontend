@@ -37,6 +37,7 @@ export interface CustomerMonthRevenueTransaction {
   paidOn: string;
   method: string;
   reference?: string;
+  installmentNumber?: number | string;
   status: 'verified' | 'pending';
 }
 
@@ -54,6 +55,7 @@ export interface NewCustomerRevenueRecord {
   propertyPriceMinor: number;
   downPaymentMinor: number;
   monthlyInstallmentMinor: number;
+  installmentsMinor: number; // Installments paid this specific month
   totalPaidToDateMinor: number;
   balanceMinor: number;
   numMonths?: number;
@@ -240,7 +242,7 @@ export function computeMonthlyCustomerRevenue(params: {
   properties?: PropertyRevenueInput[];
   overrides?: OverridesMap;
 }): MonthlyCustomerRevenueSummary {
-  const { customers = [], paymentPlans = [], properties = [], overrides = getLocalPaymentOverrides() } = params;
+  const { customers = [], paymentPlans = [], properties = [], overrides = {} } = params;
 
   const now = dayjs();
   const currentMonthKey = now.format('YYYY-MM');
@@ -309,25 +311,51 @@ export function computeMonthlyCustomerRevenue(params: {
 
     const monthGroup = monthMap.get(joinMonthKey)!;
 
-    // Resolve property and plan details
-    const prop = c.propertyId ? propertyMap.get(c.propertyId) : undefined;
-    const plan = planMap.get(c.id);
+    // Resolve property and plan details safely from nested object or lookup
+    const propFromObj = (c as any).property;
+    const prop = c.propertyId ? propertyMap.get(c.propertyId) : (propFromObj || undefined);
+    const plan = (c as any).paymentPlan || (c as any).plan || planMap.get(c.id);
     const planOverride = plan?.id ? overrides[plan.id] : undefined;
 
-    const propName = prop
-      ? `House ${prop.houseNumber || ''} • Offer ${prop.offerNumber || ''}`.trim()
-      : plan?.propertyName || 'Residential Plot / Property';
+    const rawHouseNo = (c as any).property?.houseNumber || prop?.houseNumber || (c as any).houseNumber || propFromObj?.houseNumber || '';
+    const cleanHouseNo = rawHouseNo
+      ? (String(rawHouseNo).trim().toLowerCase().startsWith('house') ? String(rawHouseNo).trim() : `House ${String(rawHouseNo).trim()}`)
+      : '';
+    const offerNo = (c as any).property?.offerNumber || prop?.offerNumber || (c as any).offerNumber || propFromObj?.offerNumber || '';
+    const propName = cleanHouseNo
+      ? (offerNo ? `${cleanHouseNo} • Offer ${offerNo}` : cleanHouseNo)
+      : (prop?.description || prop?.name || plan?.propertyName || 'Property Assigned');
 
-    const propPriceMinor = plan?.totalAmountMinor || prop?.priceMinor || 35000000;
-    const downPaymentMinor = plan?.downPaymentMinor !== undefined
+    const propPriceMinor = plan?.totalAmountMinor !== undefined
+      ? plan.totalAmountMinor
+      : typeof plan?.totalAmount === 'number'
+      ? Math.round(plan.totalAmount * 100)
+      : prop?.priceMinor || 35000000;
+
+    const rawDownPaymentMinor = plan?.downPaymentMinor !== undefined
       ? plan.downPaymentMinor
-      : Math.round(propPriceMinor * 0.2); // Default 20% down payment
+      : typeof plan?.downPayment === 'number'
+      ? Math.round(plan.downPayment * 100)
+      : (c as any).downPaymentMinor !== undefined
+      ? (c as any).downPaymentMinor
+      : typeof (c as any).downPayment === 'number'
+      ? Math.round((c as any).downPayment * 100)
+      : undefined;
+
+    const downPaymentMinor = rawDownPaymentMinor !== undefined
+      ? rawDownPaymentMinor
+      : (c.type === 'outright' ? propPriceMinor : Math.round(propPriceMinor * 0.2)); // Default 20% down payment
     const numMonths = plan?.numMonths || 6;
-    const monthlyInstallment = plan?.monthlyAmountMinor || Math.round((propPriceMinor - downPaymentMinor) / Math.max(numMonths, 1));
+    const monthlyInstallment = plan?.monthlyAmountMinor !== undefined
+      ? plan.monthlyAmountMinor
+      : typeof plan?.monthlyAmount === 'number'
+      ? Math.round(plan.monthlyAmount * 100)
+      : Math.round((propPriceMinor - downPaymentMinor) / Math.max(numMonths, 1));
 
     // Calculate revenue credited for this customer in this joining month
     const transactions: CustomerMonthRevenueTransaction[] = [];
     let customerMonthRevenueMinor = 0;
+    let customerInstallmentRevenueMinor = 0;
 
     // Initial Deposit / Down Payment occurred in the joining month
     if (c.type === 'outright') {
@@ -340,8 +368,9 @@ export function computeMonthlyCustomerRevenue(params: {
         description: `100% full settlement of ${formatRevenueGHS(outrightAmount)} received for ${propName}. Verified bank instrument recorded.`,
         amountMinor: outrightAmount,
         paidOn: joinDateFormatted,
-        method: 'Bank Wire / Cheque',
-        reference: `OUT-${c.id.slice(0, 6).toUpperCase()}`,
+        method: (plan as any)?.paymentMethod || 'Bank Wire / Cheque',
+        reference: (plan as any)?.reference || `OUT-${c.id.slice(0, 6).toUpperCase()}`,
+        installmentNumber: 'Full Settlement',
         status: 'verified',
       });
     } else {
@@ -355,8 +384,9 @@ export function computeMonthlyCustomerRevenue(params: {
           description: `Initial commitment deposit of ${formatRevenueGHS(downPaymentMinor)} received for ${propName} to lock reservation and activate payment plan.`,
           amountMinor: downPaymentMinor,
           paidOn: joinDateFormatted,
-          method: 'Bank Transfer / MoMo',
-          reference: `DP-${c.id.slice(0, 6).toUpperCase()}`,
+          method: (plan as any)?.paymentMethod || 'Bank Transfer / MoMo',
+          reference: (plan as any)?.reference || `DP-${c.id.slice(0, 6).toUpperCase()}`,
+          installmentNumber: 'Down Payment',
           status: 'verified',
         });
       }
@@ -368,6 +398,7 @@ export function computeMonthlyCustomerRevenue(params: {
             const instMonth = dayjs(inst.paidAt).format('YYYY-MM');
             if (instMonth === joinMonthKey) {
               const instAmt = inst.amountMinor || monthlyInstallment;
+              customerInstallmentRevenueMinor += instAmt;
               customerMonthRevenueMinor += instAmt;
               transactions.push({
                 id: `tx-inst-${c.id}-${seq}`,
@@ -378,6 +409,7 @@ export function computeMonthlyCustomerRevenue(params: {
                 paidOn: dayjs(inst.paidAt).format('YYYY-MM-DD'),
                 method: String(inst.method || 'Mobile Money'),
                 reference: inst.reference || `INST-${seq}`,
+                installmentNumber: `#${seq}`,
                 status: 'verified',
               });
             }
@@ -395,7 +427,11 @@ export function computeMonthlyCustomerRevenue(params: {
       ? Math.min(100, Math.round((totalPaidToDate / propPriceMinor) * 100))
       : 100;
 
-    const customerName = `${c.firstName || ''} ${c.lastName || ''}`.trim() || 'New Buyer';
+    // Safely build customer display name (trim and join with Unnamed customer fallback)
+    const firstName = (c.firstName || '').trim();
+    const lastName = (c.lastName || '').trim();
+    const joinedFullName = [firstName, lastName].filter(Boolean).join(' ');
+    const customerName = joinedFullName || (c as any).name || (c as any).fullName || (c as any).customerName || 'Unnamed customer';
 
     // Generate comprehensive acquisition description / memo
     const customerDescription = buildCustomerAcquisitionDescription({
@@ -414,7 +450,7 @@ export function computeMonthlyCustomerRevenue(params: {
     const record: NewCustomerRevenueRecord = {
       customerId: c.id,
       customerName,
-      customerPhone: c.phoneNumber || 'N/A',
+      customerPhone: c.phoneNumber || (c as any).phone || 'N/A',
       customerAddress: c.address || 'Kumasi, Ghana',
       customerType: c.type || 'payment_plan',
       customerCode: c.code || `CUST-${c.id.slice(0, 6).toUpperCase()}`,
@@ -425,26 +461,23 @@ export function computeMonthlyCustomerRevenue(params: {
       propertyPriceMinor: propPriceMinor,
       downPaymentMinor: downPaymentMinor,
       monthlyInstallmentMinor: monthlyInstallment,
+      installmentsMinor: customerInstallmentRevenueMinor,
       totalPaidToDateMinor: totalPaidToDate,
       balanceMinor: balanceRemaining,
       numMonths,
-      planStatus: c.type === 'outright' ? 'completed' : (plan?.status || 'active'),
+      planStatus: c.type === 'outright' ? 'completed' : (plan?.status || (c as any).planStatus || (c as any).status || 'active'),
       progressPercent: progressPercent,
       joinedDate: joinDateFormatted,
       monthRevenueMinor: customerMonthRevenueMinor,
       transactions: transactions,
     };
 
-    // Add to month group
+    // Add to month group ensuring exact minor unit reconciliation
     monthGroup.newCustomers.push(record);
-    monthGroup.newCustomersCount += 1;
-    monthGroup.totalRevenueMinor += customerMonthRevenueMinor;
-    if (c.type === 'outright') {
-      monthGroup.downPaymentTotalMinor += propPriceMinor;
-    } else {
-      monthGroup.downPaymentTotalMinor += downPaymentMinor;
-      monthGroup.installmentTotalMinor += (customerMonthRevenueMinor - downPaymentMinor);
-    }
+    monthGroup.newCustomersCount = monthGroup.newCustomers.length;
+    monthGroup.totalRevenueMinor += record.monthRevenueMinor;
+    monthGroup.downPaymentTotalMinor += record.downPaymentMinor;
+    monthGroup.installmentTotalMinor += record.installmentsMinor;
   });
 
   // Build comprehensive narrative descriptions for every month group

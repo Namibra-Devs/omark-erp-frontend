@@ -321,3 +321,104 @@ test('Monthly Revenue: Generates rich descriptions for Month accordions and Cust
   assert.ok(ama.description.includes('3-Bedroom Penthouse with Ocean View'), 'Includes penthouse details');
   assert.ok(ama.description.includes('settled in full'), 'Mentions settled in full');
 });
+
+test('Monthly Revenue: Customer headers reconcile exactly with summary bar down to the cent', () => {
+  const mockCustomers = [
+    {
+      id: 'cust-rec-1',
+      firstName: 'Kofi',
+      lastName: 'Agyemang',
+      phoneNumber: '+233241000001',
+      type: 'payment_plan',
+      property: { houseNumber: '10A' },
+      paymentPlan: {
+        totalAmountMinor: 10000000,
+        downPaymentMinor: 2000000, // ₵ 20,000
+        monthlyAmountMinor: 1000000,
+        status: 'active',
+      },
+      createdAt: '2026-10-02T10:00:00Z',
+    },
+    {
+      id: 'cust-rec-2',
+      firstName: '  Akosua  ',
+      lastName: '  Darko  ',
+      phoneNumber: '+233241000002',
+      type: 'payment_plan',
+      property: { houseNumber: 'House 12' },
+      paymentPlan: {
+        totalAmountMinor: 25000000,
+        downPaymentMinor: 5000000, // ₵ 50,000
+        monthlyAmountMinor: 2000000,
+        status: 'active',
+      },
+      createdAt: '2026-10-05T10:00:00Z',
+    },
+    {
+      id: 'cust-rec-3',
+      firstName: '',
+      lastName: '',
+      phoneNumber: '+233241000003',
+      type: 'payment_plan',
+      property: { houseNumber: '33' },
+      paymentPlan: {
+        totalAmountMinor: 30000000,
+        downPaymentMinor: 6300000, // ₵ 63,000
+        monthlyAmountMinor: 3000000,
+        status: 'active',
+      },
+      createdAt: '2026-10-08T10:00:00Z',
+    },
+  ];
+
+  const summary = computeMonthlyCustomerRevenue({
+    customers: mockCustomers,
+  });
+
+  const oct = summary.months.find((m) => m.monthKey === '2026-10');
+  assert.ok(oct);
+  assert.equal(oct.newCustomers.length, 3);
+
+  // Sum of down payments = 20,000 + 50,000 + 63,000 = 133,000 GHS (13,300,000 minor)
+  assert.equal(oct.downPaymentTotalMinor, 13300000);
+  assert.equal(formatRevenueGHS(oct.downPaymentTotalMinor), '₵ 133,000.00');
+
+  // Installments = 0
+  assert.equal(oct.installmentTotalMinor, 0);
+  assert.equal(formatRevenueGHS(oct.installmentTotalMinor), '₵ 0.00');
+
+  // Verify each customer's downPaymentMinor matches and sums exactly to month total
+  const customerDownPaymentsSum = oct.newCustomers.reduce((sum, c) => sum + c.downPaymentMinor, 0);
+  assert.equal(customerDownPaymentsSum, oct.downPaymentTotalMinor);
+  assert.equal(customerDownPaymentsSum, 13300000);
+
+  const customerInstallmentsSum = oct.newCustomers.reduce((sum, c) => sum + c.installmentsMinor, 0);
+  assert.equal(customerInstallmentsSum, oct.installmentTotalMinor);
+  assert.equal(customerInstallmentsSum, 0);
+
+  const customerTotalCollectedSum = oct.newCustomers.reduce((sum, c) => sum + c.monthRevenueMinor, 0);
+  assert.equal(customerTotalCollectedSum, oct.totalRevenueMinor);
+  assert.equal(customerTotalCollectedSum, 13300000);
+
+  // Verify safe name and property formatting
+  const cust1 = oct.newCustomers[0];
+  assert.equal(cust1.customerName, 'Kofi Agyemang');
+  assert.equal(cust1.propertyName, 'House 10A');
+
+  const cust2 = oct.newCustomers[1];
+  assert.equal(cust2.customerName, 'Akosua Darko');
+  assert.equal(cust2.propertyName, 'House 12');
+
+  const cust3 = oct.newCustomers[2];
+  assert.equal(cust3.customerName, 'Unnamed customer'); // Safe fallback when firstName & lastName are empty
+  assert.equal(cust3.propertyName, 'House 33');
+
+  // Verify transaction receipt records contain required fields
+  cust1.transactions.forEach((tx) => {
+    assert.ok(tx.paidOn, 'Transaction must have paidOn date');
+    assert.ok(tx.amountMinor > 0, 'Transaction must have amount');
+    assert.ok(tx.method, 'Transaction must have method');
+    assert.ok(tx.reference, 'Transaction must have reference');
+    assert.ok(tx.installmentNumber, 'Transaction must have installmentNumber');
+  });
+});

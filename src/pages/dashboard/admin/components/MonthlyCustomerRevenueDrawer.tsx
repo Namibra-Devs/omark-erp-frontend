@@ -21,6 +21,7 @@ import {
   Avatar,
   Divider,
   Segmented,
+  Skeleton,
 } from 'antd';
 import {
   DollarOutlined,
@@ -85,10 +86,11 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed'>('all');
   const [monthFilter, setMonthFilter] = useState<string>('all');
 
-  // Live queries
-  const { data: customersData } = useCustomersQuery({ pageSize: 100 });
-  const { data: plansData } = usePaymentPlansQuery({ pageSize: 100 });
-  const { data: propertiesData } = usePropertiesQuery({ pageSize: 100 });
+  // Live queries (Server Data Only)
+  const { data: customersData, isLoading: isLoadingCustomers } = useCustomersQuery({ pageSize: 100 });
+  const { data: plansData, isLoading: isLoadingPlans } = usePaymentPlansQuery({ pageSize: 100 });
+  const { data: propertiesData, isLoading: isLoadingProperties } = usePropertiesQuery({ pageSize: 100 });
+  const isLoading = isLoadingCustomers || isLoadingPlans || isLoadingProperties;
 
   const rawCustomers = customersData?.items ?? [];
   const rawPlans = plansData?.items ?? [];
@@ -158,11 +160,16 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
           return matchesName || matchesPhone || matchesProp || matchesCode || matchesDesc;
         });
 
+        const filteredDownPaymentTotalMinor = filteredCustomers.reduce((sum, c) => sum + c.downPaymentMinor, 0);
+        const filteredInstallmentTotalMinor = filteredCustomers.reduce((sum, c) => sum + c.installmentsMinor, 0);
         const filteredTotalRevenueMinor = filteredCustomers.reduce((sum, c) => sum + c.monthRevenueMinor, 0);
 
         return {
           ...month,
           newCustomers: filteredCustomers,
+          downPaymentTotalMinor: filteredDownPaymentTotalMinor,
+          installmentTotalMinor: filteredInstallmentTotalMinor,
+          totalRevenueMinor: filteredTotalRevenueMinor,
           filteredTotalRevenueMinor,
           hasMatches: filteredCustomers.length > 0 || !q,
         };
@@ -245,18 +252,18 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
               marginTop: 2,
             }}
           >
-            {record.customerName.charAt(0).toUpperCase()}
+            {(record.customerName || 'U').charAt(0).toUpperCase()}
           </Avatar>
           <div>
             <Text strong style={{ fontSize: 13, color: '#0f172a', display: 'block' }}>
-              {record.customerName}
+              {record.customerName || 'Unnamed customer'}
             </Text>
             <Tag color="geekblue" style={{ borderRadius: 4, fontSize: 10, padding: '0 4px', margin: '2px 0' }}>
               {record.customerCode || 'CUST'}
             </Tag>
             <div style={{ fontSize: 11, color: '#64748b' }}>
               <PhoneOutlined style={{ fontSize: 10, marginRight: 4 }} />
-              {record.customerPhone}
+              {record.customerPhone || 'N/A'}
             </div>
           </div>
         </div>
@@ -271,7 +278,7 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <HomeOutlined style={{ color: '#059669', fontSize: 12 }} />
             <Text strong style={{ fontSize: 12, color: '#1e293b' }}>
-              {record.propertyName}
+              {record.propertyName || 'Property Assigned'}
             </Text>
           </div>
           {record.propertyDescription && (
@@ -285,26 +292,48 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
     {
       title: 'Acquisition Agreement & Description Memo',
       key: 'description',
-      ellipsis: false,
+      width: 340,
+      align: 'left' as const,
       render: (_: any, record: any) => (
         <div
           style={{
+            minWidth: 310,
+            maxWidth: 340,
             background: '#f8fafc',
             border: '1px solid #e2e8f0',
-            borderLeft: '3px solid #059669',
-            borderRadius: 6,
-            padding: '8px 10px',
+            borderLeft: '4px solid #059669',
+            borderRadius: 8,
+            padding: '8px 12px',
+            boxSizing: 'border-box',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
-            <FileTextOutlined style={{ color: '#059669', fontSize: 11 }} />
-            <Text strong style={{ fontSize: 11, color: '#065f46', textTransform: 'uppercase' }}>
-              Terms Memo
-            </Text>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 4 }}>
+            <Space size={6}>
+              <FileTextOutlined style={{ color: '#059669', fontSize: 12 }} />
+              <Text strong style={{ fontSize: 11, color: '#065f46', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                Terms & Agreement Memo
+              </Text>
+            </Space>
+            <Tag
+              color={record.customerType === 'outright' ? 'cyan' : 'blue'}
+              style={{ fontSize: 9, padding: '0 4px', margin: 0, borderRadius: 4, fontWeight: 700 }}
+            >
+              {record.customerType === 'outright' ? 'OUTRIGHT' : 'INSTALLMENT'}
+            </Tag>
           </div>
-          <Text style={{ fontSize: 12, color: '#334155', lineHeight: 1.45, display: 'block' }}>
+          <Paragraph
+            ellipsis={{ rows: 3, expandable: true, symbol: 'read more' }}
+            style={{
+              fontSize: 12,
+              color: '#334155',
+              lineHeight: 1.5,
+              margin: 0,
+              wordBreak: 'break-word',
+              whiteSpace: 'normal',
+            }}
+          >
             {record.description}
-          </Text>
+          </Paragraph>
         </div>
       ),
     },
@@ -360,7 +389,7 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
     {
       title: 'Financial Breakdown',
       key: 'financials',
-      width: 170,
+      width: 180,
       render: (_: any, record: any) => (
         <div style={{ fontSize: 11 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -370,6 +399,10 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: '#64748b' }}>Down Payment:</span>
             <span style={{ color: '#059669', fontWeight: 600 }}>{formatRevenueGHS(record.downPaymentMinor)}</span>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+            <span style={{ color: '#64748b' }}>Installments:</span>
+            <span style={{ color: '#2563eb', fontWeight: 600 }}>{formatRevenueGHS(record.installmentsMinor)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: '#64748b' }}>Balance:</span>
@@ -463,7 +496,13 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
         </div>
       }
       placement="right"
-      width={isExpanded ? '95vw' : Math.min(840, typeof window !== 'undefined' ? window.innerWidth - 32 : 840)}
+      width={
+        isExpanded
+          ? '95vw'
+          : viewMode === 'table'
+          ? Math.min(960, typeof window !== 'undefined' ? window.innerWidth - 32 : 960)
+          : Math.min(880, typeof window !== 'undefined' ? window.innerWidth - 32 : 880)
+      }
       zIndex={1060}
       onClose={onClose}
       open={open}
@@ -524,8 +563,34 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
         body: { padding: '16px 20px', backgroundColor: '#f8fafc' },
       }}
     >
-      {/* ── TOP KPI SUMMARY CARDS ─────────────────────────────────────────── */}
-      <Row gutter={[12, 12]} style={{ marginBottom: 18 }}>
+      {isLoading ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          <Row gutter={[12, 12]}>
+            {[1, 2, 3, 4].map((i) => (
+              <Col xs={24} sm={12} md={6} key={i}>
+                <Card size="small" style={{ borderRadius: 12, background: '#ffffff', border: '1px solid #e2e8f0' }}>
+                  <Skeleton active paragraph={{ rows: 2 }} title={{ width: '60%' }} />
+                </Card>
+              </Col>
+            ))}
+          </Row>
+
+          <Card size="small" style={{ borderRadius: 12, border: '1px solid #e2e8f0', background: '#ffffff' }}>
+            <Skeleton.Input active block style={{ height: 36, borderRadius: 6 }} />
+          </Card>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            {[1, 2, 3].map((i) => (
+              <Card key={i} size="small" style={{ borderRadius: 14, border: '1px solid #e2e8f0', background: '#ffffff' }}>
+                <Skeleton active avatar={{ shape: 'square', size: 'default' }} paragraph={{ rows: 2 }} />
+              </Card>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* ── TOP KPI SUMMARY CARDS ─────────────────────────────────────────── */}
+          <Row gutter={[12, 12]} style={{ marginBottom: 18 }}>
         <Col xs={24} sm={12} md={6}>
           <Card
             size="small"
@@ -797,7 +862,7 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
             rowKey={(r) => `${r.monthKey}-${r.customerId}`}
             columns={tableColumns}
             pagination={{ pageSize: 15, showSizeChanger: true, showTotal: (total) => `Total ${total} customer records` }}
-            scroll={{ x: 1280 }}
+            scroll={{ x: 1560 }}
             size="middle"
             style={{
               background: '#ffffff',
@@ -834,67 +899,71 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
                   <Text strong style={{ fontSize: 12, color: '#334155', display: 'block', marginBottom: 8 }}>
                     Collections & Receipts Logged for {record.monthLabel}:
                   </Text>
-                  <Table
-                    dataSource={record.transactions}
-                    rowKey="id"
-                    pagination={false}
-                    size="small"
-                    columns={[
-                      {
-                        title: 'Receipt Date',
-                        dataIndex: 'paidOn',
-                        key: 'paidOn',
-                        width: 120,
-                        render: (val: string) => <Text style={{ fontSize: 11 }}>{dayjs(val).format('MMM D, YYYY')}</Text>,
-                      },
-                      {
-                        title: 'Transaction Label & Memo',
-                        dataIndex: 'label',
-                        key: 'label',
-                        render: (val: string, tx) => (
-                          <div>
+                  {record.transactions.length === 0 ? (
+                    <Empty
+                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                      description="No payments recorded yet"
+                      style={{ padding: '16px 0', background: '#ffffff', borderRadius: 8, border: '1px dashed #e2e8f0' }}
+                    />
+                  ) : (
+                    <Table
+                      dataSource={record.transactions}
+                      rowKey="id"
+                      pagination={false}
+                      size="small"
+                      columns={[
+                        {
+                          title: 'Date',
+                          dataIndex: 'paidOn',
+                          key: 'paidOn',
+                          width: 120,
+                          render: (val: string) => <Text style={{ fontSize: 11 }}>{dayjs(val).isValid() ? dayjs(val).format('MMM D, YYYY') : (val || '—')}</Text>,
+                        },
+                        {
+                          title: 'Installment Number',
+                          dataIndex: 'installmentNumber',
+                          key: 'installmentNumber',
+                          width: 160,
+                          render: (val: any, tx) => (
                             <Space size={6}>
-                              <Tag color={tx.type === 'down_payment' ? 'green' : 'blue'} style={{ fontSize: 10, borderRadius: 4 }}>
-                                {tx.type.replace('_', ' ').toUpperCase()}
+                              <Tag
+                                color={tx.type === 'down_payment' ? 'green' : tx.type === 'outright_purchase' ? 'cyan' : 'blue'}
+                                style={{ fontSize: 10, borderRadius: 4 }}
+                              >
+                                {val || tx.label || '—'}
                               </Tag>
-                              <Text strong style={{ fontSize: 11 }}>{val}</Text>
                             </Space>
-                            {tx.description && (
-                              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                                {tx.description}
-                              </div>
-                            )}
-                          </div>
-                        ),
-                      },
-                      {
-                        title: 'Payment Channel',
-                        dataIndex: 'method',
-                        key: 'method',
-                        width: 150,
-                        render: (val: string) => <Tag color="geekblue" style={{ borderRadius: 6, fontSize: 10 }}>{val}</Tag>,
-                      },
-                      {
-                        title: 'Reference Code',
-                        dataIndex: 'reference',
-                        key: 'reference',
-                        width: 130,
-                        render: (val: string) => <Text copyable style={{ fontSize: 11, fontFamily: 'monospace' }}>{val || '—'}</Text>,
-                      },
-                      {
-                        title: 'Credited Amount',
-                        dataIndex: 'amountMinor',
-                        key: 'amountMinor',
-                        align: 'right' as const,
-                        width: 140,
-                        render: (val: number) => (
-                          <span style={{ fontSize: 12, fontWeight: 700, color: '#059669', fontVariantNumeric: 'tabular-nums' }}>
-                            {formatRevenueGHS(val)}
-                          </span>
-                        ),
-                      },
-                    ]}
-                  />
+                          ),
+                        },
+                        {
+                          title: 'Amount',
+                          dataIndex: 'amountMinor',
+                          key: 'amountMinor',
+                          align: 'right' as const,
+                          width: 140,
+                          render: (val: number) => (
+                            <span style={{ fontSize: 12, fontWeight: 700, color: '#059669', fontVariantNumeric: 'tabular-nums' }}>
+                              {formatRevenueGHS(val)}
+                            </span>
+                          ),
+                        },
+                        {
+                          title: 'Method',
+                          dataIndex: 'method',
+                          key: 'method',
+                          width: 150,
+                          render: (val: string) => <Tag color="geekblue" style={{ borderRadius: 6, fontSize: 10 }}>{val || '—'}</Tag>,
+                        },
+                        {
+                          title: 'Reference',
+                          dataIndex: 'reference',
+                          key: 'reference',
+                          width: 130,
+                          render: (val: string) => (val ? <Text copyable style={{ fontSize: 11, fontFamily: 'monospace' }}>{val}</Text> : '—'),
+                        },
+                      ]}
+                    />
+                  )}
                 </div>
               ),
             }}
@@ -903,127 +972,284 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
       ) : (
         /* ── ACCORDIONS VIEW (NESTED MONTHS & CUSTOMERS) ──────────────── */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-          <Collapse
-            activeKey={activeMonthKeys}
-            onChange={(keys) => setActiveMonthKeys(typeof keys === 'string' ? [keys] : keys)}
-            style={{ background: 'transparent', border: 'none' }}
-            items={filteredMonths.map((month) => {
-              const isCurrent = month.isCurrentMonth;
-              const revenueDisplay = formatRevenueGHS(month.totalRevenueMinor);
-              const customerCount = month.newCustomers.length;
-              const shareOfAllTime = summary.allTimeNewCustomerRevenueMinor > 0
-                ? Math.round((month.totalRevenueMinor / summary.allTimeNewCustomerRevenueMinor) * 100)
-                : 0;
+          {/* Informative Accordions Header Banner */}
+          <Card
+            size="small"
+            style={{
+              borderRadius: 12,
+              border: '1px solid #a7f3d0',
+              background: 'linear-gradient(180deg, #ecfdf5 0%, #ffffff 100%)',
+              boxShadow: '0 2px 6px rgba(16, 185, 129, 0.05)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+              <Space size={10}>
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: 8,
+                    background: '#d1fae5',
+                    color: '#059669',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontSize: 16,
+                  }}
+                >
+                  <FolderOpenOutlined />
+                </div>
+                <div>
+                  <Text strong style={{ fontSize: 14, color: '#065f46' }}>
+                    Monthly Customer Revenue & Acquisition Accordions
+                  </Text>
+                  <div style={{ fontSize: 12, color: '#475569' }}>
+                    Monthly folding folders tracking customer acquisitions and collections. Active months remain unfolded for live monitoring; concluded cycles fold into archives. Click any folder to inspect.
+                  </div>
+                </div>
+              </Space>
 
-              return {
-                key: month.monthKey,
-                style: {
-                  marginBottom: 14,
-                  borderRadius: 14,
-                  border: isCurrent ? '2px solid #34d399' : '1px solid #e2e8f0',
-                  background: '#ffffff',
-                  overflow: 'hidden',
-                  boxShadow: isCurrent ? '0 4px 16px rgba(16, 185, 129, 0.12)' : '0 2px 6px rgba(0,0,0,0.02)',
-                },
-                header: (
+              <Tag color="green" style={{ borderRadius: 6, fontWeight: 600, fontSize: 11 }}>
+                {activeMonthKeys.length} of {filteredMonths.length} Months Unfolded
+              </Tag>
+            </div>
+          </Card>
+
+          {filteredMonths.length === 0 ? (
+            <Card style={{ borderRadius: 12, textAlign: 'center', padding: '36px 0', border: '1px solid #e2e8f0', background: '#ffffff' }}>
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description="No customer revenue records found matching the selected filters."
+              />
+            </Card>
+          ) : (
+            <Collapse
+              activeKey={activeMonthKeys}
+              onChange={(keys) => setActiveMonthKeys(typeof keys === 'string' ? [keys] : keys)}
+              style={{ background: 'transparent', border: 'none' }}
+              items={filteredMonths.map((month) => {
+                const isCurrent = month.isCurrentMonth;
+                const isUnfolded = activeMonthKeys.includes(month.monthKey);
+                const isCollapsed = !isUnfolded;
+                const revenueDisplay = formatRevenueGHS(month.totalRevenueMinor);
+                const customerCount = month.newCustomers.length;
+                const shareOfAllTime = summary.allTimeNewCustomerRevenueMinor > 0
+                  ? Math.round((month.totalRevenueMinor / summary.allTimeNewCustomerRevenueMinor) * 100)
+                  : 0;
+
+                return {
+                  key: month.monthKey,
+                  style: {
+                    marginBottom: 14,
+                    borderRadius: 14,
+                    border: isCurrent
+                      ? '2px solid #34d399'
+                      : isUnfolded
+                      ? '1.5px solid #94a3b8'
+                      : '1px solid #cbd5e1',
+                    background: isCollapsed ? '#fafafa' : '#ffffff',
+                    overflow: 'hidden',
+                    boxShadow: isCurrent
+                      ? '0 4px 16px rgba(16, 185, 129, 0.12)'
+                      : '0 2px 6px rgba(0,0,0,0.02)',
+                  },
+                  label: (
                   <div
                     style={{
                       display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      flexWrap: 'wrap',
+                      flexDirection: 'column',
                       width: '100%',
                       padding: '4px 0',
-                      gap: 10,
+                      gap: 8,
                     }}
                   >
-                    {/* Left: Month title + Status Tag + Customer count + Description preview */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div
-                        style={{
-                          width: 34,
-                          height: 34,
-                          borderRadius: 8,
-                          background: isCurrent ? '#ecfdf5' : '#f1f5f9',
-                          color: isCurrent ? '#059669' : '#475569',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          fontSize: 16,
-                        }}
-                      >
-                        <CalendarOutlined />
-                      </div>
-
-                      <div>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                          <Text strong style={{ fontSize: 15, color: '#0f172a' }}>
-                            {month.monthLabel}
-                          </Text>
-                          {isCurrent ? (
-                            <Tag color="success" style={{ borderRadius: 10, fontWeight: 700, fontSize: 10 }}>
-                              CURRENT MONTH (UNFOLDED)
-                            </Tag>
-                          ) : (
-                            <Tag color="default" style={{ borderRadius: 10, fontSize: 10, color: '#64748b' }}>
-                              CLOSED MONTH (FOLDED)
-                            </Tag>
-                          )}
-                        </div>
-                        <div style={{ fontSize: 11, color: '#64748b' }}>
-                          {customerCount} new customer{customerCount === 1 ? '' : 's'} registered
-                          {month.downPaymentTotalMinor > 0 && ` • Initial Deposits: ${formatRevenueGHS(month.downPaymentTotalMinor)}`}
-                        </div>
-                        {/* Month narrative description preview on accordion header */}
+                    {/* Top Row: Icon + Month Title + Status Badges + Revenue on right */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        flexWrap: 'wrap',
+                        width: '100%',
+                        gap: 10,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                         <div
                           style={{
-                            fontSize: 11,
-                            color: '#475569',
-                            marginTop: 2,
+                            width: 36,
+                            height: 36,
+                            borderRadius: 8,
+                            background: isCurrent ? '#ecfdf5' : isUnfolded ? '#e0f2fe' : '#f1f5f9',
+                            color: isCurrent ? '#059669' : isUnfolded ? '#0284c7' : '#64748b',
                             display: 'flex',
                             alignItems: 'center',
-                            gap: 4,
+                            justifyContent: 'center',
+                            fontSize: 18,
+                            flexShrink: 0,
                           }}
                         >
-                          <FileTextOutlined style={{ fontSize: 10, color: '#059669' }} />
+                          {isUnfolded ? <FolderOpenOutlined /> : <FolderOutlined />}
+                        </div>
+
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <Text strong style={{ fontSize: 15, color: '#0f172a' }}>
+                              {month.monthLabel} Revenue Folder
+                            </Text>
+
+                            {/* Active vs Concluded Cycle Tag */}
+                            {isCurrent ? (
+                              <Tag color="success" style={{ borderRadius: 8, fontWeight: 700, fontSize: 10 }}>
+                                ACTIVE ONGOING MONTH
+                              </Tag>
+                            ) : (
+                              <Tag color="default" style={{ borderRadius: 8, fontSize: 10, color: '#64748b' }}>
+                                CONCLUDED MONTH ARCHIVE
+                              </Tag>
+                            )}
+
+                            {/* Collapsed vs Unfolded State Tag */}
+                            {isCollapsed ? (
+                              <Tag
+                                color="warning"
+                                style={{ borderRadius: 8, fontWeight: 700, fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                              >
+                                <FolderOutlined />
+                                FOLDED ACCORDION • CLICK TO EXPAND
+                              </Tag>
+                            ) : (
+                              <Tag
+                                color="processing"
+                                style={{ borderRadius: 8, fontWeight: 700, fontSize: 10, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                              >
+                                <FolderOpenOutlined />
+                                UNFOLDED (AUDIT VIEW)
+                              </Tag>
+                            )}
+                          </div>
+
+                          <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                            {customerCount} customer acquisition{customerCount === 1 ? '' : 's'} registered
+                            {month.downPaymentTotalMinor > 0 && ` • Initial Deposits: ${formatRevenueGHS(month.downPaymentTotalMinor)}`}
+                            {month.installmentTotalMinor > 0 && ` • Installments: ${formatRevenueGHS(month.installmentTotalMinor)}`}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Right: Revenue total pill + Share tag */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <Tag
+                          color="purple"
+                          style={{ borderRadius: 8, fontWeight: 600, fontSize: 11, border: 'none' }}
+                        >
+                          {shareOfAllTime}% of all-time
+                        </Tag>
+
+                        <div style={{ textAlign: 'right' }}>
+                          <Text
+                            strong
+                            style={{
+                              fontSize: 17,
+                              fontWeight: 800,
+                              color: '#059669',
+                              fontVariantNumeric: 'tabular-nums',
+                              display: 'block',
+                            }}
+                          >
+                            {revenueDisplay}
+                          </Text>
+                          <Text type="secondary" style={{ fontSize: 10 }}>
+                            {isCollapsed ? 'Click to inspect records' : 'Month Total Credited'}
+                          </Text>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Explicit Content Summary & Narrative for Collapsed Accordion */}
+                    {isCollapsed ? (
+                      <div
+                        style={{
+                          marginTop: 4,
+                          padding: '8px 12px',
+                          background: '#ffffff',
+                          border: '1px dashed #cbd5e1',
+                          borderRadius: 8,
+                          fontSize: 11,
+                          color: '#334155',
+                          width: '100%',
+                          boxSizing: 'border-box',
+                        }}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6, marginBottom: 4 }}>
+                          <Space size={6} wrap>
+                            <Tag color="cyan" style={{ borderRadius: 4, fontSize: 10, fontWeight: 700, margin: 0 }}>
+                              COLLAPSED ACCORDION CONTENTS
+                            </Tag>
+                            <Text strong style={{ fontSize: 12, color: '#0f172a' }}>
+                              {customerCount} Customer Acquisition{customerCount === 1 ? '' : 's'}
+                            </Text>
+                            <span style={{ color: '#94a3b8' }}>•</span>
+                            <span style={{ fontSize: 12, color: '#059669', fontWeight: 700 }}>
+                              Total Revenue: {revenueDisplay}
+                            </span>
+                            {month.downPaymentTotalMinor > 0 && (
+                              <>
+                                <span style={{ color: '#94a3b8' }}>•</span>
+                                <span style={{ fontSize: 11, color: '#475569' }}>
+                                  Deposits: <strong>{formatRevenueGHS(month.downPaymentTotalMinor)}</strong>
+                                </span>
+                              </>
+                            )}
+                          </Space>
+
+                          <span style={{ color: '#2563eb', fontWeight: 600, fontSize: 11 }}>
+                            Click row anywhere to unfold agreements & receipts ledger ↓
+                          </span>
+                        </div>
+
+                        {/* Narrative Memo Preview */}
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <FileTextOutlined style={{ color: '#059669', fontSize: 11, flexShrink: 0 }} />
+                          <Text strong style={{ fontSize: 11, color: '#065f46', flexShrink: 0 }}>
+                            Month Narrative Memo:
+                          </Text>
                           <Text
                             ellipsis={{ tooltip: month.description }}
-                            style={{
-                              maxWidth: isExpanded ? '60vw' : '420px',
-                              fontSize: 11,
-                              color: '#475569',
-                            }}
+                            style={{ fontSize: 11, color: '#475569', margin: 0, flex: 1 }}
                           >
                             {month.description}
                           </Text>
                         </div>
                       </div>
-                    </div>
-
-                    {/* Right: Revenue total pill + Share tag */}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                      <Tag
-                        color="purple"
-                        style={{ borderRadius: 8, fontWeight: 600, fontSize: 11, border: 'none' }}
+                    ) : (
+                      /* When unfolded, show small memo indicator */
+                      <div
+                        style={{
+                          fontSize: 11,
+                          color: '#475569',
+                          marginTop: 2,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                        }}
                       >
-                        {shareOfAllTime}% of all-time
-                      </Tag>
-
-                      <div style={{ textAlign: 'right' }}>
+                        <FileTextOutlined style={{ fontSize: 11, color: '#059669', flexShrink: 0 }} />
+                        <Text strong style={{ fontSize: 11, color: '#065f46', flexShrink: 0 }}>
+                          Month Performance Memo:
+                        </Text>
                         <Text
-                          strong
+                          ellipsis={{ tooltip: month.description }}
                           style={{
-                            fontSize: 17,
-                            fontWeight: 800,
-                            color: '#059669',
-                            fontVariantNumeric: 'tabular-nums',
-                            display: 'block',
+                            maxWidth: isExpanded ? '60vw' : '450px',
+                            fontSize: 11,
+                            color: '#475569',
                           }}
                         >
-                          {revenueDisplay}
+                          {month.description}
                         </Text>
                       </div>
-                    </div>
+                    )}
                   </div>
                 ),
                 children: (
@@ -1130,110 +1356,109 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
                         style={{ background: 'transparent', border: 'none' }}
                         items={month.newCustomers.map((c) => {
                           const isOutright = c.customerType === 'outright';
+                          const customerKey = `${month.monthKey}-${c.customerId}`;
+                          const isCustomerUnfolded = activeCustomerKeys.includes(customerKey);
+                          const isCustomerCollapsed = !isCustomerUnfolded;
 
                           return {
-                            key: `${month.monthKey}-${c.customerId}`,
+                            key: customerKey,
                             style: {
                               marginBottom: 10,
                               borderRadius: 10,
-                              border: '1px solid #e2e8f0',
-                              background: '#ffffff',
+                              border: isCustomerUnfolded ? '1.5px solid #059669' : '1px solid #e2e8f0',
+                              background: isCustomerCollapsed ? '#fcfcfc' : '#ffffff',
                               overflow: 'hidden',
                             },
-                            header: (
+                            label: (
                               <div
                                 style={{
                                   display: 'flex',
                                   alignItems: 'center',
                                   justifyContent: 'space-between',
                                   flexWrap: 'wrap',
+                                  gap: '8px 14px',
                                   width: '100%',
                                   padding: '2px 0',
-                                  gap: 8,
                                 }}
                               >
-                                {/* Left: Avatar + Customer Name + Property + Acquisition Description Preview */}
-                                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+                                {/* 1. Customer name and property */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                                   <Avatar
                                     size="small"
                                     style={{
                                       backgroundColor: isOutright ? '#06b6d4' : tokens.primary,
                                       fontSize: 12,
                                       fontWeight: 700,
-                                      marginTop: 2,
+                                      flexShrink: 0,
                                     }}
                                   >
-                                    {c.customerName.charAt(0).toUpperCase()}
+                                    {(c.customerName || 'U').charAt(0).toUpperCase()}
                                   </Avatar>
-
-                                  <div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                      <Text strong style={{ fontSize: 13, color: '#1e293b' }}>
-                                        {c.customerName}
-                                      </Text>
-                                      <Tag
-                                        color={isOutright ? 'cyan' : 'blue'}
-                                        style={{ borderRadius: 6, fontSize: 10, padding: '0 5px' }}
-                                      >
-                                        {isOutright ? 'OUTRIGHT' : 'PAYMENT PLAN'}
-                                      </Tag>
-                                    </div>
-
-                                    <div style={{ fontSize: 11, color: '#64748b', display: 'flex', alignItems: 'center', gap: 4 }}>
-                                      <HomeOutlined style={{ fontSize: 10 }} />
-                                      <span>{c.propertyName}</span>
-                                      <span>• Joined {dayjs(c.joinedDate).format('MMM D, YYYY')}</span>
-                                    </div>
-
-                                    {/* Acquisition Description Memo on Customer Header */}
-                                    <div
-                                      style={{
-                                        fontSize: 11,
-                                        color: '#475569',
-                                        marginTop: 3,
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 4,
-                                      }}
-                                    >
-                                      <FileTextOutlined style={{ fontSize: 10, color: '#059669' }} />
-                                      <Text
-                                        ellipsis={{ tooltip: c.description }}
-                                        style={{
-                                          maxWidth: isExpanded ? '55vw' : '360px',
-                                          fontSize: 11,
-                                          color: '#475569',
-                                        }}
-                                      >
-                                        {c.description}
-                                      </Text>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* Right: Revenue credited + Status tag */}
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <Text strong style={{ fontSize: 13, color: '#0f172a' }}>
+                                    {c.customerName || 'Unnamed customer'}
+                                  </Text>
                                   <Tag
-                                    color={c.planStatus === 'completed' ? 'success' : 'processing'}
-                                    style={{ borderRadius: 8, fontSize: 10, fontWeight: 600 }}
+                                    color="default"
+                                    style={{
+                                      borderRadius: 6,
+                                      fontSize: 11,
+                                      color: '#334155',
+                                      background: '#f8fafc',
+                                      border: '1px solid #e2e8f0',
+                                      margin: 0,
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 4,
+                                    }}
                                   >
-                                    {c.planStatus === 'completed' ? 'Fully Paid' : 'Active Plan'}
+                                    <HomeOutlined style={{ fontSize: 10, color: '#059669' }} />
+                                    {c.propertyName || 'Property Assigned'}
                                   </Tag>
-
-                                  <div style={{ textAlign: 'right' }}>
-                                    <Text
-                                      strong
-                                      style={{
-                                        fontSize: 14,
-                                        fontWeight: 700,
-                                        color: '#059669',
-                                        fontVariantNumeric: 'tabular-nums',
-                                      }}
-                                    >
-                                      {formatRevenueGHS(c.monthRevenueMinor)}
-                                    </Text>
-                                  </div>
+                                  <Tag
+                                    color={isOutright ? 'cyan' : 'blue'}
+                                    style={{ borderRadius: 6, fontSize: 10, padding: '0 5px', fontWeight: 600, margin: 0 }}
+                                  >
+                                    {isOutright ? 'OUTRIGHT' : 'PLAN'}
+                                  </Tag>
                                 </div>
+
+                                {/* 2. Date joined or paid down payment */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, color: '#64748b' }}>
+                                  <CalendarOutlined style={{ fontSize: 11 }} />
+                                  <span>{dayjs(c.joinedDate).isValid() ? dayjs(c.joinedDate).format('MMM D, YYYY') : (c.joinedDate || '—')}</span>
+                                </div>
+
+                                {/* 3. Down payment amount (green) */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <span style={{ fontSize: 11, color: '#64748b' }}>Down Payment:</span>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: '#059669', fontVariantNumeric: 'tabular-nums' }}>
+                                    {formatRevenueGHS(c.downPaymentMinor)}
+                                  </span>
+                                </div>
+
+                                {/* 4. Installments paid this month (blue) */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <span style={{ fontSize: 11, color: '#64748b' }}>Installments:</span>
+                                  <span style={{ fontSize: 12, fontWeight: 700, color: '#2563eb', fontVariantNumeric: 'tabular-nums' }}>
+                                    {formatRevenueGHS(c.installmentsMinor)}
+                                  </span>
+                                </div>
+
+                                {/* 5. Total collected from this customer this month */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  <span style={{ fontSize: 11, color: '#64748b' }}>Total This Month:</span>
+                                  <span style={{ fontSize: 13, fontWeight: 800, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>
+                                    {formatRevenueGHS(c.monthRevenueMinor)}
+                                  </span>
+                                </div>
+
+                                {/* 6. Status tag (plan status) */}
+                                <Tag
+                                  color={c.planStatus === 'completed' ? 'success' : c.planStatus === 'active' ? 'processing' : 'default'}
+                                  style={{ borderRadius: 6, fontSize: 10, fontWeight: 600, margin: 0 }}
+                                >
+                                  {c.planStatus === 'completed' ? 'Fully Paid' : c.planStatus === 'active' ? 'Active Plan' : (c.planStatus || 'Active')}
+                                </Tag>
                               </div>
                             ),
                             children: (
@@ -1249,15 +1474,20 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
                                     marginBottom: 14,
                                   }}
                                 >
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                                    <FileTextOutlined style={{ color: '#059669' }} />
-                                    <Text strong style={{ fontSize: 12, color: '#0f172a' }}>
-                                      Acquisition Description & Purchase Agreement Memo:
-                                    </Text>
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 6, flexWrap: 'wrap' }}>
+                                    <Space size={6}>
+                                      <FileTextOutlined style={{ color: '#059669', fontSize: 13 }} />
+                                      <Text strong style={{ fontSize: 12, color: '#0f172a' }}>
+                                        Acquisition Agreement & Description Memo:
+                                      </Text>
+                                    </Space>
+                                    <Tag color="success" style={{ fontSize: 10, borderRadius: 4, fontWeight: 600 }}>
+                                      Verified Contract Record
+                                    </Tag>
                                   </div>
-                                  <Text style={{ fontSize: 12, color: '#334155', lineHeight: 1.5, display: 'block' }}>
+                                  <Paragraph style={{ margin: 0, fontSize: 12, color: '#334155', lineHeight: 1.6, whiteSpace: 'normal', wordBreak: 'break-word' }}>
                                     {c.description}
-                                  </Text>
+                                  </Paragraph>
                                 </div>
 
                                 {/* Customer Financial Overview Strip */}
@@ -1326,77 +1556,85 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
                                     Collections & Receipts Logged for {month.monthLabel}:
                                   </Text>
 
-                                  <Table
-                                    dataSource={c.transactions}
-                                    rowKey="id"
-                                    pagination={false}
-                                    size="small"
-                                    columns={[
-                                      {
-                                        title: 'Date',
-                                        dataIndex: 'paidOn',
-                                        key: 'paidOn',
-                                        width: 110,
-                                        render: (val: string) => (
-                                          <Text style={{ fontSize: 11 }}>{dayjs(val).format('MMM D, YYYY')}</Text>
-                                        ),
-                                      },
-                                      {
-                                        title: 'Description & Transaction Memo',
-                                        dataIndex: 'label',
-                                        key: 'label',
-                                        render: (val: string, record) => (
-                                          <div>
+                                  {c.transactions.length === 0 ? (
+                                    <Empty
+                                      image={Empty.PRESENTED_IMAGE_SIMPLE}
+                                      description="No payments recorded yet"
+                                      style={{ padding: '16px 0', background: '#f8fafc', borderRadius: 8, border: '1px dashed #e2e8f0' }}
+                                    />
+                                  ) : (
+                                    <Table
+                                      dataSource={c.transactions}
+                                      rowKey="id"
+                                      pagination={false}
+                                      size="small"
+                                      columns={[
+                                        {
+                                          title: 'Date',
+                                          dataIndex: 'paidOn',
+                                          key: 'paidOn',
+                                          width: 120,
+                                          render: (val: string) => (
+                                            <Text style={{ fontSize: 11 }}>
+                                              {dayjs(val).isValid() ? dayjs(val).format('MMM D, YYYY') : (val || '—')}
+                                            </Text>
+                                          ),
+                                        },
+                                        {
+                                          title: 'Installment Number',
+                                          dataIndex: 'installmentNumber',
+                                          key: 'installmentNumber',
+                                          width: 160,
+                                          render: (val: any, record) => (
                                             <Space size={6}>
-                                              <Tag color={record.type === 'down_payment' ? 'green' : 'blue'} style={{ fontSize: 10, borderRadius: 4 }}>
-                                                {record.type.replace('_', ' ').toUpperCase()}
+                                              <Tag
+                                                color={record.type === 'down_payment' ? 'green' : record.type === 'outright_purchase' ? 'cyan' : 'blue'}
+                                                style={{ fontSize: 10, borderRadius: 4 }}
+                                              >
+                                                {val || record.label || '—'}
                                               </Tag>
-                                              <Text strong style={{ fontSize: 11 }}>{val}</Text>
                                             </Space>
-                                            {record.description && (
-                                              <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-                                                {record.description}
-                                              </div>
-                                            )}
-                                          </div>
-                                        ),
-                                      },
-                                      {
-                                        title: 'Payment Method',
-                                        dataIndex: 'method',
-                                        key: 'method',
-                                        width: 150,
-                                        render: (val: string) => (
-                                          <Tag color="geekblue" style={{ borderRadius: 6, fontSize: 10 }}>
-                                            {val}
-                                          </Tag>
-                                        ),
-                                      },
-                                      {
-                                        title: 'Reference',
-                                        dataIndex: 'reference',
-                                        key: 'reference',
-                                        width: 120,
-                                        render: (val: string) => (
-                                          <Text copyable style={{ fontSize: 11, fontFamily: 'monospace' }}>
-                                            {val || '—'}
-                                          </Text>
-                                        ),
-                                      },
-                                      {
-                                        title: 'Amount',
-                                        dataIndex: 'amountMinor',
-                                        key: 'amountMinor',
-                                        align: 'right' as const,
-                                        width: 130,
-                                        render: (val: number) => (
-                                          <span style={{ fontSize: 12, fontWeight: 700, color: '#059669', fontVariantNumeric: 'tabular-nums' }}>
-                                            {formatRevenueGHS(val)}
-                                          </span>
-                                        ),
-                                      },
-                                    ]}
-                                  />
+                                          ),
+                                        },
+                                        {
+                                          title: 'Amount',
+                                          dataIndex: 'amountMinor',
+                                          key: 'amountMinor',
+                                          align: 'right' as const,
+                                          width: 140,
+                                          render: (val: number) => (
+                                            <span style={{ fontSize: 12, fontWeight: 700, color: '#059669', fontVariantNumeric: 'tabular-nums' }}>
+                                              {formatRevenueGHS(val)}
+                                            </span>
+                                          ),
+                                        },
+                                        {
+                                          title: 'Method',
+                                          dataIndex: 'method',
+                                          key: 'method',
+                                          width: 150,
+                                          render: (val: string) => (
+                                            <Tag color="geekblue" style={{ borderRadius: 6, fontSize: 10 }}>
+                                              {val || '—'}
+                                            </Tag>
+                                          ),
+                                        },
+                                        {
+                                          title: 'Reference',
+                                          dataIndex: 'reference',
+                                          key: 'reference',
+                                          width: 130,
+                                          render: (val: string) => (
+                                            val ? (
+                                              <Text copyable style={{ fontSize: 11, fontFamily: 'monospace' }}>
+                                                {val}
+                                              </Text>
+                                            ) : '—'
+                                          ),
+                                        },
+                                      ]}
+                                    />
+                                  )}
                                 </div>
 
                                 {/* Customer Contact & Profile Link */}
@@ -1440,8 +1678,11 @@ export const MonthlyCustomerRevenueDrawer: React.FC<MonthlyCustomerRevenueDrawer
               };
             })}
           />
-        </div>
-      )}
-    </Drawer>
-  );
+        )}
+      </div>
+    )}
+  </>
+)}
+</Drawer>
+);
 };
