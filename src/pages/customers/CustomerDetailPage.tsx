@@ -1,5 +1,4 @@
-// src/pages/customers/CustomerDetailPage.tsx
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate, useParams, useSearchParams, useLocation } from 'react-router-dom';
 import {
   Card, Row, Col, Typography, Tag, Button, Space, Tabs, Table,
@@ -47,6 +46,7 @@ import { PageHeader } from '@/components/shared/PageHeader';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto } from '@/utils/userPhotoStorage';
 import { ProgressCell } from '@/components/shared/ProgressCell';
 import { tokens } from '@/constants/tokens';
 import { PhoneInput } from '@/components/shared/PhoneInput';
@@ -335,6 +335,11 @@ export const CustomerDetailPage: React.FC = () => {
   const deeds = deedsData?.items ?? [];
 
   const isFullyPaid = customer?.type === 'fully_paid' || paymentPlan?.status === 'completed';
+
+  const planSchedule = useMemo(() => {
+    if (!paymentPlan) return null;
+    return buildPaymentPlanSchedule(paymentPlan, installments, recentPayments);
+  }, [paymentPlan, installments, recentPayments]);
 
   // Customer Portal (prototype) has no public/customer-authenticated way to
   // read this data — see src/mock/customerPortalCache.ts. Piggyback on this
@@ -684,11 +689,25 @@ export const CustomerDetailPage: React.FC = () => {
   // ── Payments columns ──────────────────────────────────────────────────────
   const paymentsColumns = [
     {
-      title: 'Date',
+      title: 'Paid On',
       dataIndex: 'paidOn',
       key: 'paidOn',
-      render: (date: string) => dayjs(date).format('MMMM DD, YYYY HH:mm'),
+      render: (date: string) => (date ? dayjs(date).format('DD MMM YYYY') : '-'),
       sorter: (a: any, b: any) => dayjs(a.paidOn).unix() - dayjs(b.paidOn).unix(),
+    },
+    {
+      title: 'Recorded On',
+      dataIndex: 'recordedOn',
+      key: 'recordedOn',
+      render: (_: any, record: any) => {
+        const recorded = record.recordedOn || record.createdAt || record.updatedAt || record.paidOn;
+        return recorded ? dayjs(recorded).format('DD MMM YYYY HH:mm') : '-';
+      },
+      sorter: (a: any, b: any) => {
+        const aDate = a.recordedOn || a.createdAt || a.updatedAt || a.paidOn;
+        const bDate = b.recordedOn || b.createdAt || b.updatedAt || b.paidOn;
+        return dayjs(aDate).unix() - dayjs(bDate).unix();
+      },
     },
     {
       title: 'Amount',
@@ -1000,7 +1019,17 @@ export const CustomerDetailPage: React.FC = () => {
             <Row gutter={[16, 16]} align="middle">
               <Col xs={24} sm={10} md={8}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <PhotoUpload entityType="customer" entityId={customer.id} size={64} />
+                  <PhotoUpload
+                    entityType="customer"
+                    entityId={customer.id}
+                    size={64}
+                    src={customer.avatarUrl || customer.photoUrl}
+                    onPhotoChange={(url) => {
+                      if (customer?.id) {
+                        setPhoto('customer', customer.id, url || '');
+                      }
+                    }}
+                  />
                   <div>
                     <Title level={4} style={{ margin: 0, fontSize: 18, wordBreak: 'break-word' }}>
                       {customer.firstName} {customer.lastName}
@@ -1100,6 +1129,13 @@ export const CustomerDetailPage: React.FC = () => {
                           </Descriptions.Item>
                           <Descriptions.Item label="Down Payment">
                             <MoneyText minor={paymentPlan.downPaymentMinor} />
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Total Paid to Date">
+                            <span style={{ color: '#16a34a', fontWeight: 600 }}>
+                              <MoneyText
+                                minor={planSchedule?.totalPaidToDateMinor ?? Math.max(0, (paymentPlan.totalAmountMinor || 0) - (paymentPlan.balanceMinor ?? 0))}
+                              />
+                            </span>
                           </Descriptions.Item>
                           <Descriptions.Item label="Balance">
                             <MoneyText minor={paymentPlan.balanceMinor} />

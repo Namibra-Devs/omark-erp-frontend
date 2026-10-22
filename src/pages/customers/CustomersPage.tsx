@@ -9,7 +9,7 @@ import {
   useUpdateCustomerMutation,
   customerKeys,
 } from '@/api/customers';
-import { useProspectsQuery } from '@/api/prospects';
+import { useProspectsQuery, getStoredProspects, saveStoredProspect } from '@/api/prospects';
 import {
   usePaymentPlansQuery,
   usePaymentPlanQuery,
@@ -69,6 +69,7 @@ import {
   CodeOutlined,
   DownloadOutlined,
   CloseOutlined,
+  UserSwitchOutlined,
   ArrowLeftOutlined,
   ArrowRightOutlined,
   ShareAltOutlined,
@@ -386,6 +387,58 @@ export const CustomersPage: React.FC = () => {
   const [activeEditTab, setActiveEditTab] = useState<'customer' | 'payment' | 'history'>('customer');
   const [form] = Form.useForm();
   const [addForm] = Form.useForm();
+
+  // Prospect conversion states for Add Customer modal
+  const [selectedProspectId, setSelectedProspectId] = useState<string | null>(null);
+  const [showProspectPicker, setShowProspectPicker] = useState<boolean>(false);
+
+  const activeProspects = React.useMemo(() => {
+    const map = new Map<string, any>();
+    const stored = getStoredProspects();
+    [...rawProspects, ...stored].forEach((p) => {
+      if (p && p.id && p.status !== 'purchased') {
+        map.set(p.id, p);
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
+      const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }, [rawProspects]);
+
+  const selectedProspect = React.useMemo(() => {
+    if (!selectedProspectId) return null;
+    return activeProspects.find((p) => p.id === selectedProspectId) || null;
+  }, [selectedProspectId, activeProspects]);
+
+  const handleSelectProspect = (prospectId: string) => {
+    const p = activeProspects.find((item) => item.id === prospectId);
+    if (!p) return;
+    setSelectedProspectId(prospectId);
+    addForm.setFieldsValue({
+      firstName: p.firstName || '',
+      lastName: p.lastName || '',
+      phoneNumber: p.phoneNumber || '',
+      address: p.address || '',
+      propertyId: (p as any).propertyId || addForm.getFieldValue('propertyId'),
+    });
+    addForm.validateFields(['phoneNumber', 'firstName', 'lastName']).catch(() => {});
+    message.success(`Prospect details populated for ${p.firstName} ${p.lastName}`);
+  };
+
+  const handleClearProspectSelection = () => {
+    setSelectedProspectId(null);
+    setShowProspectPicker(false);
+    addForm.resetFields();
+  };
+
+  const handleCloseAddModal = () => {
+    setAddModal(false);
+    setSelectedProspectId(null);
+    setShowProspectPicker(false);
+    addForm.resetFields();
+  };
 
   // Fetch full server payment plan details (with paidMinor, hasPayments, installmentsPaidCount) when edit modal is open
   const { data: serverEditPlanDetails } = usePaymentPlanQuery(
@@ -751,6 +804,10 @@ export const CustomersPage: React.FC = () => {
                 <div class="item-value">GHS ${(plan.downPaymentMinor / 100).toLocaleString()}</div>
               </div>
               <div class="item">
+                <div class="item-label">Total Paid to Date</div>
+                <div class="item-value" style="color: #389e0d; font-weight: bold;">GHS ${(Math.max(0, (plan.totalAmountMinor || 0) - (plan.balanceMinor ?? 0)) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+              </div>
+              <div class="item">
                 <div class="item-label">Current Balance</div>
                 <div class="item-value" style="color: ${plan.balanceMinor > 0 ? '#cf1322' : '#389e0d'};">GHS ${(plan.balanceMinor / 100).toLocaleString()}</div>
               </div>
@@ -803,14 +860,15 @@ const handleAddCustomer = async (values: any) => {
         firstName: values.firstName,
         lastName: values.lastName,
         phoneNumber: values.phoneNumber,
+        excludeProspectId: selectedProspectId || undefined,
+        prospectId: selectedProspectId || undefined,
       },
       { existingCustomers: rawCustomers, existingProspects: rawProspects }
     );
     
-    // Base customer data — POST /customers only accepts these fields plus
-    // an optional createPlan; email/notes/prospectId are not part of the
-    // schema and would be rejected (or silently ignored) by the backend.
+    // Base customer data
     const customerData: any = {
+      prospectId: selectedProspectId || undefined,
       firstName: values.firstName,
       lastName: values.lastName,
       phoneNumber: values.phoneNumber,
@@ -898,10 +956,22 @@ const handleAddCustomer = async (values: any) => {
       });
     }
 
-    message.success('Customer created successfully!');
+    if (selectedProspectId) {
+      const stored = getStoredProspects();
+      const target = stored.find((p) => p.id === selectedProspectId);
+      if (target) {
+        saveStoredProspect({
+          ...target,
+          status: 'purchased',
+        });
+      }
+      window.dispatchEvent(new Event('omark-prospects-changed'));
+      message.success(`Prospect ${values.firstName} ${values.lastName} converted to customer successfully!`);
+    } else {
+      message.success('Customer created successfully!');
+    }
 
-    setAddModal(false);
-    addForm.resetFields();
+    handleCloseAddModal();
     
     // Immediately synchronize queries with the backend
     await Promise.all([
@@ -1247,7 +1317,13 @@ const handleAddCustomer = async (values: any) => {
       width: 220,
       render: (_: any, record: Customer) => (
         <Space>
-          <PhotoUpload entityType="customer" entityId={record.id} size={32} editable={false} />
+          <PhotoUpload
+            entityType="customer"
+            entityId={record.id}
+            size={32}
+            editable={false}
+            src={record.avatarUrl || record.photoUrl}
+          />
           <div>
             <Text strong>{record.firstName} {record.lastName}</Text>
             <br />
@@ -1300,7 +1376,13 @@ const handleAddCustomer = async (values: any) => {
         }
         return (
           <Space size={6}>
-            <PhotoUpload entityType="staff" entityId={staff.id} size={24} editable={false} />
+            <PhotoUpload
+              entityType="staff"
+              entityId={staff.id}
+              size={24}
+              editable={false}
+              src={staff.avatarUrl || staff.photoUrl}
+            />
             <div>
               <Text strong style={{ fontSize: 12, display: 'block', lineHeight: 1.2 }}>
                 {getUserFullName(staff)}
@@ -1744,15 +1826,85 @@ const handleAddCustomer = async (values: any) => {
           </Space>
         }
         open={addModal}
-        onCancel={() => {
-          setAddModal(false);
-          addForm.resetFields();
-        }}
+        onCancel={handleCloseAddModal}
         footer={null}
         width={700}
         style={{ maxWidth: '95%', top: 20 }}
         bodyStyle={{ padding: '16px', maxHeight: '70vh', overflowY: 'auto' }}
       >
+        {/* ── Conversion Link & Quick Selector Banner ── */}
+        <div
+          style={{
+            background: selectedProspect ? '#f0fdf4' : '#f8fafc',
+            border: selectedProspect ? '1px solid #86efac' : '1px solid #e2e8f0',
+            borderRadius: 8,
+            padding: '12px 14px',
+            marginBottom: 16,
+            transition: 'all 0.2s ease',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+            <Space align="start">
+              <UserSwitchOutlined style={{ color: selectedProspect ? '#16a34a' : tokens.primary, fontSize: 18, marginTop: 2 }} />
+              <div>
+                <Text strong style={{ color: selectedProspect ? '#15803d' : '#1e293b' }}>
+                  {selectedProspect
+                    ? `Converting Prospect: ${selectedProspect.firstName} ${selectedProspect.lastName}`
+                    : 'Converting an existing prospect?'}
+                </Text>
+                <div style={{ fontSize: 12, color: selectedProspect ? '#166534' : '#64748b' }}>
+                  {selectedProspect
+                    ? `Contact: ${selectedProspect.phoneNumber} • Information populated. Submitting registers the customer and converts this prospect.`
+                    : 'Select an existing prospect from your pipeline to convert them to a customer directly.'}
+                </div>
+              </div>
+            </Space>
+            <Space>
+              {selectedProspect ? (
+                <Button
+                  size="small"
+                  icon={<CloseOutlined />}
+                  onClick={handleClearProspectSelection}
+                >
+                  Clear Prospect
+                </Button>
+              ) : (
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<UserSwitchOutlined />}
+                  style={{ background: '#16a34a', borderColor: '#16a34a' }}
+                  onClick={() => setShowProspectPicker((prev) => !prev)}
+                >
+                  {showProspectPicker ? 'Hide Prospect List' : 'Convert Existing Prospect'}
+                </Button>
+              )}
+            </Space>
+          </div>
+
+          {(showProspectPicker || selectedProspect) && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #cbd5e1' }}>
+              <Text style={{ fontSize: 12, marginBottom: 6, display: 'block', fontWeight: 500, color: '#475569' }}>
+                Select a prospect to convert:
+              </Text>
+              <Select
+                showSearch
+                style={{ width: '100%' }}
+                placeholder="Search by prospect name or phone number..."
+                value={selectedProspectId}
+                onChange={handleSelectProspect}
+                filterOption={(input, option) =>
+                  (option?.label as unknown as string || '').toLowerCase().includes(input.toLowerCase())
+                }
+                options={activeProspects.map((p: any) => ({
+                  value: p.id,
+                  label: `${p.firstName} ${p.lastName} — ${p.phoneNumber} (${p.source || 'Lead'}${p.notes ? ` • ${p.notes.slice(0, 30)}` : ''})`,
+                }))}
+              />
+            </div>
+          )}
+        </div>
+
         <Form
           form={addForm}
           layout="vertical"
@@ -1778,6 +1930,7 @@ const handleAddCustomer = async (values: any) => {
                     getOtherName: () => addForm.getFieldValue('lastName'),
                     getExistingCustomers: () => rawCustomers,
                     getExistingProspects: () => rawProspects,
+                    getProspectId: () => selectedProspectId || undefined,
                   }),
                 ]}
               >
@@ -1796,6 +1949,7 @@ const handleAddCustomer = async (values: any) => {
                     getOtherName: () => addForm.getFieldValue('firstName'),
                     getExistingCustomers: () => rawCustomers,
                     getExistingProspects: () => rawProspects,
+                    getProspectId: () => selectedProspectId || undefined,
                   }),
                 ]}
               >
@@ -1813,6 +1967,7 @@ const handleAddCustomer = async (values: any) => {
                 entityType: 'customer',
                 getExistingCustomers: () => rawCustomers,
                 getExistingProspects: () => rawProspects,
+                getProspectId: () => selectedProspectId || undefined,
               }),
             ]}
           >
@@ -2084,13 +2239,12 @@ const handleAddCustomer = async (values: any) => {
                 type="primary" 
                 htmlType="submit" 
                 loading={createCustomer.isPending || loading}
+                icon={selectedProspectId ? <UserSwitchOutlined /> : undefined}
+                style={selectedProspectId ? { background: '#16a34a', borderColor: '#16a34a' } : undefined}
               >
-                Add Customer
+                {selectedProspectId ? 'Convert Prospect to Customer' : 'Add Customer'}
               </Button>
-              <Button onClick={() => {
-                setAddModal(false);
-                addForm.resetFields();
-              }}>
+              <Button onClick={handleCloseAddModal}>
                 Cancel
               </Button>
             </Space>
@@ -2134,7 +2288,17 @@ const handleAddCustomer = async (values: any) => {
                   <>
                     {selectedCustomer && (
                       <div style={{ textAlign: 'center', marginBottom: 16 }}>
-                        <PhotoUpload entityType="customer" entityId={selectedCustomer.id} size={72} />
+                        <PhotoUpload
+                          entityType="customer"
+                          entityId={selectedCustomer.id}
+                          size={72}
+                          src={selectedCustomer.avatarUrl || selectedCustomer.photoUrl}
+                          onPhotoChange={(url) => {
+                            if (selectedCustomer?.id) {
+                              setPhoto('customer', selectedCustomer.id, url || '');
+                            }
+                          }}
+                        />
                       </div>
                     )}
                     <Row gutter={[8, 0]}>
@@ -2944,6 +3108,17 @@ const handleAddCustomer = async (values: any) => {
                       </Descriptions.Item>
                       <Descriptions.Item label="Down Payment">
                         <MoneyText minor={getPaymentPlan(selectedCustomer.id)?.downPaymentMinor || 0} />
+                      </Descriptions.Item>
+                      <Descriptions.Item label="Total Paid to Date">
+                        <span style={{ color: '#16a34a', fontWeight: 600 }}>
+                          <MoneyText
+                            minor={Math.max(
+                              0,
+                              (getPaymentPlan(selectedCustomer.id)?.totalAmountMinor || 0) -
+                                (getPaymentPlan(selectedCustomer.id)?.balanceMinor ?? 0)
+                            )}
+                          />
+                        </span>
                       </Descriptions.Item>
                       <Descriptions.Item label="Balance">
                         <MoneyText minor={getPaymentPlan(selectedCustomer.id)?.balanceMinor || 0} />

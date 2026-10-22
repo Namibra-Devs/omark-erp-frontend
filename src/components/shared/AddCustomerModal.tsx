@@ -1,15 +1,22 @@
 // src/components/shared/AddCustomerModal.tsx
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Modal, Form, Input, Select, Row, Col, Button, Space, message,
   InputNumber, DatePicker, Typography, Alert,
 } from 'antd';
-import { UserAddOutlined, PlusOutlined, HomeOutlined } from '@ant-design/icons';
+import {
+  UserAddOutlined,
+  PlusOutlined,
+  HomeOutlined,
+  UserSwitchOutlined,
+  CloseOutlined,
+  CheckCircleOutlined,
+} from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { useCreateCustomerMutation, useCustomersQuery } from '@/api/customers';
-import { useProspectsQuery } from '@/api/prospects';
+import { useProspectsQuery, getStoredProspects, saveStoredProspect } from '@/api/prospects';
 import { usePropertiesQuery } from '@/api/properties';
 import { tagPayloadWithBranch } from '@/utils/branchIsolation';
 import { tokens } from '@/constants/tokens';
@@ -19,6 +26,7 @@ import {
   assertNoCustomerDuplicates,
 } from '@/utils/duplicateValidation';
 import { saveStoredPaymentPlan, saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
+import type { Prospect } from '@/types';
 
 const { Option } = Select;
 const { Text } = Typography;
@@ -27,12 +35,16 @@ export interface AddCustomerModalProps {
   open: boolean;
   onClose: () => void;
   onSuccess?: (customerId: string) => void;
+  initialProspect?: Prospect | null;
+  initialProspectId?: string | null;
 }
 
 export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   open,
   onClose,
   onSuccess,
+  initialProspect,
+  initialProspectId,
 }) => {
   const { user } = useAuth();
   const [form] = Form.useForm();
@@ -45,26 +57,99 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
   const existingCustomers = customersData?.items ?? [];
   const existingProspects = prospectsData?.items ?? [];
 
+  const [selectedProspectId, setSelectedProspectId] = useState<string | null>(null);
+  const [showProspectPicker, setShowProspectPicker] = useState<boolean>(false);
+
+  // Consolidate unique active prospects from server query, local storage, and initial prospect
+  const activeProspects = useMemo(() => {
+    const map = new Map<string, Prospect>();
+    const stored = getStoredProspects();
+    if (initialProspect && initialProspect.id) {
+      map.set(initialProspect.id, initialProspect);
+    }
+    [...existingProspects, ...stored].forEach((p) => {
+      if (p && p.id && p.status !== 'purchased') {
+        map.set(p.id, p);
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const nameA = `${a.firstName || ''} ${a.lastName || ''}`.trim().toLowerCase();
+      const nameB = `${b.firstName || ''} ${b.lastName || ''}`.trim().toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
+  }, [existingProspects, initialProspect]);
+
+  const selectedProspect = useMemo(() => {
+    if (!selectedProspectId) return null;
+    return activeProspects.find((p) => p.id === selectedProspectId) || null;
+  }, [selectedProspectId, activeProspects]);
+
+  const handleSelectProspect = (prospectId: string) => {
+    const p = activeProspects.find((item) => item.id === prospectId) || (initialProspect?.id === prospectId ? initialProspect : null);
+    if (!p) return;
+    setSelectedProspectId(prospectId);
+    form.setFieldsValue({
+      firstName: p.firstName || '',
+      lastName: p.lastName || '',
+      phoneNumber: p.phoneNumber || '',
+      address: p.address || '',
+      propertyId: (p as any).propertyId || form.getFieldValue('propertyId'),
+    });
+    // Revalidate fields so any previous red duplicate warning on this prospect's own phone is cleared
+    form.validateFields(['phoneNumber', 'firstName', 'lastName']).catch(() => {});
+    message.success(`Prospect details populated for ${p.firstName} ${p.lastName}`);
+  };
+
+  // Synchronize initialProspect or initialProspectId when modal opens
+  React.useEffect(() => {
+    if (open) {
+      const targetId = initialProspectId || initialProspect?.id;
+      if (targetId) {
+        handleSelectProspect(targetId);
+      }
+    } else {
+      setSelectedProspectId(null);
+      setShowProspectPicker(false);
+      form.resetFields();
+    }
+  }, [open, initialProspectId, initialProspect]);
+
+  const handleClearProspectSelection = () => {
+    setSelectedProspectId(null);
+    setShowProspectPicker(false);
+    form.resetFields();
+  };
+
+  const handleModalClose = () => {
+    form.resetFields();
+    setSelectedProspectId(null);
+    setShowProspectPicker(false);
+    onClose();
+  };
+
   const handleFinish = async (values: any) => {
     try {
-      // Hard pre-submission rejection guard
+      // Hard pre-submission rejection guard (excluding the selected prospect itself)
       assertNoCustomerDuplicates(
         {
           firstName: values.firstName,
           lastName: values.lastName,
           phoneNumber: values.phoneNumber,
+          excludeProspectId: selectedProspectId || undefined,
+          prospectId: selectedProspectId || undefined,
         },
         { existingCustomers, existingProspects }
       );
 
       const customerData: any = {
+        prospectId: selectedProspectId || undefined,
         firstName: values.firstName,
         lastName: values.lastName,
         phoneNumber: values.phoneNumber,
         address: values.address,
         type: values.type,
         propertyId: values.propertyId,
-        assignedUserId: user?.id,
+        assignedUserId: selectedProspect?.assignedUserId || user?.id,
         createdByUserId: user?.id,
       };
 
@@ -131,9 +216,22 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
         saveCustomerPlanDefinition(newCustomer.id, planObj).catch(() => {});
       }
 
-      message.success(`Customer ${values.firstName} ${values.lastName} added successfully!`);
-      form.resetFields();
-      onClose();
+      if (selectedProspectId) {
+        const stored = getStoredProspects();
+        const target = stored.find((p) => p.id === selectedProspectId);
+        if (target) {
+          saveStoredProspect({
+            ...target,
+            status: 'purchased',
+          });
+        }
+        window.dispatchEvent(new Event('omark-prospects-changed'));
+        message.success(`Prospect ${values.firstName} ${values.lastName} converted to customer successfully!`);
+      } else {
+        message.success(`Customer ${values.firstName} ${values.lastName} added successfully!`);
+      }
+
+      handleModalClose();
       onSuccess?.(newCustomer.id);
     } catch (err: any) {
       message.error(err?.error?.message || err?.message || 'Failed to add customer');
@@ -149,15 +247,85 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
         </Space>
       }
       open={open}
-      onCancel={() => {
-        form.resetFields();
-        onClose();
-      }}
+      onCancel={handleModalClose}
       footer={null}
       width={640}
       style={{ maxWidth: '95%', top: 20 }}
       destroyOnClose
     >
+      {/* ── Conversion Link & Quick Selector Banner ── */}
+      <div
+        style={{
+          background: selectedProspect ? '#f0fdf4' : '#f8fafc',
+          border: selectedProspect ? '1px solid #86efac' : '1px solid #e2e8f0',
+          borderRadius: 8,
+          padding: '12px 14px',
+          marginBottom: 16,
+          transition: 'all 0.2s ease',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <Space align="start">
+            <UserSwitchOutlined style={{ color: selectedProspect ? '#16a34a' : tokens.primary, fontSize: 18, marginTop: 2 }} />
+            <div>
+              <Text strong style={{ color: selectedProspect ? '#15803d' : '#1e293b' }}>
+                {selectedProspect
+                  ? `Converting Prospect: ${selectedProspect.firstName} ${selectedProspect.lastName}`
+                  : 'Converting an existing prospect?'}
+              </Text>
+              <div style={{ fontSize: 12, color: selectedProspect ? '#166534' : '#64748b' }}>
+                {selectedProspect
+                  ? `Contact: ${selectedProspect.phoneNumber} • Information populated. Submitting registers the customer and converts this prospect.`
+                  : 'Select an existing prospect from your pipeline to convert them to a customer directly.'}
+              </div>
+            </div>
+          </Space>
+          <Space>
+            {selectedProspect ? (
+              <Button
+                size="small"
+                icon={<CloseOutlined />}
+                onClick={handleClearProspectSelection}
+              >
+                Clear Prospect
+              </Button>
+            ) : (
+              <Button
+                type="primary"
+                size="small"
+                icon={<UserSwitchOutlined />}
+                style={{ background: '#16a34a', borderColor: '#16a34a' }}
+                onClick={() => setShowProspectPicker((prev) => !prev)}
+              >
+                {showProspectPicker ? 'Hide Prospect List' : 'Convert Existing Prospect'}
+              </Button>
+            )}
+          </Space>
+        </div>
+
+        {(showProspectPicker || selectedProspect) && (
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px dashed #cbd5e1' }}>
+            <Text style={{ fontSize: 12, marginBottom: 6, display: 'block', fontWeight: 500, color: '#475569' }}>
+              Select a prospect from the pipeline:
+            </Text>
+            <Select
+              showSearch
+              style={{ width: '100%' }}
+              placeholder="Search by prospect name or phone number..."
+              value={selectedProspectId}
+              onChange={handleSelectProspect}
+              filterOption={(input, option) =>
+                (option?.label as unknown as string || '').toLowerCase().includes(input.toLowerCase())
+              }
+              options={activeProspects.map((p) => ({
+                value: p.id,
+                label: `${p.firstName} ${p.lastName} — ${p.phoneNumber} (${p.source || 'Lead'}${p.notes ? ` • ${p.notes.slice(0, 30)}` : ''})`,
+              }))}
+            />
+          </div>
+        )}
+      </div>
+
       <Form
         form={form}
         layout="vertical"
@@ -182,6 +350,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   getOtherName: () => form.getFieldValue('lastName'),
                   getExistingCustomers: () => existingCustomers,
                   getExistingProspects: () => existingProspects,
+                  getProspectId: () => selectedProspectId || undefined,
                 }),
               ]}
             >
@@ -200,6 +369,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
                   getOtherName: () => form.getFieldValue('firstName'),
                   getExistingCustomers: () => existingCustomers,
                   getExistingProspects: () => existingProspects,
+                  getProspectId: () => selectedProspectId || undefined,
                 }),
               ]}
             >
@@ -217,6 +387,7 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
               entityType: 'customer',
               getExistingCustomers: () => existingCustomers,
               getExistingProspects: () => existingProspects,
+              getProspectId: () => selectedProspectId || undefined,
             }),
           ]}
         >
@@ -327,9 +498,15 @@ export const AddCustomerModal: React.FC<AddCustomerModalProps> = ({
 
         <Form.Item style={{ marginBottom: 0, textAlign: 'right', marginTop: 16 }}>
           <Space>
-            <Button onClick={() => { form.resetFields(); onClose(); }}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={createCustomer.isPending} icon={<PlusOutlined />}>
-              Create Customer
+            <Button onClick={handleModalClose}>Cancel</Button>
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={createCustomer.isPending}
+              icon={selectedProspectId ? <UserSwitchOutlined /> : <PlusOutlined />}
+              style={selectedProspectId ? { background: '#16a34a', borderColor: '#16a34a' } : undefined}
+            >
+              {selectedProspectId ? 'Convert Prospect to Customer' : 'Create Customer'}
             </Button>
           </Space>
         </Form.Item>

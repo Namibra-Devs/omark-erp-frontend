@@ -5,11 +5,12 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Modal, Form, Select, Radio, InputNumber, DatePicker, Button, Space, Alert, message } from 'antd';
+import { UserOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { useConvertProspectMutation } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import { usePropertiesQuery, formatPropertyPrice } from '@/api/properties';
-import { assertNoCustomerDuplicates, checkCustomerConflicts } from '@/utils/duplicateValidation';
+import { assertNoCustomerDuplicates, checkCustomerConflicts, arePhonesDuplicate } from '@/utils/duplicateValidation';
 import { saveStoredPaymentPlan, saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
 import type { Prospect, CustomerType } from '@/types';
 
@@ -42,17 +43,29 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
 
   const convertProspect = useConvertProspectMutation();
 
-  // Check if a customer already exists with the same phone or name
-  const existingCustomerConflicts = prospect
-    ? checkCustomerConflicts(
-        {
-          firstName: prospect.firstName,
-          lastName: prospect.lastName,
-          phoneNumber: prospect.phoneNumber,
-        },
-        { existingCustomers }
-      ).filter((c) => c.target === 'customer')
-    : [];
+  // Check if a customer already exists matching this prospect
+  const matchedCustomer = prospect
+    ? existingCustomers.find(
+        (c) =>
+          (c.prospectId && (c.prospectId === prospect.id || c.prospectId === (prospect as any)._id)) ||
+          (c.phoneNumber && prospect.phoneNumber && arePhonesDuplicate(c.phoneNumber, prospect.phoneNumber))
+      )
+    : undefined;
+
+  // Check for any other conflicts
+  const otherCustomerConflicts =
+    prospect && !matchedCustomer
+      ? checkCustomerConflicts(
+          {
+            firstName: prospect.firstName,
+            lastName: prospect.lastName,
+            phoneNumber: prospect.phoneNumber,
+            excludeProspectId: prospect.id,
+            prospectId: prospect.id,
+          },
+          { existingCustomers }
+        ).filter((c) => c.target === 'customer')
+      : [];
 
   const handleClose = () => {
     form.resetFields();
@@ -65,15 +78,23 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
     if (!prospect) return;
 
     try {
-      // Hard pre-submission rejection guard
-      assertNoCustomerDuplicates(
-        {
-          firstName: prospect.firstName,
-          lastName: prospect.lastName,
-          phoneNumber: prospect.phoneNumber,
-        },
-        { existingCustomers }
+      // If customer record already exists for this prospect, navigate directly to it
+      if (matchedCustomer) {
+        message.info(`${prospect.firstName} ${prospect.lastName} is already registered as a customer!`);
+        handleClose();
+        onConverted?.(matchedCustomer.id);
+        navigate(`/customers/${matchedCustomer.id}`);
+        return;
+      }
+
+      // Only block if a distinct customer already has this exact phone number
+      const hardPhoneConflict = otherCustomerConflicts.find(
+        (c) => c.field === 'phoneNumber' && c.matchedRecord.id !== prospect.id
       );
+      if (hardPhoneConflict) {
+        message.error(hardPhoneConflict.message);
+        return;
+      }
 
       const createPlan =
         customerType === 'payment_plan'
@@ -93,6 +114,11 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
         customerType,
         propertyId: values.propertyId,
         createPlan,
+        firstName: prospect.firstName,
+        lastName: prospect.lastName,
+        phoneNumber: prospect.phoneNumber,
+        address: prospect.address || 'Ghana',
+        assignedUserId: prospect.assignedUserId,
       });
 
       if (createPlan && result?.id) {
@@ -127,6 +153,7 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
       onConverted?.(result.id);
       navigate(`/customers/${result.id}`);
     } catch (error: any) {
+      console.error('Conversion error:', error);
       message.error(error?.error?.message || error?.message || 'Failed to convert prospect to customer');
     }
   };
@@ -144,18 +171,45 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
       bodyStyle={{ padding: '16px' }}
       destroyOnClose
     >
-      {existingCustomerConflicts.length > 0 ? (
+      {matchedCustomer ? (
+        <Alert
+          type="info"
+          showIcon
+          message="Customer Profile Already Exists"
+          description={
+            <div>
+              <div>
+                {prospect.firstName} {prospect.lastName} already has a customer account in the system ({matchedCustomer.phoneNumber}).
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <Button
+                  type="primary"
+                  size="small"
+                  icon={<UserOutlined />}
+                  onClick={() => {
+                    handleClose();
+                    navigate(`/customers/${matchedCustomer.id}`);
+                  }}
+                >
+                  View Customer Profile →
+                </Button>
+              </div>
+            </div>
+          }
+          style={{ marginBottom: 20 }}
+        />
+      ) : otherCustomerConflicts.length > 0 ? (
         <Alert
           type="error"
           showIcon
           message="Duplicate Customer Conflict"
           description={
             <div>
-              {existingCustomerConflicts.map((c, i) => (
+              {otherCustomerConflicts.map((c, i) => (
                 <div key={i}>{c.message}</div>
               ))}
               <div style={{ marginTop: 6, fontWeight: 600 }}>
-                Conversion is blocked to prevent creating a duplicate customer profile.
+                A different customer already exists with this phone or name.
               </div>
             </div>
           }
@@ -166,7 +220,7 @@ export const ConvertProspectModal: React.FC<ConvertProspectModalProps> = ({
           type="info"
           showIcon
           message="This is a one-way action"
-          description="Once converted, the prospect record becomes a customer and no longer appears in the prospects list. The property, customer type, and payment plan cannot be changed afterwards."
+          description="Once converted, the prospect record becomes a customer and is linked directly with this property."
           style={{ marginBottom: 20 }}
         />
       )}

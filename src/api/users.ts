@@ -5,6 +5,7 @@ import { AxiosError } from 'axios';
 import type { Role } from '@/types';
 import { getStoredUserAssignment, setStoredUserAssignment } from '@/utils/userAssignmentStorage';
 import { recordEntityBranch } from '@/utils/branchIsolation';
+import { rehydrateEntityPhotos, getEntityPhoto } from '@/utils/userPhotoStorage';
 
 // --- Types ---
 // Matches the `User` schema from GET/POST/PATCH /api/v1/users in the API docs.
@@ -250,16 +251,20 @@ export function useUsersQuery(params?: UsersListParams) {
 
         const enrichedItems = allItems.map((u) => {
           const stored = getStoredUserAssignment(u.id);
-          if (!stored) return u;
+          const photo = u.avatarUrl || u.photoUrl || u.profilePictureUrl || getEntityPhoto('staff', u.id) || getEntityPhoto('user', u.id);
           return {
             ...u,
-            firstName: stored.firstName || u.firstName,
-            lastName: stored.lastName !== undefined ? stored.lastName : u.lastName,
-            email: stored.email || u.email,
-            phoneNumber: stored.phoneNumber || u.phoneNumber,
-            role: (stored.role as any) || u.role,
+            firstName: stored?.firstName || u.firstName,
+            lastName: stored?.lastName !== undefined ? stored.lastName : u.lastName,
+            email: stored?.email || u.email,
+            phoneNumber: stored?.phoneNumber || u.phoneNumber,
+            role: (stored?.role as any) || u.role,
+            avatarUrl: photo,
+            photoUrl: photo,
+            profilePictureUrl: photo,
           };
         });
+        rehydrateEntityPhotos('staff', enrichedItems);
         return { items: enrichedItems, total: total || enrichedItems.length, page, pageSize: requestedLimit } as UsersListResponse;
       } catch (error) {
         if (error instanceof AxiosError) {
@@ -283,16 +288,20 @@ export function useUserQuery(id: string | undefined) {
         const user = unwrapData(res);
         if (user && id) {
           const stored = getStoredUserAssignment(id);
-          if (stored) {
-            return {
-              ...user,
-              firstName: stored.firstName || user.firstName,
-              lastName: stored.lastName !== undefined ? stored.lastName : user.lastName,
-              email: stored.email || user.email,
-              phoneNumber: stored.phoneNumber || user.phoneNumber,
-              role: (stored.role as any) || user.role,
-            };
-          }
+          const photo = user.avatarUrl || user.photoUrl || user.profilePictureUrl || getEntityPhoto('staff', id) || getEntityPhoto('user', id);
+          const enriched: UserEntity = {
+            ...user,
+            firstName: stored?.firstName || user.firstName,
+            lastName: stored?.lastName !== undefined ? stored.lastName : user.lastName,
+            email: stored?.email || user.email,
+            phoneNumber: stored?.phoneNumber || user.phoneNumber,
+            role: (stored?.role as any) || user.role,
+            avatarUrl: photo,
+            photoUrl: photo,
+            profilePictureUrl: photo,
+          };
+          rehydrateEntityPhotos('staff', [enriched]);
+          return enriched;
         }
         return user;
       } catch (error: any) {

@@ -85,6 +85,7 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto } from '@/utils/userPhotoStorage';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { tokens } from '@/constants/tokens';
@@ -579,7 +580,13 @@ export const UsersPage: React.FC = () => {
       align: 'left' as const,
       render: (_: any, record: User) => (
         <Space size={10} style={{ display: 'flex', alignItems: 'center' }}>
-          <PhotoUpload entityType="staff" entityId={record.id} size={36} editable={false} />
+          <PhotoUpload
+            entityType="staff"
+            entityId={record.id}
+            size={36}
+            editable={false}
+            src={record.avatarUrl || record.photoUrl}
+          />
           <div style={{ minWidth: 0 }}>
             <Text strong style={{ display: 'block', fontSize: 13, lineHeight: 1.3 }}>
               {record.firstName} {record.lastName}
@@ -875,7 +882,17 @@ export const UsersPage: React.FC = () => {
           borderBottom: '1px solid #f0f0f0'
         }}>
           <Space>
-            <PhotoUpload entityType="staff" entityId={selectedUser.id} size={48} />
+            <PhotoUpload
+              entityType="staff"
+              entityId={selectedUser.id}
+              size={48}
+              src={selectedUser.avatarUrl || selectedUser.photoUrl}
+              onPhotoChange={(url) => {
+                if (selectedUser?.id) {
+                  setPhoto('staff', selectedUser.id, url || '');
+                }
+              }}
+            />
             <div>
               <Title level={4} style={{ margin: 0 }}>
                 {selectedUser.firstName} {selectedUser.lastName}

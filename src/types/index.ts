@@ -121,6 +121,8 @@ export interface Customer {
   type: CustomerType;
   propertyId: string;
   code?: string;
+  avatarUrl?: string;
+  photoUrl?: string;
   createdAt: string;
   updatedAt: string;
 }

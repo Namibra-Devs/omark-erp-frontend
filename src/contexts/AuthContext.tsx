@@ -3,7 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { useNavigate } from 'react-router-dom';
 import { App } from 'antd'; // Changed from 'message' to 'App'
 import apiClient, { setTokens, clearTokens, getAccessToken, getRefreshToken } from '@/api/client';
-import { getEntityPhoto } from '@/utils/userPhotoStorage';
+import { getEntityPhoto, setEntityPhoto } from '@/utils/userPhotoStorage';
 import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
 import type { User, Role } from '@/types';
 
@@ -102,7 +102,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const effectiveRole = (storedAssignment?.role as Role) || userData.role || 'admin';
       const branchId = storedAssignment?.branchId || userData.branchId || userData.branch;
       const departmentId = storedAssignment?.departmentId || userData.departmentId || userData.department;
+      const serverAvatar = userData.avatarUrl || userData.photoUrl || userData.profilePictureUrl;
       const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
+      const resolvedAvatar = serverAvatar || storedAvatar;
+      if (serverAvatar && userData.id) {
+        setEntityPhoto('staff', userData.id, serverAvatar, false);
+      }
 
       const fName = storedAssignment?.firstName || userData.firstName || 'User';
       const lName = storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || '');
@@ -119,8 +124,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         branch: userData.branch || branchId,
         departmentId,
         department: userData.department || departmentId,
-        avatarUrl: userData.avatarUrl || userData.photoUrl || storedAvatar,
-        photoUrl: userData.photoUrl || userData.avatarUrl || storedAvatar,
+        avatarUrl: resolvedAvatar,
+        photoUrl: resolvedAvatar,
         createdAt: userData.createdAt || new Date().toISOString(),
         updatedAt: userData.updatedAt || new Date().toISOString(),
       };
@@ -204,7 +209,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         const effectiveRole = (storedAssignment?.role as Role) || userData.role || 'admin';
         const branchId = storedAssignment?.branchId || userData.branchId || userData.branch;
         const departmentId = storedAssignment?.departmentId || userData.departmentId || userData.department;
+        const serverAvatar = userData.avatarUrl || userData.photoUrl || userData.profilePictureUrl;
         const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
+        const resolvedAvatar = serverAvatar || storedAvatar;
+        if (serverAvatar && userData.id) {
+          setEntityPhoto('staff', userData.id, serverAvatar, false);
+        }
 
         const fName = storedAssignment?.firstName || userData.firstName || 'User';
         const lName = storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || '');
@@ -221,8 +231,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           branch: userData.branch || branchId,
           departmentId,
           department: userData.department || departmentId,
-          avatarUrl: userData.avatarUrl || userData.photoUrl || storedAvatar,
-          photoUrl: userData.photoUrl || userData.avatarUrl || storedAvatar,
+          avatarUrl: resolvedAvatar,
+          photoUrl: resolvedAvatar,
           createdAt: userData.createdAt || new Date().toISOString(),
           updatedAt: userData.updatedAt || new Date().toISOString(),
         };

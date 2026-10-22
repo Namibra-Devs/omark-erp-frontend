@@ -153,6 +153,7 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
               (tx) => `
           <tr>
             <td style="padding: 6px; border: 1px solid #e8e8e8;">${dayjs(tx.paidOn).format('DD MMM YYYY')}</td>
+            <td style="padding: 6px; border: 1px solid #e8e8e8;">${dayjs(tx.recordedOn || (tx as any).createdAt || (tx as any).updatedAt || tx.paidOn).format('DD MMM YYYY HH:mm')}</td>
             <td style="padding: 6px; border: 1px solid #e8e8e8;">${tx.reference || '—'}</td>
             <td style="padding: 6px; border: 1px solid #e8e8e8; text-transform: uppercase;">${String(tx.method).replace('_', ' ')}</td>
             <td style="padding: 6px; border: 1px solid #e8e8e8; text-align: right; font-weight: 600;">GHS ${(tx.amountMinor / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
@@ -161,7 +162,7 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
         `
             )
             .join('')
-        : `<tr><td colspan="5" style="text-align: center; padding: 8px; color: #8c8c8c;">No ledger transactions logged yet.</td></tr>`;
+        : `<tr><td colspan="6" style="text-align: center; padding: 8px; color: #8c8c8c;">No ledger transactions logged yet.</td></tr>`;
 
     printWindow.document.write(`
       <!DOCTYPE html>
@@ -300,7 +301,8 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
           <table>
             <thead>
               <tr>
-                <th>Date</th>
+                <th>Paid On</th>
+                <th>Recorded On</th>
                 <th>Reference</th>
                 <th>Method</th>
                 <th style="text-align: right;">Amount (GHS)</th>
@@ -600,10 +602,19 @@ export const CustomerStatementModal: React.FC<CustomerStatementModalProps> = ({
               bordered
               columns={[
                 {
-                  title: 'Date',
+                  title: 'Paid On',
                   dataIndex: 'paidOn',
                   key: 'paidOn',
                   render: (v: string) => dayjs(v).format('DD MMM YYYY'),
+                },
+                {
+                  title: 'Recorded On',
+                  dataIndex: 'recordedOn',
+                  key: 'recordedOn',
+                  render: (_: any, record: any) => {
+                    const recorded = record.recordedOn || record.createdAt || record.updatedAt || record.paidOn;
+                    return recorded ? dayjs(recorded).format('DD MMM YYYY HH:mm') : '—';
+                  },
                 },
                 {
                   title: 'Receipt Reference',

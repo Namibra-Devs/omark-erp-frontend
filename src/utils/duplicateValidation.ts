@@ -241,6 +241,8 @@ export interface CheckCustomerInput {
   phoneNumber?: string;
   email?: string;
   excludeId?: string;
+  excludeProspectId?: string;
+  prospectId?: string;
 }
 
 /**
@@ -256,12 +258,21 @@ export function checkCustomerConflicts(
 ): DuplicateConflict[] {
   const conflicts: DuplicateConflict[] = [];
   const { firstName, lastName, phoneNumber, email, excludeId } = input;
+  const prospectIdToExclude = input.excludeProspectId || input.prospectId;
   const customers = options.existingCustomers || [];
   const prospects = options.existingProspects || [];
 
   // 1. Check against existing customers
   for (const c of customers) {
     if (excludeId && c.id === excludeId) continue;
+    // If this customer was already created from the same prospect being converted, skip conflict
+    if (
+      prospectIdToExclude &&
+      c.prospectId &&
+      (c.prospectId === prospectIdToExclude || (c as any)._id === prospectIdToExclude)
+    ) {
+      continue;
+    }
     const cFullName = `${c.firstName || ''} ${c.lastName || ''}`.trim() || 'Unnamed Customer';
 
     // Phone duplicate check
@@ -309,6 +320,13 @@ export function checkCustomerConflicts(
 
   // 2. Cross-check against existing prospects
   for (const p of prospects) {
+    // If this is the prospect being converted, do not flag it as a conflict against itself
+    if (
+      prospectIdToExclude &&
+      (p.id === prospectIdToExclude || (p as any)._id === prospectIdToExclude)
+    ) {
+      continue;
+    }
     const pFullName = `${p.firstName || ''} ${p.lastName || ''}`.trim() || 'Unnamed Prospect';
 
     if (phoneNumber && p.phoneNumber && arePhonesDuplicate(phoneNumber, p.phoneNumber)) {
@@ -570,6 +588,8 @@ export function createDuplicatePhoneRule(options: {
   getExistingProspects?: () => Prospect[];
   getExistingUsers?: () => UserEntity[];
   excludeId?: string;
+  excludeProspectId?: string;
+  getProspectId?: () => string | undefined;
 }) {
   return {
     validator: async (_: any, value: string) => {
@@ -578,9 +598,11 @@ export function createDuplicatePhoneRule(options: {
       // Only check once user has entered at least 8 digits
       if (digits.length < 8) return Promise.resolve();
 
+      const excludeProspectId = options.excludeProspectId || options.getProspectId?.();
+
       if (options.entityType === 'customer') {
         const conflicts = checkCustomerConflicts(
-          { phoneNumber: value, excludeId: options.excludeId },
+          { phoneNumber: value, excludeId: options.excludeId, excludeProspectId },
           {
             existingCustomers: options.getExistingCustomers?.(),
             existingProspects: options.getExistingProspects?.(),
@@ -629,6 +651,8 @@ export function createDuplicateEmailRule(options: {
   getExistingProspects?: () => Prospect[];
   getExistingUsers?: () => UserEntity[];
   excludeId?: string;
+  excludeProspectId?: string;
+  getProspectId?: () => string | undefined;
 }) {
   return {
     validator: async (_: any, value: string) => {
@@ -636,9 +660,11 @@ export function createDuplicateEmailRule(options: {
       const trimmed = value.trim();
       if (!trimmed.includes('@') || trimmed.length < 5) return Promise.resolve();
 
+      const excludeProspectId = options.excludeProspectId || options.getProspectId?.();
+
       if (options.entityType === 'customer') {
         const conflicts = checkCustomerConflicts(
-          { email: trimmed, excludeId: options.excludeId },
+          { email: trimmed, excludeId: options.excludeId, excludeProspectId },
           {
             existingCustomers: options.getExistingCustomers?.(),
             existingProspects: options.getExistingProspects?.(),
@@ -690,6 +716,8 @@ export function createDuplicateNameRule(options: {
   getExistingProspects?: () => Prospect[];
   getExistingUsers?: () => UserEntity[];
   excludeId?: string;
+  excludeProspectId?: string;
+  getProspectId?: () => string | undefined;
 }) {
   return {
     validator: async (_: any, value: string) => {
@@ -699,10 +727,11 @@ export function createDuplicateNameRule(options: {
 
       const firstName = options.isFirstName ? value.trim() : other.trim();
       const lastName = options.isFirstName ? other.trim() : value.trim();
+      const excludeProspectId = options.excludeProspectId || options.getProspectId?.();
 
       if (options.entityType === 'customer') {
         const conflicts = checkCustomerConflicts(
-          { firstName, lastName, excludeId: options.excludeId },
+          { firstName, lastName, excludeId: options.excludeId, excludeProspectId },
           {
             existingCustomers: options.getExistingCustomers?.(),
             existingProspects: options.getExistingProspects?.(),

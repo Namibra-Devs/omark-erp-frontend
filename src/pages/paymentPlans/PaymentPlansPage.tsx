@@ -894,6 +894,24 @@ export const PaymentPlansPage: React.FC = () => {
       sorter: (a: PaymentPlan, b: PaymentPlan) => a.totalAmountMinor - b.totalAmountMinor,
     },
     {
+      title: 'Total Paid',
+      key: 'totalPaid',
+      width: 140,
+      render: (_: any, record: PaymentPlan) => {
+        const schedule = buildPaymentPlanSchedule(record);
+        return (
+          <span style={{ color: '#16a34a', fontWeight: 600 }}>
+            <MoneyText minor={schedule.totalPaidToDateMinor} />
+          </span>
+        );
+      },
+      sorter: (a: PaymentPlan, b: PaymentPlan) => {
+        const paidA = buildPaymentPlanSchedule(a).totalPaidToDateMinor;
+        const paidB = buildPaymentPlanSchedule(b).totalPaidToDateMinor;
+        return paidA - paidB;
+      },
+    },
+    {
       title: 'Monthly Amount',
       dataIndex: 'monthlyAmountMinor',
       key: 'monthlyAmountMinor',
@@ -1160,6 +1178,11 @@ export const PaymentPlansPage: React.FC = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label="Down Payment">
                   <MoneyText minor={activePlan.downPaymentMinor} />
+                </Descriptions.Item>
+                <Descriptions.Item label="Total Paid to Date">
+                  <span style={{ color: '#16a34a', fontWeight: 600 }}>
+                    <MoneyText minor={dynamicSchedule.totalPaidToDateMinor} />
+                  </span>
                 </Descriptions.Item>
                 <Descriptions.Item label="Balance">
                   {isFullyPaid ? (

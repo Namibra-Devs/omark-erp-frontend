@@ -7,7 +7,10 @@ import {
   assertNoCustomerDuplicates,
   getCustomersFromCache,
   getProspectsFromCache,
+  normalizePhone,
 } from '@/utils/duplicateValidation';
+import { getStoredProspects, saveStoredProspect } from './prospects';
+import { rehydrateEntityPhotos, getEntityPhoto } from '@/utils/userPhotoStorage';
 
 export type { CustomerType };
 
@@ -28,6 +31,8 @@ export interface CreateCustomerPayload {
   address: string;
   type: CustomerType;
   propertyId: string;
+  avatarUrl?: string;
+  photoUrl?: string;
   createPlan?: CreatePlanPayload;
 }
 
@@ -52,6 +57,8 @@ export interface UpdateCustomerPayload {
   address?: string;
   type?: CustomerType;
   propertyId?: string;
+  avatarUrl?: string;
+  photoUrl?: string;
 }
 
 export interface CustomerDetail extends Customer {
@@ -105,9 +112,19 @@ export const useCustomersQuery = (filter?: CustomersFilter) => {
           otherPages.forEach((pItems) => allItems.push(...pItems));
         }
 
+        const enrichedItems = allItems.map((c) => {
+          const photo = c.avatarUrl || c.photoUrl || getEntityPhoto('customer', c.id);
+          return {
+            ...c,
+            avatarUrl: photo,
+            photoUrl: photo,
+          };
+        });
+        rehydrateEntityPhotos('customer', enrichedItems);
+
         return {
-          items: allItems,
-          total: total || allItems.length,
+          items: enrichedItems,
+          total: total || enrichedItems.length,
           page,
           pageSize: requestedLimit,
         } as CustomersListResult;
@@ -131,7 +148,18 @@ export const useCustomerQuery = (id: string) => {
     queryFn: async () => {
       try {
         const response = await apiClient.get<ApiResponse<CustomerDetail>>(`/customers/${id}`);
-        return unwrapData(response);
+        const customer = unwrapData(response);
+        if (customer && customer.id) {
+          const photo = customer.avatarUrl || customer.photoUrl || getEntityPhoto('customer', customer.id);
+          const enriched = {
+            ...customer,
+            avatarUrl: photo,
+            photoUrl: photo,
+          };
+          rehydrateEntityPhotos('customer', [enriched]);
+          return enriched;
+        }
+        return customer;
       } catch (error) {
         if (error instanceof AxiosError) {
           console.error(`Error fetching customer ${id}:`, {
@@ -161,6 +189,8 @@ export const useCreateCustomerMutation = () => {
             firstName: payload.firstName,
             lastName: payload.lastName,
             phoneNumber: payload.phoneNumber,
+            excludeProspectId: payload.prospectId,
+            prospectId: payload.prospectId,
           },
           { existingCustomers: cachedCustomers, existingProspects: cachedProspects }
         );
@@ -178,11 +208,35 @@ export const useCreateCustomerMutation = () => {
         throw error;
       }
     },
-    onSuccess: () => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: customerKeys.all });
       queryClient.invalidateQueries({ queryKey: ['payment-plans'] });
       queryClient.invalidateQueries({ queryKey: ['properties'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+
+      if (variables?.prospectId) {
+        queryClient.invalidateQueries({ queryKey: ['prospects'] });
+        const stored = getStoredProspects();
+        const target = stored.find(
+          (p) =>
+            p.id === variables.prospectId ||
+            (variables.phoneNumber && normalizePhone(p.phoneNumber) === normalizePhone(variables.phoneNumber))
+        );
+        if (target) {
+          saveStoredProspect({
+            ...target,
+            status: 'purchased',
+          });
+        }
+        if (
+          typeof variables.prospectId === 'string' &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(variables.prospectId)
+        ) {
+          apiClient.patch(`/prospects/${variables.prospectId}`, { status: 'purchased' }).catch(() => {});
+        }
+        window.dispatchEvent(new Event('omark-prospects-changed'));
+      }
+      window.dispatchEvent(new Event('omark-customers-changed'));
     },
   });
 };

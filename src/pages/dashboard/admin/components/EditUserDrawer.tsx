@@ -3,6 +3,7 @@ import React, { useEffect } from 'react';
 import { Drawer, Form, Input, Select, Space, Button, Typography, message, Divider, Tag } from 'antd';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto } from '@/utils/userPhotoStorage';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { mockBranchDepartments } from '@/api/branches';
 import { getStoredUserAssignment, resolveDefaultDepartment } from '@/utils/userAssignmentStorage';
@@ -145,7 +146,17 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
           }}
         >
           <div style={{ textAlign: 'center', marginBottom: 20 }}>
-            <PhotoUpload entityType="staff" entityId={user.id} size={80} />
+            <PhotoUpload
+              entityType="staff"
+              entityId={user.id}
+              size={80}
+              src={user.avatarUrl || user.photoUrl}
+              onPhotoChange={(url) => {
+                if (user?.id) {
+                  setPhoto('staff', user.id, url || '');
+                }
+              }}
+            />
           </div>
 
           <Form.Item

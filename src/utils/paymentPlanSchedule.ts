@@ -45,6 +45,8 @@ export interface PaymentPlanScheduleInfo {
   currentBalanceGHS: number;
   totalPaidMinor: number;
   totalPaidGHS: number;
+  totalPaidToDateMinor: number;
+  totalPaidToDateGHS: number;
   startDate: string;
   startDateFormatted: string;
   endDate: string;
@@ -73,6 +75,7 @@ export interface PlanPaymentTransaction {
   sequence?: number;
   amountMinor: number;
   paidOn: string;
+  recordedOn?: string;
   method: PaymentMethod | string;
   reference?: string;
   notes?: string;
@@ -151,7 +154,8 @@ export const recordLocalInstallmentPayment = (
     surplusAppliedMinor?: number;
     balanceAfterMinor?: number;
     effect?: 'overpayment' | 'underpayment' | 'exact' | 'advance';
-  }
+  },
+  recordedOn?: string
 ): void => {
   const map = getStoredPaymentOverrides();
   const existing = map[planId] || { paidInstallments: {}, transactions: [], updatedAt: new Date().toISOString() };
@@ -164,8 +168,11 @@ export const recordLocalInstallmentPayment = (
   const currentSeqPayment = existing.paidInstallments[sequence];
   const newAmount = (currentSeqPayment?.amountMinor || 0) + amountMinor;
 
+  const actualPaidOn = paidOn || new Date().toISOString();
+  const actualRecordedOn = recordedOn || new Date().toISOString();
+
   existing.paidInstallments[sequence] = {
-    paidAt: paidOn || new Date().toISOString(),
+    paidAt: actualPaidOn,
     amountMinor: newAmount,
     method: method || 'bank_transfer',
     reference: reference || `PAY-INST-${sequence}-${Date.now().toString().slice(-4)}`,
@@ -176,7 +183,8 @@ export const recordLocalInstallmentPayment = (
     id: `tx-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     sequence,
     amountMinor,
-    paidOn: paidOn || new Date().toISOString(),
+    paidOn: actualPaidOn,
+    recordedOn: actualRecordedOn,
     method: method || 'bank_transfer',
     reference: reference || `REC-${Date.now().toString().slice(-6)}`,
     notes,
@@ -502,6 +510,7 @@ export function buildPaymentPlanSchedule(
       sequence: p.sequence,
       amountMinor: p.amountMinor,
       paidOn: p.paidOn || p.createdAt || new Date().toISOString(),
+      recordedOn: p.createdAt || (p as any).recordedOn || (p as any).updatedAt || p.paidOn || new Date().toISOString(),
       method: p.method || 'bank_transfer',
       reference: ref,
       notes: p.notes || 'Recorded server payment',
@@ -519,7 +528,10 @@ export function buildPaymentPlanSchedule(
     if (t.id && seenTxRefs.has(t.id)) return;
     if (t.reference) seenTxRefs.add(t.reference);
     if (t.id) seenTxRefs.add(t.id);
-    transactions.push(t);
+    transactions.push({
+      ...t,
+      recordedOn: t.recordedOn || t.paidOn || new Date().toISOString(),
+    });
   });
 
   // 3. Synthesize ledger records from confirmed/paid rows if not already represented
@@ -534,6 +546,7 @@ export function buildPaymentPlanSchedule(
           sequence: row.sequence,
           amountMinor: row.paidAmountMinor || row.baseInstallmentMinor,
           paidOn: row.paidAt || row.dueDate,
+          recordedOn: row.paidAt || (plan as any).createdAt || row.dueDate || new Date().toISOString(),
           method: row.paymentMethod || 'bank_transfer',
           reference: row.reference || `REC-INST-${row.sequence}`,
           notes: `${row.ordinal} installment settled`,
@@ -550,6 +563,8 @@ export function buildPaymentPlanSchedule(
   transactions.sort((a, b) => dayjs(b.paidOn).valueOf() - dayjs(a.paidOn).valueOf());
 
   const overpaymentCreditMinor = Math.max(0, carriedSurplusMinor);
+  const totalPaidToDateMinor = Math.max(0, (downPaymentMinor || 0) + totalCashPaidMinor);
+  const totalPaidToDateGHS = totalPaidToDateMinor / 100;
 
   return {
     planId: plan.id,
@@ -561,6 +576,8 @@ export function buildPaymentPlanSchedule(
     currentBalanceGHS: currentBalanceMinor / 100,
     totalPaidMinor: totalCashPaidMinor,
     totalPaidGHS: totalCashPaidMinor / 100,
+    totalPaidToDateMinor,
+    totalPaidToDateGHS,
     startDate: startDate.format('YYYY-MM-DD'),
     startDateFormatted: firstDueDate,
     endDate: rows[rows.length - 1]?.dueDate || startDate.add(numMonths - 1, 'month').format('YYYY-MM-DD'),

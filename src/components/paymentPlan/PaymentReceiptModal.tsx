@@ -23,6 +23,8 @@ export interface PaymentReceiptData {
   propertyName?: string;
   amountPaidGHS: number;
   paymentDate: string;
+  paidOn?: string;
+  recordedOn?: string;
   paymentMethod: string;
   reference?: string;
   recordedBy?: string;
@@ -188,16 +190,16 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
                 <div class="grid-val">${receipt.receiptNumber}</div>
               </div>
               <div class="grid-item">
-                <div class="grid-label">Date of Payment</div>
-                <div class="grid-val">${dayjs(receipt.paymentDate).format('DD MMMM YYYY')}</div>
+                <div class="grid-label">Paid On (Deposit Date)</div>
+                <div class="grid-val">${dayjs(receipt.paidOn || receipt.paymentDate).format('DD MMMM YYYY')}</div>
               </div>
               <div class="grid-item">
                 <div class="grid-label">Customer Name</div>
                 <div class="grid-val">${receipt.customerName}</div>
               </div>
               <div class="grid-item">
-                <div class="grid-label">Customer Contact</div>
-                <div class="grid-val">${receipt.customerPhone || 'N/A'}</div>
+                <div class="grid-label">Recorded On (Audit Timestamp)</div>
+                <div class="grid-val">${dayjs(receipt.recordedOn || receipt.paymentDate).format('DD MMMM YYYY, HH:mm')}</div>
               </div>
               <div class="grid-item">
                 <div class="grid-label">Allocated Property</div>
@@ -335,10 +337,10 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
           </Col>
           <Col span={12}>
             <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-              DATE OF PAYMENT
+              PAID ON (DEPOSIT DATE)
             </Text>
             <Text strong style={{ fontSize: 13 }}>
-              {dayjs(receipt.paymentDate).format('DD MMM YYYY')}
+              {dayjs(receipt.paidOn || receipt.paymentDate).format('DD MMM YYYY')}
             </Text>
           </Col>
           <Col span={12}>
@@ -349,9 +351,11 @@ export const PaymentReceiptModal: React.FC<PaymentReceiptModalProps> = ({
           </Col>
           <Col span={12}>
             <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>
-              CONTACT PHONE
+              RECORDED ON (SYSTEM AUDIT)
             </Text>
-            <Text strong style={{ fontSize: 13 }}>{receipt.customerPhone || 'N/A'}</Text>
+            <Text strong style={{ fontSize: 13 }}>
+              {dayjs(receipt.recordedOn || receipt.paymentDate).format('DD MMM YYYY, HH:mm')}
+            </Text>
           </Col>
           <Col span={12}>
             <Text type="secondary" style={{ fontSize: 11, display: 'block' }}>

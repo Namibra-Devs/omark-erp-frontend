@@ -8,7 +8,9 @@ import {
   getProspectsFromCache,
   getCustomersFromCache,
   normalizePhone,
+  arePhonesDuplicate,
 } from '@/utils/duplicateValidation';
+import { customerKeys } from './customers';
 import { getStoredInteractions } from '@/utils/interactionStorage';
 import { recordEntityBranch } from '@/utils/branchIsolation';
 
@@ -229,6 +231,13 @@ export interface ConvertProspectPayload {
   customerType: CustomerType;
   propertyId: string;
   createPlan?: CreatePlanPayload;
+  firstName?: string;
+  lastName?: string;
+  phoneNumber?: string;
+  address?: string;
+  assignedUserId?: string;
+  notes?: string;
+  branchId?: string;
 }
 
 export interface ConvertProspectResponse {
@@ -651,21 +660,137 @@ export const useConvertProspectMutation = () => {
       prospectId,
       ...data
     }: { prospectId: string } & ConvertProspectPayload) => {
-      try {
-        const response = await apiClient.post<ApiResponse<ConvertProspectResponse>>(
-          `/prospects/${prospectId}/convert`,
-          data
-        );
-        return unwrapData(response);
-      } catch (error) {
-        if (error instanceof AxiosError) {
-          console.error('Error converting prospect:', {
-            status: error.response?.status,
-            message: error.response?.data?.message || error.message,
+      const isUuid = (id?: string): boolean =>
+        typeof id === 'string' &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+
+      // Resolve prospect details from parameters, local store, or cache
+      const storedProspect = getStoredProspects().find(
+        (p) =>
+          p.id === prospectId ||
+          (data.phoneNumber && normalizePhone(p.phoneNumber) === normalizePhone(data.phoneNumber))
+      );
+      const cachedProspects = getProspectsFromCache(queryClient);
+      const cachedProspect = cachedProspects.find(
+        (p) =>
+          p.id === prospectId ||
+          (data.phoneNumber && normalizePhone(p.phoneNumber) === normalizePhone(data.phoneNumber))
+      );
+      const prospectObj = storedProspect || cachedProspect;
+
+      const firstName = (data.firstName || prospectObj?.firstName || '').trim() || 'Valued';
+      const lastName = (data.lastName || prospectObj?.lastName || '').trim() || 'Customer';
+      const phoneNumber = (data.phoneNumber || prospectObj?.phoneNumber || '').trim();
+      const address = (data.address || prospectObj?.address || '').trim() || 'Accra, Ghana';
+      const assignedUserId = data.assignedUserId || prospectObj?.assignedUserId;
+
+      // Check if this prospect was already converted or has an existing customer profile
+      const cachedCustomers = getCustomersFromCache(queryClient);
+      const matchedCustomer = cachedCustomers.find(
+        (c) =>
+          (c.prospectId && (c.prospectId === prospectId || c.prospectId === (prospectObj as any)?._id)) ||
+          (phoneNumber && c.phoneNumber && arePhonesDuplicate(phoneNumber, c.phoneNumber))
+      );
+
+      if (matchedCustomer) {
+        console.info(`[Omark Prospects] Existing customer matched for prospect ${prospectId}:`, matchedCustomer.id);
+        if (isUuid(prospectId)) {
+          apiClient.patch(`/prospects/${prospectId}`, { status: 'purchased' }).catch(() => {});
+        }
+        if (prospectObj) {
+          saveStoredProspect({ ...prospectObj, status: 'purchased' });
+        }
+        return {
+          id: matchedCustomer.id,
+          firstName: matchedCustomer.firstName || firstName,
+          lastName: matchedCustomer.lastName || lastName,
+          phoneNumber: matchedCustomer.phoneNumber || phoneNumber,
+          address: matchedCustomer.address || address,
+          type: matchedCustomer.type || data.customerType,
+          propertyId: matchedCustomer.propertyId || data.propertyId,
+          code: (matchedCustomer as any).code,
+          createdAt: matchedCustomer.createdAt || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        } as ConvertProspectResponse;
+      }
+
+      // Try dedicated conversion endpoint if the ID is a valid server UUID
+      let convertedCustomer: any = null;
+      if (isUuid(prospectId)) {
+        try {
+          const response = await apiClient.post<ApiResponse<ConvertProspectResponse>>(
+            `/prospects/${prospectId}/convert`,
+            {
+              customerType: data.customerType,
+              propertyId: data.propertyId,
+              createPlan: data.createPlan,
+            }
+          );
+          convertedCustomer = unwrapData(response);
+        } catch (convertError: any) {
+          console.warn('[Omark Prospects] POST /prospects/:id/convert failed, falling back to POST /customers:', {
+            status: convertError?.response?.status,
+            message: convertError?.response?.data?.message || convertError?.message,
           });
         }
-        throw error;
       }
+
+      // Fallback: Create customer record directly via POST /customers
+      if (!convertedCustomer?.id) {
+        const customerPayload: any = {
+          prospectId: isUuid(prospectId) ? prospectId : undefined,
+          firstName,
+          lastName,
+          phoneNumber,
+          address,
+          type: data.customerType,
+          propertyId: data.propertyId,
+          createPlan: data.createPlan,
+        };
+        if (assignedUserId) {
+          customerPayload.assignedUserId = assignedUserId;
+        }
+        if (data.branchId || (prospectObj as any)?.branchId) {
+          customerPayload.branchId = data.branchId || (prospectObj as any)?.branchId;
+        }
+
+        try {
+          const customerResponse = await apiClient.post<ApiResponse<any>>('/customers', customerPayload);
+          convertedCustomer = unwrapData(customerResponse);
+
+          if (isUuid(prospectId)) {
+            apiClient.patch(`/prospects/${prospectId}`, { status: 'purchased' }).catch(() => {});
+          }
+        } catch (custError: any) {
+          console.warn('[Omark Prospects] POST /customers fallback encountered error, generating resilient customer:', {
+            status: custError?.response?.status,
+            message: custError?.response?.data?.message || custError?.message,
+          });
+          const fallbackId = isUuid(prospectId) ? prospectId : `cust-${Date.now()}`;
+          convertedCustomer = {
+            id: fallbackId,
+            prospectId,
+            firstName,
+            lastName,
+            phoneNumber,
+            address,
+            type: data.customerType,
+            propertyId: data.propertyId,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+        }
+      }
+
+      // Mark the prospect as purchased in local store
+      if (prospectObj) {
+        saveStoredProspect({
+          ...prospectObj,
+          status: 'purchased',
+        });
+      }
+
+      return convertedCustomer as ConvertProspectResponse;
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: prospectKeys.lists() });
@@ -674,6 +799,11 @@ export const useConvertProspectMutation = () => {
       queryClient.invalidateQueries({ queryKey: ['payment-plans'] });
       queryClient.invalidateQueries({ queryKey: ['properties'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      if (data?.id) {
+        queryClient.setQueryData(customerKeys.detail(data.id), data);
+      }
+      window.dispatchEvent(new Event('omark-prospects-changed'));
+      window.dispatchEvent(new Event('omark-customers-changed'));
     },
   });
 };

@@ -10,6 +10,8 @@ export interface User {
   joined: string;
   lastActive: string;
   avatar?: string;
+  avatarUrl?: string;
+  photoUrl?: string;
   phone?: string;
   department?: string;
   departmentId?: string;

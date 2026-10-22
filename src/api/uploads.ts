@@ -17,12 +17,40 @@ export function useUploadFileMutation() {
       const formData = new FormData();
       formData.append('file', file);
 
-      const res = await apiClient.post<ApiResponse<UploadFileResponse>>('/upload', formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data',
-        },
-      });
-      return unwrapData(res);
+      try {
+        const res = await apiClient.post<ApiResponse<UploadFileResponse>>('/upload', formData, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+        const data = unwrapData(res);
+        if (data && (data.url || (data as any).fileUrl || (data as any).path)) {
+          return {
+            ...data,
+            url: data.url || (data as any).fileUrl || (data as any).path,
+          };
+        }
+        return data;
+      } catch (err: any) {
+        // Fallback to /uploads if /upload fails
+        try {
+          const res2 = await apiClient.post<ApiResponse<UploadFileResponse>>('/uploads', formData, {
+            headers: {
+              'Content-Type': 'multipart/form-data',
+            },
+          });
+          const data2 = unwrapData(res2);
+          if (data2 && (data2.url || (data2 as any).fileUrl || (data2 as any).path)) {
+            return {
+              ...data2,
+              url: data2.url || (data2 as any).fileUrl || (data2 as any).path,
+            };
+          }
+          return data2;
+        } catch {
+          throw err;
+        }
+      }
     },
   });
 }

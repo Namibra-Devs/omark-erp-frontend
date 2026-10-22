@@ -101,6 +101,7 @@ import { tokens } from '@/constants/tokens';
 import { MoneyText } from '@/components/shared/MoneyText';
 import { PhoneInput } from '@/components/shared/PhoneInput';
 import { AddProspectModal } from '@/components/shared/AddProspectModal';
+import { AddCustomerModal } from '@/components/shared/AddCustomerModal';
 import { consolidateAllProspects, isProspectAssignedOrCreatedByStaff } from '@/utils/prospectAssignment';
 import { StatusTag } from '@/components/shared/StatusTag';
 import { ProspectsSourcePieChart } from '@/components/dashboard/ProspectsSourcePieChart';
@@ -256,6 +257,7 @@ export const SecretaryDashboardPage: React.FC = () => {
   // ── UI State ──────────────────────────────────────────────────────────────
   const [addProspectModal, setAddProspectModal] = useState(false);
   const [addCustomerModal, setAddCustomerModal] = useState(false);
+  const [selectedProspectForConversion, setSelectedProspectForConversion] = useState<any | null>(null);
   const [addPaymentModal, setAddPaymentModal] = useState(false);
   const [addExpenseModal, setAddExpenseModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<any>(null);
@@ -1104,13 +1106,7 @@ export const SecretaryDashboardPage: React.FC = () => {
             size="small"
             style={{ background: '#52c41a', borderColor: '#52c41a' }}
             onClick={() => {
-              form.setFieldsValue({
-                firstName: record.firstName,
-                lastName: record.lastName,
-                phoneNumber: record.phoneNumber,
-                address: record.address,
-                type: 'payment_plan',
-              });
+              setSelectedProspectForConversion(record);
               setAddCustomerModal(true);
             }}
           >
@@ -1130,81 +1126,6 @@ export const SecretaryDashboardPage: React.FC = () => {
   ];
 
   // ── Handlers ──────────────────────────────────────────────────────────────
-  const handleAddCustomer = async (values: any) => {
-    try {
-      setLoading(true);
-
-      // Hard pre-submission rejection guard
-      assertNoCustomerDuplicates(
-        {
-          firstName: values.firstName,
-          lastName: values.lastName,
-          phoneNumber: values.phoneNumber,
-        },
-        {
-          existingCustomers: existingCustomersList,
-          existingProspects: existingProspectsList,
-        }
-      );
-
-      // POST /customers requires a `createPlan` object when type is
-      // 'payment_plan' — omitting it (as this used to) fails validation on
-      // every submission.
-      const createPlan = values.type === 'payment_plan'
-        ? {
-            totalAmountMinor: Math.round(values.totalAmount * 100),
-            downPaymentMinor: Math.round(values.downPayment * 100),
-            planBasis: values.planBasis,
-            numMonths: values.planBasis === 'months' ? values.numMonths : undefined,
-            monthlyAmountMinor: values.planBasis === 'monthly_amount' ? Math.round(values.monthlyAmount * 100) : undefined,
-            startDate: values.startDate.format('YYYY-MM-DD'),
-          }
-        : undefined;
-
-      const newCust = await createCustomer.mutateAsync({
-        firstName: values.firstName,
-        lastName: values.lastName,
-        phoneNumber: values.phoneNumber,
-        address: values.address,
-        type: values.type,
-        propertyId: values.propertyId,
-        createPlan,
-      });
-
-      if (createPlan && (newCust as any)?.id) {
-        const balanceMinor = Math.max(createPlan.totalAmountMinor - createPlan.downPaymentMinor, 0);
-        const planObj: any = {
-          id: `plan-${(newCust as any).id}`,
-          customerId: (newCust as any).id,
-          propertyId: values.propertyId,
-          totalAmountMinor: createPlan.totalAmountMinor,
-          downPaymentMinor: createPlan.downPaymentMinor,
-          balanceMinor,
-          numMonths: createPlan.numMonths || 6,
-          monthlyAmountMinor: createPlan.monthlyAmountMinor || Math.round(balanceMinor / Math.max(createPlan.numMonths || 6, 1)),
-          currency: 'GHS',
-          startDate: createPlan.startDate,
-          status: 'active',
-          progressPercent: createPlan.totalAmountMinor > 0 ? Math.round((createPlan.downPaymentMinor / createPlan.totalAmountMinor) * 100) : 0,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        };
-        saveStoredPaymentPlan(planObj).catch(() => {});
-        saveCustomerPlanDefinition((newCust as any).id, planObj).catch(() => {});
-      }
-
-      message.success('Customer added successfully!');
-      setAddCustomerModal(false);
-      form.resetFields();
-      refetchCustomers();
-      refetchPaymentPlans();
-      refetchDashboard();
-    } catch (error: any) {
-      message.error(error?.error?.message || error?.message || 'Failed to add customer');
-    } finally {
-      setLoading(false);
-    }
-  };
 
 
 
@@ -1289,7 +1210,10 @@ export const SecretaryDashboardPage: React.FC = () => {
           <Button 
             icon={<PlusOutlined />} 
             type="primary"
-            onClick={() => setAddCustomerModal(true)}
+            onClick={() => {
+              setSelectedProspectForConversion(null);
+              setAddCustomerModal(true);
+            }}
             style={{ background: '#52c41a', borderColor: '#52c41a' }}
           >
             Add Customer
@@ -2084,181 +2008,22 @@ export const SecretaryDashboardPage: React.FC = () => {
       />
 
       {/* ── Add Customer Modal ────────────────────────────────────────────── */}
-      <Modal
-        title="Add New Customer"
+      <AddCustomerModal
         open={addCustomerModal}
-        onCancel={() => {
+        initialProspect={selectedProspectForConversion}
+        initialProspectId={selectedProspectForConversion?.id}
+        onClose={() => {
           setAddCustomerModal(false);
-          form.resetFields();
+          setSelectedProspectForConversion(null);
         }}
-        footer={null}
-        width={600}
-        style={{ top: 20 }}
-      >
-        <Form form={form} layout="vertical" onFinish={handleAddCustomer} initialValues={{ type: 'payment_plan', planBasis: 'months' }}>
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="firstName"
-                label="First Name"
-                rules={[
-                  { required: true, message: 'First name is required' },
-                  createDuplicateNameRule({
-                    entityType: 'customer',
-                    isFirstName: true,
-                    getOtherName: () => form.getFieldValue('lastName'),
-                    getExistingCustomers: () => existingCustomersList,
-                    getExistingProspects: () => existingProspectsList,
-                  }),
-                ]}
-              >
-                <Input placeholder="First name" />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item
-                name="lastName"
-                label="Last Name"
-                rules={[
-                  { required: true, message: 'Last name is required' },
-                  createDuplicateNameRule({
-                    entityType: 'customer',
-                    isFirstName: false,
-                    getOtherName: () => form.getFieldValue('firstName'),
-                    getExistingCustomers: () => existingCustomersList,
-                    getExistingProspects: () => existingProspectsList,
-                  }),
-                ]}
-              >
-                <Input placeholder="Last name" />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Form.Item
-            name="phoneNumber"
-            label="Phone Number"
-            rules={[
-              { required: true, message: 'Phone number is required' },
-              createDuplicatePhoneRule({
-                entityType: 'customer',
-                getExistingCustomers: () => existingCustomersList,
-                getExistingProspects: () => existingProspectsList,
-              }),
-            ]}
-          >
-            <PhoneInput />
-          </Form.Item>
-
-          <Form.Item
-            name="address"
-            label="Address"
-            rules={[{ required: true, message: 'Address is required' }]}
-          >
-            <Input placeholder="Full address" />
-          </Form.Item>
-
-          <Form.Item
-            name="propertyId"
-            label="Property"
-            rules={[{ required: true, message: 'Please select a property' }]}
-          >
-            <Select placeholder="Select property" showSearch>
-              {properties.map((prop: any) => (
-                <Option key={prop.id} value={prop.id}>
-                  {prop.houseNumber} - {prop.offerNumber} (GHS {(prop.priceMinor / 100).toLocaleString()})
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
-
-          <Form.Item name="type" label="Customer Type" rules={[{ required: true }]}>
-            <Select>
-              <Option value="payment_plan">Payment Plan</Option>
-              <Option value="fully_paid">Fully Paid</Option>
-            </Select>
-          </Form.Item>
-
-          <Form.Item shouldUpdate={(prev, cur) => prev.type !== cur.type || prev.planBasis !== cur.planBasis} noStyle>
-            {({ getFieldValue }) => {
-              if (getFieldValue('type') !== 'payment_plan') return null;
-              const planBasis = getFieldValue('planBasis') || 'months';
-              return (
-                <>
-                  <Row gutter={16}>
-                    <Col span={12}>
-                      <Form.Item
-                        name="totalAmount"
-                        label="Total Amount (GHS)"
-                        rules={[{ required: true, message: 'Total amount is required' }]}
-                      >
-                        <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 150000" />
-                      </Form.Item>
-                    </Col>
-                    <Col span={12}>
-                      <Form.Item
-                        name="downPayment"
-                        label="Down Payment (GHS)"
-                        rules={[{ required: true, message: 'Down payment is required' }]}
-                      >
-                        <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 30000" />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-
-                  <Form.Item name="planBasis" label="Plan Basis" rules={[{ required: true }]}>
-                    <Select>
-                      <Option value="months">Fixed number of months</Option>
-                      <Option value="monthly_amount">Fixed monthly amount</Option>
-                    </Select>
-                  </Form.Item>
-
-                  {planBasis === 'months' ? (
-                    <Form.Item
-                      name="numMonths"
-                      label="Number of Months"
-                      rules={[{ required: true, message: 'Number of months is required' }]}
-                    >
-                      <InputNumber min={1} style={{ width: '100%' }} placeholder="e.g. 24" />
-                    </Form.Item>
-                  ) : (
-                    <Form.Item
-                      name="monthlyAmount"
-                      label="Monthly Amount (GHS)"
-                      rules={[{ required: true, message: 'Monthly amount is required' }]}
-                    >
-                      <InputNumber min={0} style={{ width: '100%' }} placeholder="e.g. 3000" />
-                    </Form.Item>
-                  )}
-
-                  <Form.Item
-                    name="startDate"
-                    label="First Installment Date"
-                    rules={[{ required: true, message: 'Start date is required' }]}
-                    initialValue={dayjs()}
-                  >
-                    <DatePicker style={{ width: '100%' }} />
-                  </Form.Item>
-                </>
-              );
-            }}
-          </Form.Item>
-
-          <Form.Item>
-            <Space>
-              <Button type="primary" htmlType="submit" loading={loading}>
-                Add Customer
-              </Button>
-              <Button onClick={() => {
-                setAddCustomerModal(false);
-                form.resetFields();
-              }}>
-                Cancel
-              </Button>
-            </Space>
-          </Form.Item>
-        </Form>
-      </Modal>
+        onSuccess={() => {
+          setAddCustomerModal(false);
+          setSelectedProspectForConversion(null);
+          refetchCustomers();
+          refetchPaymentPlans();
+          refetchDashboard();
+        }}
+      />
 
       {/* ── Unified Record Payment Modal (Dynamic Amortization & Flexible Installment Engine) ── */}
       <RecordPaymentModal

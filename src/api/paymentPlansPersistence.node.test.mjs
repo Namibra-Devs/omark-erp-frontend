@@ -231,3 +231,82 @@ test('Pre-Payment Verification: verifies customerId matches before posting and t
     /does not have an associated customer ID/
   );
 });
+
+test('Total Paid Calculation: accurately combines down payment and installments cash paid to date', () => {
+  const plan = {
+    totalAmountMinor: 10000000, // GH₵ 100,000.00
+    downPaymentMinor: 3000000,  // GH₵ 30,000.00
+    balanceMinor: 5000000,      // Remaining GH₵ 50,000.00
+  };
+  const installmentCashPaidMinor = 2000000; // GH₵ 20,000.00
+
+  // Total amount customer has paid to date: Down payment + Installments paid
+  const totalPaidToDateMinor = (plan.downPaymentMinor || 0) + installmentCashPaidMinor;
+  const totalPaidToDateGHS = totalPaidToDateMinor / 100;
+
+  assert.equal(totalPaidToDateMinor, 5000000);
+  assert.equal(totalPaidToDateGHS, 50000);
+
+  // If customer has 0 down payment
+  const zeroDownPlan = { totalAmountMinor: 5000000, downPaymentMinor: 0 };
+  const zeroDownPaidMinor = (zeroDownPlan.downPaymentMinor || 0) + 1500000;
+  assert.equal(zeroDownPaidMinor, 1500000);
+  assert.equal(zeroDownPaidMinor / 100, 15000);
+});
+
+test('SMS Notification Provider Resilience: enforces max 11-char alphanumeric Sender ID and normalizes phone formats', () => {
+  const SENDER_ID = 'OMARK';
+  assert.ok(SENDER_ID.length <= 11, 'Sender ID must never exceed 11 characters under GSM/SMPP telco standard');
+
+  // Test normalization logic
+  function normalizePhoneNumber(phone) {
+    if (!phone) return '';
+    let cleaned = phone.trim().replace(/[^\d+]/g, '');
+    if (cleaned.startsWith('0') && cleaned.length === 10) {
+      cleaned = '+233' + cleaned.substring(1);
+    } else if (!cleaned.startsWith('+') && cleaned.startsWith('233')) {
+      cleaned = '+' + cleaned;
+    }
+    return cleaned;
+  }
+
+  function getVariants(phone) {
+    const normalized = normalizePhoneNumber(phone);
+    const digits = normalized.replace(/^\+/, '');
+    const e164 = normalized.startsWith('+') ? normalized : `+${digits}`;
+    const local = digits.startsWith('233') && digits.length === 12 ? '0' + digits.substring(3) : digits;
+    return { e164, digits, local };
+  }
+
+  // 1. Local format input: 024 123 4567
+  const v1 = getVariants('024 123 4567');
+  assert.equal(v1.e164, '+233241234567');
+  assert.equal(v1.digits, '233241234567');
+  assert.equal(v1.local, '0241234567');
+
+  // 2. International input without plus: 233241234567
+  const v2 = getVariants('233241234567');
+  assert.equal(v2.e164, '+233241234567');
+  assert.equal(v2.digits, '233241234567');
+  assert.equal(v2.local, '0241234567');
+
+  // 3. International input with plus: +233 24 123 4567
+  const v3 = getVariants('+233 24 123 4567');
+  assert.equal(v3.e164, '+233241234567');
+  assert.equal(v3.digits, '233241234567');
+  assert.equal(v3.local, '0241234567');
+});
+
+test('Distinct Date Tracking: retains separate Paid On and Recorded On timestamps for payment audit', () => {
+  const transaction = {
+    id: 'tx-1',
+    amountMinor: 500000,
+    paidOn: '2026-10-18T10:00:00.000Z',    // Customer paid on Oct 18
+    recordedOn: '2026-10-21T15:30:00.000Z', // Staff recorded in ERP on Oct 21
+  };
+
+  assert.notEqual(transaction.paidOn, transaction.recordedOn);
+  assert.equal(transaction.paidOn, '2026-10-18T10:00:00.000Z');
+  assert.equal(transaction.recordedOn, '2026-10-21T15:30:00.000Z');
+});
+

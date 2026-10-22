@@ -295,6 +295,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
       const amountGHS = values.amountGHS !== undefined && values.amountGHS !== null ? values.amountGHS : expectedGHS;
       const amountMinor = Math.round(amountGHS * 100);
       const paidOn = values.paidOn ? values.paidOn.toISOString() : new Date().toISOString();
+      const recordedOn = values.recordedOn ? values.recordedOn.toISOString() : new Date().toISOString();
       const method: PaymentMethod = values.method || 'bank_transfer';
       const reference = values.reference || `REC-${Date.now().toString().slice(-6)}`;
 
@@ -303,6 +304,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         {
           amountMinor,
           paidOn,
+          recordedOn,
           method,
           reference,
           sequence: targetRow.sequence,
@@ -347,6 +349,8 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
         propertyName: customerInfo.propertyName,
         amountPaidGHS: amountGHS,
         paymentDate: dayjs(paidOn).format('YYYY-MM-DD'),
+        paidOn,
+        recordedOn,
         paymentMethod: method,
         reference,
         planId: planToRecord.id,
@@ -430,6 +434,7 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
             initialValues={{
               amountGHS: expectedGHS,
               paidOn: dayjs(),
+              recordedOn: dayjs(),
               method: 'bank_transfer',
               reference: `REC-${Date.now().toString().slice(-6)}`,
             }}
@@ -513,6 +518,13 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
                   <Text strong>Net Due for this Installment:</Text>
                   <Text strong style={{ fontSize: 16, color: '#1677ff' }}>
                     GH₵ {expectedGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </Text>
+                </div>
+
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <Text type="secondary">Total Paid to Date:</Text>
+                  <Text strong style={{ color: '#16a34a' }}>
+                    GH₵ {((scheduleInfo?.totalPaidToDateGHS ?? 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </Text>
                 </div>
 
@@ -655,18 +667,36 @@ export const RecordPaymentModal: React.FC<RecordPaymentModalProps> = ({
               />
             </Form.Item>
 
-            {/* Payment Date & Method */}
+            {/* Payment Timing & Method */}
             <Row gutter={12}>
               <Col span={12}>
                 <Form.Item
                   name="paidOn"
-                  label="Payment Date"
+                  label="Paid On (Deposit Date)"
+                  tooltip="The actual date when customer made the payment or deposit"
                   rules={[{ required: true, message: 'Please select payment date' }]}
                 >
                   <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
                 </Form.Item>
               </Col>
               <Col span={12}>
+                <Form.Item
+                  name="recordedOn"
+                  label="Recorded On (Audit Timestamp)"
+                  tooltip="The system capture timestamp accurately logging when the transaction was entered"
+                >
+                  <DatePicker
+                    showTime
+                    style={{ width: '100%' }}
+                    format="YYYY-MM-DD HH:mm"
+                    disabled
+                  />
+                </Form.Item>
+              </Col>
+            </Row>
+
+            <Row gutter={12}>
+              <Col span={24}>
                 <Form.Item
                   name="method"
                   label="Payment Method"

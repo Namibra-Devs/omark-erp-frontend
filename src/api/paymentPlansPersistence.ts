@@ -63,6 +63,7 @@ export interface CustomerInfo {
 export interface RecordPaymentParams {
   amountMinor: number;
   paidOn: string;
+  recordedOn?: string;
   method?: PaymentMethod | string;
   reference?: string;
   sequence?: number;
@@ -368,6 +369,8 @@ export interface RecordPaymentResult {
   surplusAppliedMinor: number;
   newBalanceMinor: number;
   updatedSchedule: ReturnType<typeof buildPaymentPlanSchedule>;
+  paidOn?: string;
+  recordedOn?: string;
 }
 
 /**
@@ -391,6 +394,7 @@ export async function recordPlanPaymentWithBackend(
   const method = payment.method || 'bank_transfer';
   const reference = payment.reference || `REC-${Date.now().toString().slice(-6)}`;
   const paidOnDate = payment.paidOn || new Date().toISOString();
+  const recordedOnDate = payment.recordedOn || new Date().toISOString();
 
   const preTargetRow = currentSchedule.rows.find((r: any) => r.sequence === sequence);
   const expectedMinor = preTargetRow
@@ -494,6 +498,7 @@ export async function recordPlanPaymentWithBackend(
     const res = await apiClient.post<ApiResponse<any>>(`/payment-plans/${realPlanId}/payments`, {
       amountMinor: cleanAmountMinor,
       paidOn: formattedPaidOn,
+      recordedOn: recordedOnDate,
       method: cleanMethod,
       reference: cleanRef,
     });
@@ -521,7 +526,8 @@ export async function recordPlanPaymentWithBackend(
     paidOnDate,
     dynamicNote,
     customerInfo?.recordedBy,
-    ledgerMeta
+    ledgerMeta,
+    recordedOnDate
   );
 
   if (realPlanId !== plan.id) {
@@ -534,7 +540,8 @@ export async function recordPlanPaymentWithBackend(
       paidOnDate,
       dynamicNote,
       customerInfo?.recordedBy,
-      ledgerMeta
+      ledgerMeta,
+      recordedOnDate
     );
   }
 
@@ -585,6 +592,25 @@ export async function recordPlanPaymentWithBackend(
     } catch {
       // ignore auxiliary lookup failure
     }
+
+    if (!targetPhone || !targetName) {
+      try {
+        const cachedRaw = typeof window !== 'undefined' ? (localStorage.getItem('omark_customers_cache') || localStorage.getItem('omark_customers')) : null;
+        if (cachedRaw) {
+          const parsed = JSON.parse(cachedRaw);
+          const list = Array.isArray(parsed) ? parsed : (parsed?.items || []);
+          const match = list.find((c: any) => c && (c.id === custLookupId || c.id === plan.customerId));
+          if (match) {
+            if (!targetPhone && match.phoneNumber) targetPhone = match.phoneNumber;
+            if ((!targetName || targetName === 'Valued Customer') && match.firstName) {
+              targetName = `${match.firstName} ${match.lastName || ''}`.trim();
+            }
+          }
+        }
+      } catch {
+        // ignore local cache fallback failure
+      }
+    }
   }
 
   try {
@@ -617,5 +643,7 @@ export async function recordPlanPaymentWithBackend(
     surplusAppliedMinor,
     newBalanceMinor,
     updatedSchedule,
+    paidOn: paidOnDate,
+    recordedOn: recordedOnDate,
   };
 }

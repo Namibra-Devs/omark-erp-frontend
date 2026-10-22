@@ -41,6 +41,7 @@ import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto } from '@/utils/userPhotoStorage';
 import { PayslipModal } from '@/components/payroll/PayslipModal';
 import { CompensationModal } from '@/components/payroll/CompensationModal';
 import { useUsersQuery, useUpdateUserMutation, useUserAssignmentQuery, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, getRoleLabel, getRoleColor, getRoleIcon, toBackendRole, toE164Phone } from '@/api/users';
@@ -736,7 +737,17 @@ export const StaffProfilePage: React.FC = () => {
       <Card style={{ marginBottom: 24, borderRadius: 12, boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
         <Row gutter={[24, 24]} align="middle">
           <Col xs={24} sm={6} md={4} style={{ textAlign: 'center' }}>
-            <PhotoUpload entityType="staff" entityId={staffMember.id} size={100} />
+            <PhotoUpload
+              entityType="staff"
+              entityId={staffMember.id}
+              size={100}
+              src={staffMember.avatarUrl || staffMember.photoUrl}
+              onPhotoChange={(url) => {
+                if (staffMember?.id) {
+                  setPhoto('staff', staffMember.id, url || '');
+                }
+              }}
+            />
           </Col>
           <Col xs={24} sm={18} md={12}>
             <Space direction="vertical" size={4}>

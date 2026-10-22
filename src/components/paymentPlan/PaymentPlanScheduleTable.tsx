@@ -185,6 +185,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
     form.setFieldsValue({
       amountGHS: defaultAmount,
       paidOn: dayjs(),
+      recordedOn: dayjs(),
       method: 'bank_transfer',
       reference: `INST-${row.sequence}-${Date.now().toString().slice(-4)}`,
       notes: `${row.ordinal} installment payment`,
@@ -197,6 +198,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       const amountGHS = row.isPartiallyPaid && row.deficitGHS > 0 ? row.deficitGHS : row.installmentGHS;
       const amountMinor = Math.round(amountGHS * 100);
       const paidOn = new Date().toISOString();
+      const recordedOn = new Date().toISOString();
       const method = 'bank_transfer';
       const reference = `QUICK-${row.sequence}-${Date.now().toString().slice(-4)}`;
 
@@ -208,6 +210,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
         {
           amountMinor,
           paidOn,
+          recordedOn,
           method,
           reference,
           sequence: row.sequence,
@@ -269,6 +272,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
       const amountGHS = values.amountGHS !== undefined && values.amountGHS !== null ? values.amountGHS : defaultAmt;
       const amountMinor = Math.round(amountGHS * 100);
       const paidOn = values.paidOn ? values.paidOn.toISOString() : new Date().toISOString();
+      const recordedOn = values.recordedOn ? values.recordedOn.toISOString() : new Date().toISOString();
       const method = values.method || 'bank_transfer';
       const reference = values.reference || `REC-${Date.now().toString().slice(-6)}`;
 
@@ -280,6 +284,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
         {
           amountMinor,
           paidOn,
+          recordedOn,
           method,
           reference,
           sequence: selectedRow.sequence,
@@ -336,6 +341,8 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
         propertyName: propertyName || (plan as any).propertyName,
         amountPaidGHS: amountGHS,
         paymentDate: dayjs(paidOn).format('YYYY-MM-DD'),
+        paidOn,
+        recordedOn,
         paymentMethod: method,
         reference,
         planId: plan.id,
@@ -366,11 +373,31 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
 
   const ledgerColumns: any[] = [
     {
-      title: 'Date & Time',
+      title: 'Paid On',
       dataIndex: 'paidOn',
       key: 'paidOn',
+      width: 140,
+      render: (val: string) => (
+        <Space direction="vertical" size={0}>
+          <Text strong style={{ fontSize: 13 }}>{dayjs(val).format('D MMM YYYY')}</Text>
+          <Text type="secondary" style={{ fontSize: 11 }}>{dayjs(val).format('HH:mm') !== '00:00' ? dayjs(val).format('HH:mm') : ''}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Recorded On',
+      dataIndex: 'recordedOn',
+      key: 'recordedOn',
       width: 155,
-      render: (val: string) => dayjs(val).format('D MMM YYYY, HH:mm'),
+      render: (val: string, tx: PlanPaymentTransaction) => {
+        const recordedDate = val || tx.paidOn;
+        return (
+          <Space direction="vertical" size={0}>
+            <Text style={{ fontSize: 12 }}>{dayjs(recordedDate).format('D MMM YYYY, HH:mm')}</Text>
+            <Text type="secondary" style={{ fontSize: 10 }}>Audit capture</Text>
+          </Space>
+        );
+      },
     },
     {
       title: 'Receipt / Ref',
@@ -725,7 +752,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
                 {scheduleInfo.paidCount} of {scheduleInfo.numMonths} Paid
               </Tag>
               <Tag color="cyan">
-                ₵{scheduleInfo.totalPaidGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Total Paid
+                ₵{scheduleInfo.totalPaidToDateGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Total Paid to Date
               </Tag>
               <Tag color="green">
                 ₵{scheduleInfo.currentBalanceGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} Remaining Balance
@@ -897,6 +924,7 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
               initialValues={{
                 amountGHS: expectedGHS,
                 paidOn: dayjs(),
+                recordedOn: dayjs(),
                 method: 'bank_transfer',
                 reference: `INST-${selectedRow.sequence}-${Date.now().toString().slice(-4)}`,
               }}
@@ -963,6 +991,12 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
                     <Text strong>Net Due for this Installment:</Text>
                     <Text strong style={{ fontSize: 15, color: '#1677ff' }}>
                       ₵{expectedGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </Text>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <Text type="secondary">Total Paid to Date:</Text>
+                    <Text strong style={{ color: '#16a34a' }}>
+                      ₵{scheduleInfo.totalPaidToDateGHS.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </Text>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -1095,13 +1129,32 @@ export const PaymentPlanScheduleTable: React.FC<PaymentPlanScheduleTableProps> =
                 />
               </Form.Item>
 
-              <Form.Item
-                name="paidOn"
-                label="Payment Date"
-                rules={[{ required: true, message: 'Please select payment date' }]}
-              >
-                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-              </Form.Item>
+              <Row gutter={12}>
+                <Col span={12}>
+                  <Form.Item
+                    name="paidOn"
+                    label="Paid On (Deposit Date)"
+                    tooltip="The actual date when customer made the payment or deposit"
+                    rules={[{ required: true, message: 'Please select payment date' }]}
+                  >
+                    <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item
+                    name="recordedOn"
+                    label="Recorded On (Audit Timestamp)"
+                    tooltip="The system capture timestamp accurately logging when the transaction was entered"
+                  >
+                    <DatePicker
+                      showTime
+                      style={{ width: '100%' }}
+                      format="YYYY-MM-DD HH:mm"
+                      disabled
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
 
               <Form.Item
                 name="method"

@@ -430,7 +430,13 @@ export const UserManagement: React.FC<UserManagementProps> = ({
         const fullName = record.name || `${record.firstName || ''} ${record.lastName || ''}`.trim() || record.email;
         return (
           <Space size={10} style={{ display: 'flex', alignItems: 'center' }}>
-            <PhotoUpload entityType="staff" entityId={record.id} size={36} editable={false} />
+            <PhotoUpload
+              entityType="staff"
+              entityId={record.id}
+              size={36}
+              editable={false}
+              src={record.avatarUrl || record.photoUrl}
+            />
             <div style={{ minWidth: 0 }}>
               <Tooltip title="Click to view full staff profile & performance stats">
                 <a

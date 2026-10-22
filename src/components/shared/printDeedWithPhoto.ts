@@ -10,10 +10,11 @@
 // there produces one combined document. If the hosting origin sends
 // X-Frame-Options/CSP headers blocking iframing, the embed will fail to
 import { downloadDeedPDF } from '@/api/deeds';
+import { getEntityPhoto } from '@/utils/userPhotoStorage';
 
 export async function printDeedWithPhoto(deedId: string, customerId: string, customerName: string, photoUrl?: string): Promise<void> {
   const documentUrl = await downloadDeedPDF(deedId);
-  const photo = photoUrl || '';
+  const photo = photoUrl || getEntityPhoto('customer', customerId) || '';
 
   const printWindow = window.open('', '_blank');
   if (!printWindow) {

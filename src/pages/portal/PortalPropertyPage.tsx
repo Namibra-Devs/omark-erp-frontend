@@ -48,6 +48,11 @@ export const PortalPropertyPage: React.FC = () => {
             <Descriptions column={{ xs: 1, sm: 2 }} style={{ marginTop: 16 }}>
               <Descriptions.Item label="Total Price">{paymentPlan.currency || 'GHS'} {(paymentPlan.totalAmountMinor / 100).toLocaleString()}</Descriptions.Item>
               <Descriptions.Item label="Down Payment">{paymentPlan.currency || 'GHS'} {(paymentPlan.downPaymentMinor / 100).toLocaleString()}</Descriptions.Item>
+              <Descriptions.Item label="Total Paid to Date">
+                <strong style={{ color: '#16a34a' }}>
+                  {paymentPlan.currency || 'GHS'} {(Math.max(0, (paymentPlan.totalAmountMinor || 0) - (paymentPlan.balanceMinor ?? 0)) / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </strong>
+              </Descriptions.Item>
               <Descriptions.Item label="Monthly Installment">{paymentPlan.currency || 'GHS'} {(paymentPlan.monthlyAmountMinor / 100).toLocaleString()}</Descriptions.Item>
               <Descriptions.Item label="Duration">{paymentPlan.numMonths} months</Descriptions.Item>
               <Descriptions.Item label="Balance Remaining">{paymentPlan.currency || 'GHS'} {(paymentPlan.balanceMinor / 100).toLocaleString()}</Descriptions.Item>
