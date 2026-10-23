@@ -182,7 +182,6 @@ export const AppointmentsPage: React.FC = () => {
     refetch: refetchAppointments,
     error: appointmentsError,
   } = useScopedAppointments({
-    status: (statusFilter !== 'all' && statusFilter !== 'overdue' && statusFilter !== 'due_today') ? statusFilter as AppointmentStatus : undefined,
     pageSize: 1000,
   });
 
@@ -1851,7 +1850,7 @@ export const AppointmentsPage: React.FC = () => {
             : user?.role === 'marketing_director'
             ? scopeFilter === 'personal'
               ? 'My Appointments'
-              : 'Marketing Team Appointments'
+              : 'All Marketing Staff Appointments'
             : 'My Appointments'
         }
         subtitle={
@@ -1862,7 +1861,7 @@ export const AppointmentsPage: React.FC = () => {
             : user?.role === 'marketing_director'
             ? scopeFilter === 'personal'
               ? 'View and manage your personal bookings.'
-              : 'Overview of appointments created by you and all marketing staff members.'
+              : 'Overview of all appointments created by marketing staff and yourself.'
             : 'View and manage your individual client appointments. Showing appointments created by you.'
         }
         actions={[
@@ -1911,30 +1910,24 @@ export const AppointmentsPage: React.FC = () => {
               <Text strong style={{ fontSize: 13, color: '#334155' }}>
                 <UserOutlined style={{ marginRight: 6, color: tokens.primary }} /> Administrator Visibility Scope:
               </Text>
-              <Segmented
+              <Radio.Group
                 value={scopeFilter}
-                onChange={(val) => setScopeFilter(val as 'personal' | 'all')}
-                options={[
-                  {
-                    label: (
-                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
-                        <TeamOutlined style={{ marginRight: 6 }} />
-                        All Staff Appointments ({effectiveAppointments.length})
-                      </span>
-                    ),
-                    value: 'all',
-                  },
-                  {
-                    label: (
-                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
-                        <UserOutlined style={{ marginRight: 6 }} />
-                        My Bookings ({personalAppointments.length})
-                      </span>
-                    ),
-                    value: 'personal',
-                  },
-                ]}
-              />
+                onChange={(e) => {
+                  setScopeFilter(e.target.value);
+                  if (e.target.value === 'personal') {
+                    setStaffFilter('all');
+                  }
+                }}
+                buttonStyle="solid"
+                size="middle"
+              >
+                <Radio.Button value="all">
+                  🌐 All Appointments
+                </Radio.Button>
+                <Radio.Button value="personal">
+                  👤 My Personal ({personalAppointments.length})
+                </Radio.Button>
+              </Radio.Group>
             </Space>
             <Tag color={scopeFilter === 'personal' ? 'blue' : 'purple'} style={{ margin: 0, fontWeight: 600 }}>
               {scopeFilter === 'personal'
@@ -1948,37 +1941,31 @@ export const AppointmentsPage: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <Space size={12} wrap>
               <Text strong style={{ fontSize: 13, color: '#334155' }}>
-                <TeamOutlined style={{ marginRight: 6, color: tokens.primary }} /> Marketing Director Visibility Scope:
+                <TeamOutlined style={{ marginRight: 6, color: tokens.primary }} /> Visibility Scope:
               </Text>
-              <Segmented
+              <Radio.Group
                 value={scopeFilter}
-                onChange={(val) => setScopeFilter(val as 'personal' | 'all')}
-                options={[
-                  {
-                    label: (
-                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
-                        <TeamOutlined style={{ marginRight: 6 }} />
-                        Marketing Team ({effectiveAppointments.length})
-                      </span>
-                    ),
-                    value: 'all',
-                  },
-                  {
-                    label: (
-                      <span style={{ padding: '0 8px', fontWeight: 600 }}>
-                        <UserOutlined style={{ marginRight: 6 }} />
-                        My Bookings ({personalAppointments.length})
-                      </span>
-                    ),
-                    value: 'personal',
-                  },
-                ]}
-              />
+                onChange={(e) => {
+                  setScopeFilter(e.target.value);
+                  if (e.target.value === 'personal') {
+                    setStaffFilter('all');
+                  }
+                }}
+                buttonStyle="solid"
+                size="middle"
+              >
+                <Radio.Button value="all">
+                  🌐 All Appointments
+                </Radio.Button>
+                <Radio.Button value="personal">
+                  👤 My Personal ({personalAppointments.length})
+                </Radio.Button>
+              </Radio.Group>
             </Space>
-            <Tag color="cyan" style={{ margin: 0, fontWeight: 600 }}>
+            <Tag color={scopeFilter === 'personal' ? 'blue' : 'purple'} style={{ margin: 0, fontWeight: 600 }}>
               {scopeFilter === 'personal'
                 ? 'Showing your personal bookings only'
-                : 'Showing marketing department appointments (self + marketing staff)'}
+                : 'Showing all marketing staff appointments and your own'}
             </Tag>
           </div>
         </Card>
@@ -2171,7 +2158,29 @@ export const AppointmentsPage: React.FC = () => {
       {/* Filters and View Controls */}
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={[16, 16]} align="middle">
-          <Col xs={24} md={canFilterByStaff && scopeFilter === 'all' ? 5 : 6}>
+          {(user?.role === 'marketing_director' || user?.role === 'admin') && (
+            <Col xs={24} sm={12} md={6}>
+              <Radio.Group
+                value={scopeFilter}
+                onChange={(e) => {
+                  setScopeFilter(e.target.value);
+                  if (e.target.value === 'personal') {
+                    setStaffFilter('all');
+                  }
+                }}
+                buttonStyle="solid"
+                size="middle"
+              >
+                <Radio.Button value="all">
+                  🌐 All Appointments
+                </Radio.Button>
+                <Radio.Button value="personal">
+                  👤 My Personal ({personalAppointments.length})
+                </Radio.Button>
+              </Radio.Group>
+            </Col>
+          )}
+          <Col xs={24} md={(user?.role === 'marketing_director' || user?.role === 'admin') ? (canFilterByStaff && scopeFilter === 'all' ? 4 : 5) : (canFilterByStaff && scopeFilter === 'all' ? 5 : 6)}>
             <Input
               placeholder="Search by name, phone, reason"
               prefix={<SearchOutlined />}

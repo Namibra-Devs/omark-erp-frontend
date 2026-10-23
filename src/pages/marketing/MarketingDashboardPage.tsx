@@ -75,6 +75,7 @@ import {
   UserOutlined,
   PhoneOutlined,
   WarningOutlined,
+  CloseCircleOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import dayjs from 'dayjs';
@@ -344,7 +345,16 @@ export const MarketingDashboardPage: React.FC = () => {
   // Current staff member's personal appointments (creator-scoped)
   const myStaffAppointments = useMemo(() => {
     if (!user?.id) return [];
-    return appointments.filter((a) => getAppointmentCreatorId(a, allInteractions) === user.id);
+    return appointments.filter((a) => {
+      const creatorId = getAppointmentCreatorId(a, allInteractions);
+      return (
+        creatorId === user.id ||
+        (a as any).staffId === user.id ||
+        (a as any).userId === user.id ||
+        (a as any).createdByUserId === user.id ||
+        (a as any).createdBy === user.id
+      );
+    });
   }, [appointments, user?.id, allInteractions]);
 
   const liveMarketingProspectsCount = useMemo(() => {
@@ -612,9 +622,73 @@ export const MarketingDashboardPage: React.FC = () => {
     (user?.role as string) === 'marketing_director' ||
     (user?.role as string) === 'admin' ||
     (user?.role as string) === 'super_admin';
-  const [appointmentScope, setAppointmentScope] = useState<'personal' | 'all'>('personal');
+  const [appointmentScope, setAppointmentScope] = useState<'personal' | 'all'>('all');
   const [appointmentStatusFilter, setAppointmentStatusFilter] = useState<string>('all');
   const [appointmentSearchText, setAppointmentSearchText] = useState<string>('');
+
+  // Appointment Update Status Modal State
+  const [updateStatusModal, setUpdateStatusModal] = useState(false);
+  const [selectedAppointmentForStatus, setSelectedAppointmentForStatus] = useState<any>(null);
+  const [statusForm] = Form.useForm();
+
+  const handleOpenStatusModal = (record: any) => {
+    setSelectedAppointmentForStatus(record);
+    setUpdateStatusModal(true);
+    statusForm.setFieldsValue({
+      status: record.status,
+      feedback: record.feedback || '',
+    });
+  };
+
+  const handleUpdateStatusSubmit = async (values: { status: any; feedback?: string }) => {
+    if (!selectedAppointmentForStatus) return;
+    try {
+      await updateAppointmentMutation.mutateAsync({
+        id: selectedAppointmentForStatus.id,
+        payload: {
+          status: values.status,
+          feedback: values.feedback,
+        },
+      });
+
+      if (values.status === 'completed' && selectedAppointmentForStatus.prospectId) {
+        try {
+          await updateProspectMutation.mutateAsync({
+            id: selectedAppointmentForStatus.prospectId,
+            data: { status: 'meeting_completed' },
+          });
+        } catch (pErr) {
+          console.warn('Could not auto-advance prospect to meeting_completed:', pErr);
+        }
+      }
+
+      message.success(`Appointment status updated to ${values.status}!`);
+      setUpdateStatusModal(false);
+      setSelectedAppointmentForStatus(null);
+      statusForm.resetFields();
+      refetchAppointments();
+      refetchInteractions();
+      window.dispatchEvent(new Event('omark-appointments-changed'));
+      window.dispatchEvent(new Event('omark-prospects-changed'));
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to update appointment status');
+    }
+  };
+
+  const handleCancelAppointment = async (id: string) => {
+    try {
+      await updateAppointmentMutation.mutateAsync({
+        id,
+        payload: { status: 'canceled' },
+      });
+      message.success('Appointment canceled successfully!');
+      refetchAppointments();
+      refetchInteractions();
+      window.dispatchEvent(new Event('omark-appointments-changed'));
+    } catch (err: any) {
+      message.error(err?.message || 'Failed to cancel appointment');
+    }
+  };
 
   // Filter States for Prospects Tab
   const [prospectSearch, setProspectSearch] = useState('');
@@ -1039,7 +1113,7 @@ export const MarketingDashboardPage: React.FC = () => {
   // Filtered Appointments for the Appointments & Site Visits Tab
   const effectiveDashboardAppointments = useMemo(() => {
     const baseList =
-      appointmentScope === 'all' && isMarketingManagement
+      appointmentScope === 'all'
         ? appointments
         : myStaffAppointments;
 
@@ -1083,7 +1157,6 @@ export const MarketingDashboardPage: React.FC = () => {
     });
   }, [
     appointmentScope,
-    isMarketingManagement,
     appointments,
     myStaffAppointments,
     appointmentStatusFilter,
@@ -1092,7 +1165,7 @@ export const MarketingDashboardPage: React.FC = () => {
   ]);
 
   const appointmentBreakdown = useMemo(() => {
-    const targetList = appointmentScope === 'all' && isMarketingManagement ? appointments : myStaffAppointments;
+    const targetList = appointmentScope === 'all' ? appointments : myStaffAppointments;
     return {
       total: targetList.length,
       dueToday: targetList.filter((a) => getAppointmentDueStatus(a) === 'due_today').length,
@@ -1102,7 +1175,7 @@ export const MarketingDashboardPage: React.FC = () => {
       postponed: targetList.filter((a) => a.status === 'postponed').length,
       canceled: targetList.filter((a) => a.status === 'canceled').length,
     };
-  }, [appointmentScope, isMarketingManagement, appointments, myStaffAppointments]);
+  }, [appointmentScope, appointments, myStaffAppointments]);
 
   const appointmentColumns = [
     {
@@ -1211,7 +1284,7 @@ export const MarketingDashboardPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 160,
+      width: 220,
       render: (_: any, record: any) => {
         const matchedP = allMarketingProspects.find((p) => p.id === record.prospectId);
         const isEditable = isAppointmentEditableByUser(record, user, allUsers, allInteractions);
@@ -1219,7 +1292,7 @@ export const MarketingDashboardPage: React.FC = () => {
           return <Text type="secondary" style={{ fontSize: 12 }}>View only</Text>;
         }
         return (
-          <Space size={8}>
+          <Space size={6}>
             <Tooltip title="Reschedule Date">
               <Button
                 size="small"
@@ -1229,7 +1302,7 @@ export const MarketingDashboardPage: React.FC = () => {
                 Reschedule
               </Button>
             </Tooltip>
-            {record.status !== 'completed' && (
+            {record.status !== 'completed' && record.status !== 'canceled' && (
               <Tooltip title="Mark Attended & Completed">
                 <Button
                   size="small"
@@ -1242,6 +1315,14 @@ export const MarketingDashboardPage: React.FC = () => {
                         id: record.id,
                         payload: { status: 'completed' },
                       });
+                      if (record.prospectId) {
+                        try {
+                          await updateProspectMutation.mutateAsync({
+                            id: record.prospectId,
+                            data: { status: 'meeting_completed' },
+                          });
+                        } catch (_) {}
+                      }
                       message.success('Appointment marked as attended & completed!');
                       refetchAppointments();
                       refetchInteractions();
@@ -1251,6 +1332,30 @@ export const MarketingDashboardPage: React.FC = () => {
                     }
                   }}
                 />
+              </Tooltip>
+            )}
+            <Tooltip title="Update Status">
+              <Button
+                size="small"
+                icon={<EditOutlined />}
+                onClick={() => handleOpenStatusModal(record)}
+              />
+            </Tooltip>
+            {record.status !== 'canceled' && record.status !== 'completed' && (
+              <Tooltip title="Cancel Appointment">
+                <Popconfirm
+                  title="Cancel Appointment"
+                  description="Are you sure you want to cancel this appointment?"
+                  onConfirm={() => handleCancelAppointment(record.id)}
+                  okText="Yes, Cancel"
+                  cancelText="No"
+                >
+                  <Button
+                    size="small"
+                    danger
+                    icon={<CloseCircleOutlined />}
+                  />
+                </Popconfirm>
               </Tooltip>
             )}
           </Space>
@@ -1839,6 +1944,25 @@ export const MarketingDashboardPage: React.FC = () => {
         onChange={setActiveTab}
         type="card"
         style={{ marginBottom: 24 }}
+        tabBarExtraContent={
+          activeTab === 'appointments' || activeTab === 'overview' ? (
+            <Space style={{ marginRight: 8 }}>
+              <Radio.Group
+                value={appointmentScope}
+                onChange={(e) => setAppointmentScope(e.target.value as 'personal' | 'all')}
+                buttonStyle="solid"
+                size="middle"
+              >
+                <Radio.Button value="all">
+                  🌐 All Appointments ({appointments.length})
+                </Radio.Button>
+                <Radio.Button value="personal">
+                  👤 My Personal ({myStaffAppointments.length})
+                </Radio.Button>
+              </Radio.Group>
+            </Space>
+          ) : undefined
+        }
         items={[
           {
             key: 'overview',
@@ -2233,11 +2357,28 @@ export const MarketingDashboardPage: React.FC = () => {
                   title={
                     <Space>
                       <CalendarOutlined style={{ color: '#0284c7' }} />
-                      <span>Upcoming Appointments & Site Visits ({myStaffAppointments.length})</span>
+                      <span>
+                        {appointmentScope === 'personal'
+                          ? `My Scheduled Appointments & Site Visits (${myStaffAppointments.length})`
+                          : `All Marketing Staff Appointments & Site Visits (${appointments.length})`}
+                      </span>
                     </Space>
                   }
                   extra={
-                    <Space>
+                    <Space wrap>
+                      <Radio.Group
+                        value={appointmentScope}
+                        onChange={(e) => setAppointmentScope(e.target.value as 'personal' | 'all')}
+                        buttonStyle="solid"
+                        size="small"
+                      >
+                        <Radio.Button value="all">
+                          🌐 All Appointments ({appointments.length})
+                        </Radio.Button>
+                        <Radio.Button value="personal">
+                          👤 My Personal ({myStaffAppointments.length})
+                        </Radio.Button>
+                      </Radio.Group>
                       <Button
                         type="primary"
                         ghost
@@ -2248,7 +2389,7 @@ export const MarketingDashboardPage: React.FC = () => {
                         Book Inspection / Meeting
                       </Button>
                       <Button type="link" size="small" onClick={() => setActiveTab('appointments')}>
-                        View All ({appointments.length}) &rarr;
+                        View All ({appointmentScope === 'personal' ? myStaffAppointments.length : appointments.length}) &rarr;
                       </Button>
                     </Space>
                   }
@@ -2443,7 +2584,7 @@ export const MarketingDashboardPage: React.FC = () => {
               <span>
                 <CalendarOutlined /> Appointments & Site Visits
                 <Badge
-                  count={myStaffAppointments.length}
+                  count={appointmentScope === 'personal' ? myStaffAppointments.length : appointments.length}
                   overflowCount={999}
                   style={{ backgroundColor: '#0284c7', marginLeft: 6 }}
                 />
@@ -2463,16 +2604,19 @@ export const MarketingDashboardPage: React.FC = () => {
                 }
                 extra={
                   <Space wrap>
-                    {isMarketingManagement && (
-                      <Segmented
-                        value={appointmentScope}
-                        onChange={(val) => setAppointmentScope(val as 'personal' | 'all')}
-                        options={[
-                          { label: `My Appointments (${myStaffAppointments.length})`, value: 'personal' },
-                          { label: `All Staff (${appointments.length})`, value: 'all' },
-                        ]}
-                      />
-                    )}
+                    <Radio.Group
+                      value={appointmentScope}
+                      onChange={(e) => setAppointmentScope(e.target.value as 'personal' | 'all')}
+                      buttonStyle="solid"
+                      size="middle"
+                    >
+                      <Radio.Button value="all">
+                        🌐 All Appointments ({appointments.length})
+                      </Radio.Button>
+                      <Radio.Button value="personal">
+                        👤 My Personal ({myStaffAppointments.length})
+                      </Radio.Button>
+                    </Radio.Group>
                     <Button
                       type="primary"
                       icon={<PlusOutlined />}
@@ -2487,7 +2631,22 @@ export const MarketingDashboardPage: React.FC = () => {
               >
                 {/* Status Filter Chips and Search */}
                 <Row gutter={[12, 12]} style={{ marginBottom: 16 }} align="middle">
-                  <Col xs={24} md={8}>
+                  <Col xs={24} sm={12} md={7}>
+                    <Radio.Group
+                      value={appointmentScope}
+                      onChange={(e) => setAppointmentScope(e.target.value as 'personal' | 'all')}
+                      buttonStyle="solid"
+                      size="middle"
+                    >
+                      <Radio.Button value="all">
+                        🌐 All Appointments ({appointments.length})
+                      </Radio.Button>
+                      <Radio.Button value="personal">
+                        👤 My Personal ({myStaffAppointments.length})
+                      </Radio.Button>
+                    </Radio.Group>
+                  </Col>
+                  <Col xs={24} md={7}>
                     <Input
                       placeholder="Search by client name, phone, or location..."
                       prefix={<SearchOutlined />}
@@ -2496,7 +2655,7 @@ export const MarketingDashboardPage: React.FC = () => {
                       allowClear
                     />
                   </Col>
-                  <Col xs={24} md={16}>
+                  <Col xs={24} md={10}>
                     <Space wrap>
                       <Button
                         size="small"
@@ -4050,6 +4209,54 @@ export const MarketingDashboardPage: React.FC = () => {
           handleRefreshMarketingStorage();
         }}
       />
+
+      {/* Update Appointment Status Modal */}
+      <Modal
+        title="Update Appointment Status"
+        open={updateStatusModal}
+        onCancel={() => {
+          setUpdateStatusModal(false);
+          setSelectedAppointmentForStatus(null);
+          statusForm.resetFields();
+        }}
+        footer={null}
+        width={480}
+      >
+        <Form
+          form={statusForm}
+          layout="vertical"
+          onFinish={handleUpdateStatusSubmit}
+        >
+          <Form.Item
+            name="status"
+            label="Status"
+            rules={[{ required: true, message: 'Please select a status' }]}
+          >
+            <Select placeholder="Select new status">
+              <Select.Option value="scheduled">Scheduled</Select.Option>
+              <Select.Option value="postponed">Postponed</Select.Option>
+              <Select.Option value="completed">Completed</Select.Option>
+              <Select.Option value="canceled">Canceled</Select.Option>
+              <Select.Option value="no_show">No Show</Select.Option>
+            </Select>
+          </Form.Item>
+          <Form.Item
+            name="feedback"
+            label="Notes / Reason for Postponement or Update"
+          >
+            <Input.TextArea
+              rows={3}
+              placeholder="Add reason for postponement or any notes..."
+            />
+          </Form.Item>
+          <Form.Item style={{ marginBottom: 0, textAlign: 'right' }}>
+            <Space>
+              <Button onClick={() => setUpdateStatusModal(false)}>Cancel</Button>
+              <Button type="primary" htmlType="submit">Update Status</Button>
+            </Space>
+          </Form.Item>
+        </Form>
+      </Modal>
 
       <BonusRulesModal open={bonusModalOpen} onClose={() => setBonusModalOpen(false)} />
     </div>

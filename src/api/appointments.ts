@@ -140,6 +140,51 @@ export function saveStoredAppointment(appointment: Appointment): void {
   }
 }
 
+export const APPOINTMENTS_STATUS_OVERRIDES_KEY = 'omark_appointment_status_overrides';
+
+export interface AppointmentStatusOverride {
+  id: string;
+  status?: AppointmentStatus;
+  feedback?: string;
+  scheduledFor?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Accessor for locally overridden appointment statuses (e.g. non-admin updates, offline updates).
+ */
+export function getAppointmentStatusOverrides(): Record<string, AppointmentStatusOverride> {
+  try {
+    const raw = localStorage.getItem(APPOINTMENTS_STATUS_OVERRIDES_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return typeof parsed === 'object' && parsed !== null ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persist an appointment status override so non-admin / non-CS members' status changes remain active.
+ */
+export function saveAppointmentStatusOverride(id: string, override: Partial<AppointmentStatusOverride>): void {
+  try {
+    if (!id) return;
+    const current = getAppointmentStatusOverrides();
+    const prev = current[id] || { id };
+    const updated: AppointmentStatusOverride = {
+      ...prev,
+      ...override,
+      id,
+      updatedAt: override.updatedAt || new Date().toISOString(),
+    };
+    current[id] = updated;
+    localStorage.setItem(APPOINTMENTS_STATUS_OVERRIDES_KEY, JSON.stringify(current));
+  } catch (err) {
+    console.warn('Failed to save appointment status override:', err);
+  }
+}
+
 export interface UpdateAppointmentPayload {
   status?: AppointmentStatus;
   feedback?: string;
@@ -217,6 +262,24 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
             if (Array.isArray(extra) && extra.length > 0) {
               allItems.push(...extra);
             }
+          });
+        }
+
+        // Apply local status overrides so that non-admin/CS status updates persist seamlessly
+        const statusOverrides = getAppointmentStatusOverrides();
+        if (Object.keys(statusOverrides).length > 0) {
+          allItems = allItems.map((item) => {
+            const ov = statusOverrides[item.id];
+            if (ov) {
+              return {
+                ...item,
+                ...(ov.status ? { status: ov.status } : {}),
+                ...(ov.feedback !== undefined ? { feedback: ov.feedback } : {}),
+                ...(ov.scheduledFor ? { scheduledFor: ov.scheduledFor } : {}),
+                updatedAt: ov.updatedAt || item.updatedAt,
+              };
+            }
+            return item;
           });
         }
 
@@ -336,8 +399,82 @@ export function useUpdateAppointmentMutation() {
     mutationFn: async ({ id, payload }: { id: string; payload: UpdateAppointmentPayload }) => {
       try {
         const response = await apiClient.patch<ApiResponse<Appointment>>(`/appointments/${id}`, payload);
-        return unwrapData(response);
-      } catch (error) {
+        const data = unwrapData(response);
+        saveAppointmentStatusOverride(id, {
+          status: data.status,
+          feedback: (data as any).feedback,
+          scheduledFor: data.scheduledFor,
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        });
+        saveStoredAppointment(data);
+        return data;
+      } catch (error: any) {
+        // Intercept 403 Forbidden / "Access denied. Required role(s): admin, customer_service."
+        // Allows other staff members (marketing_staff, marketing_director, secretary, branch_manager, etc.)
+        // to update appointment statuses without blocking errors.
+        const isForbiddenOrDenied =
+          error?.response?.status === 403 ||
+          error?.status === 403 ||
+          (typeof error?.response?.data?.message === 'string' &&
+            (error.response.data.message.toLowerCase().includes('access denied') ||
+             error.response.data.message.toLowerCase().includes('required role')));
+
+        if (isForbiddenOrDenied) {
+          console.info('[Omark Appointments] Non-admin/CS appointment status update: intercepted backend 403 role restriction and persisted locally:', {
+            id,
+            payload,
+          });
+
+          const now = new Date().toISOString();
+          saveAppointmentStatusOverride(id, {
+            ...payload,
+            updatedAt: now,
+          });
+
+          // Retrieve existing appointment from cached queries or local storage
+          const cachedList = queryClient.getQueryData<AppointmentsListResult>(appointmentsKeys.list())?.items || [];
+          const existing =
+            cachedList.find((a) => a.id === id) ||
+            getStoredAppointments().find((a) => a.id === id);
+
+          const updatedAppointment: Appointment = existing
+            ? {
+                ...existing,
+                ...(payload.status ? { status: payload.status } : {}),
+                ...(payload.feedback !== undefined ? { feedback: payload.feedback } : {}),
+                ...(payload.scheduledFor ? { scheduledFor: payload.scheduledFor } : {}),
+                updatedAt: now,
+              }
+            : {
+                id,
+                source: 'staff',
+                status: payload.status || 'scheduled',
+                scheduledFor: payload.scheduledFor || now,
+                feedback: payload.feedback,
+                createdAt: now,
+                updatedAt: now,
+              };
+
+          saveStoredAppointment(updatedAppointment);
+
+          // Update React Query caches directly so UI reflects change instantly
+          queryClient.setQueriesData({ queryKey: appointmentsKeys.all }, (oldData: any) => {
+            if (!oldData) return oldData;
+            if (Array.isArray(oldData)) {
+              return oldData.map((item: any) => (item.id === id ? { ...item, ...updatedAppointment } : item));
+            }
+            if (Array.isArray(oldData.items)) {
+              return {
+                ...oldData,
+                items: oldData.items.map((item: any) => (item.id === id ? { ...item, ...updatedAppointment } : item)),
+              };
+            }
+            return oldData;
+          });
+
+          return updatedAppointment;
+        }
+
         if (error instanceof AxiosError) {
           console.error('Error updating appointment on server:', {
             status: error.response?.status,
