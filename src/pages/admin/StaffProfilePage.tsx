@@ -63,7 +63,8 @@ import { useAttendanceQuery, useStaffAttendanceStatsQuery, type AttendanceRecord
 import { ATTENDANCE_STATUS_META } from '@/constants/attendance';
 import { useStaffLeaveRequestsQuery } from '@/api/leaves';
 import { useProspectsQuery, useUpdateProspectMutation } from '@/api/prospects';
-import { consolidateAllProspects, getStaffAssignedProspects } from '@/utils/prospectAssignment';
+import { useCustomersQuery } from '@/api/customers';
+import { consolidateAllProspects, getStaffAssignedProspects, getStaffAssignedAppointments } from '@/utils/prospectAssignment';
 import { useScopedAppointments } from '@/api/appointments';
 import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import { useDeedsQuery } from '@/api/deeds';
@@ -138,7 +139,9 @@ export const StaffProfilePage: React.FC = () => {
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
-  const { appointments: scopedAppointments, isLoading: appointmentsLoading, allInteractions } = useScopedAppointments();
+  const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
+  const allCustomers = useMemo(() => customersData?.items ?? [], [customersData]);
+  const { appointments: scopedAppointments, isLoading: appointmentsLoading, allInteractions } = useScopedAppointments({ pageSize: 1000 });
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery({ pageSize: 500 });
 
   const isMarketingDirector = staffMember?.role === 'marketing_director' || storedAssignment?.role === 'marketing_director';
@@ -168,11 +171,16 @@ export const StaffProfilePage: React.FC = () => {
   }, [allConsolidatedProspects, targetStaffMember, branches]);
 
   const staffAppointments = useMemo(() => {
-    if (!id) return [];
-    return scopedAppointments.filter(
-      (a) => getAppointmentCreatorId(a, allInteractions) === id
+    if (!id || !targetStaffMember) return [];
+    return getStaffAssignedAppointments(
+      scopedAppointments,
+      targetStaffMember,
+      allConsolidatedProspects,
+      branches,
+      allCustomers,
+      allInteractions
     );
-  }, [scopedAppointments, allInteractions, id]);
+  }, [scopedAppointments, targetStaffMember, allConsolidatedProspects, branches, allCustomers, allInteractions, id]);
 
   const staffDeeds = useMemo(() => {
     return (deedsData?.items ?? []).filter((d) => d.generatedByUserId === id);

@@ -73,11 +73,20 @@ function isProspectCreatedByStaff(prospect, staffUser) {
     if (
       areIdsEqual(prospect.createdByUserId, staffId) ||
       areIdsEqual(prospect.creatorId, staffId) ||
+      areIdsEqual(prospect.createdBy, staffId) ||
+      areIdsEqual(prospect.created_by, staffId) ||
+      areIdsEqual(prospect.created_by_user_id, staffId) ||
       areIdsEqual(prospect.creator?.id, staffId) ||
+      areIdsEqual(prospect.created_by?.id, staffId) ||
       areIdsEqual(prospect.recordedByUserId, staffId) ||
       areIdsEqual(prospect.recorded_by_user_id, staffId) ||
       areIdsEqual(prospect.registeredByUserId, staffId) ||
-      areIdsEqual(prospect.registered_by_user_id, staffId)
+      areIdsEqual(prospect.registered_by_user_id, staffId) ||
+      areIdsEqual(prospect.userId, staffId) ||
+      areIdsEqual(prospect.user_id, staffId) ||
+      areIdsEqual(prospect.staffId, staffId) ||
+      areIdsEqual(prospect.marketerId, staffId) ||
+      areIdsEqual(prospect.agentId, staffId)
     ) {
       return true;
     }
@@ -86,6 +95,8 @@ function isProspectCreatedByStaff(prospect, staffUser) {
     prospect.createdByName,
     prospect.creatorName,
     prospect.creator?.name,
+    prospect.created_by_name,
+    prospect.created_by?.name,
     prospect.recordedByName,
     prospect.recorded_by_name,
     prospect.registeredByName,
@@ -104,12 +115,27 @@ function isProspectAssignedToStaff(prospect, staffUser) {
     if (
       areIdsEqual(prospect.assignedUserId, staffId) ||
       areIdsEqual(prospect.assignedStaffId, staffId) ||
+      areIdsEqual(prospect.assignedTo, staffId) ||
+      areIdsEqual(prospect.assigned_to, staffId) ||
+      areIdsEqual(prospect.assigned_to?.id, staffId) ||
+      areIdsEqual(prospect.assigned_user_id, staffId) ||
+      areIdsEqual(prospect.assigned_staff_id, staffId) ||
+      areIdsEqual(prospect.userId, staffId) ||
+      areIdsEqual(prospect.staffId, staffId) ||
+      areIdsEqual(prospect.marketerId, staffId) ||
+      areIdsEqual(prospect.agentId, staffId) ||
       areIdsEqual(prospect.assignedUser?.id, staffId)
     ) {
       return true;
     }
   }
-  const candidateNames = [prospect.assignedStaffName, prospect.assignedUserName, prospect.assignedUser?.name];
+  const candidateNames = [
+    prospect.assignedStaffName,
+    prospect.assignedUserName,
+    prospect.marketerName,
+    prospect.agentName,
+    prospect.assignedUser?.name
+  ];
   for (const cName of candidateNames) {
     if (cName && isStaffNameMatching(cName, staffUser)) return true;
   }
@@ -861,6 +887,353 @@ test('Admin Table Master Oversight vs Staff Dashboard Appointments: Admin sees a
   assert.equal(staffBAppointments.length, 1);
   assert.equal(staffBAppointments[0].id, 'appt-2');
 });
+
+// Dynamic Discovery & Distribution Helpers mirroring src/utils/prospectAssignment.ts
+function isGenericInboundOrSystemName(nameRaw) {
+  if (!nameRaw) return true;
+  const s = String(nameRaw).toLowerCase().trim();
+  const genericKeywords = [
+    'unassigned', 'inbound', 'direct', 'lead', 'leads', 'website', 'web', 'system',
+    'portal', 'walk-in', 'walkin', 'walk in', 'unknown', 'none', 'n/a', 'na',
+    'default', 'general', 'organic', 'call center', 'call-center', 'customer service',
+    'social media', 'advert', 'facebook', 'instagram', 'tiktok', 'google', 'referral pool',
+  ];
+  return genericKeywords.some((kw) => s === kw || s.includes(kw));
+}
+
+function distributeProspectsAcrossMarketingStaff(
+  allMarketingProspects = [],
+  marketingStaffUsers = [],
+  apiMarketers = [],
+  allAppointments = []
+) {
+  const discoveredStaffMap = new Map();
+
+  const registerStaffIfMissing = (idCandidate, nameCandidate, roleCandidate = 'marketing_staff', phoneCandidate) => {
+    if (!idCandidate && !nameCandidate) return;
+    if (nameCandidate && isGenericInboundOrSystemName(nameCandidate)) return;
+
+    for (const [existingId, existingStaff] of discoveredStaffMap.entries()) {
+      if (idCandidate && areIdsEqual(existingId, idCandidate)) return;
+      if (nameCandidate && isStaffNameMatching(nameCandidate, existingStaff)) return;
+    }
+
+    const resolvedId = String(idCandidate || `discovered_staff_${discoveredStaffMap.size + 1}`).trim();
+    const resolvedName = (nameCandidate || '').trim() || `Marketer (${resolvedId.slice(0, 6)})`;
+
+    discoveredStaffMap.set(resolvedId, {
+      id: resolvedId,
+      name: resolvedName,
+      role: roleCandidate,
+      phone: phoneCandidate || '',
+    });
+  };
+
+  (marketingStaffUsers || []).forEach((u) => {
+    if (!u) return;
+    const name = (`${u.firstName || ''} ${u.lastName || ''}`.trim() || u.name || '').trim();
+    registerStaffIfMissing(u.id, name, u.role || 'marketing_staff', u.phone || u.phoneNumber);
+  });
+
+  (apiMarketers || []).forEach((m) => {
+    if (!m) return;
+    registerStaffIfMissing(m.userId || m.id, m.name, 'marketing_staff', m.phone);
+  });
+
+  (allMarketingProspects || []).forEach((p) => {
+    if (!p) return;
+    const cName = p.createdByName || p.creatorName || p.creator?.name;
+    const cId = p.createdByUserId || p.creatorId || p.createdBy || p.userId;
+    registerStaffIfMissing(cId, cName);
+
+    const aName = p.assignedUserName || p.assignedStaffName || p.marketerName;
+    const aId = p.assignedUserId || p.assignedStaffId || p.assignedTo;
+    registerStaffIfMissing(aId, aName);
+  });
+
+  (allAppointments || []).forEach((a) => {
+    if (!a) return;
+    const cName = a.createdByName || a.staffName || a.assignedUserName;
+    const cId = a.createdByUserId || a.staffId || a.assignedUserId;
+    registerStaffIfMissing(cId, cName);
+  });
+
+  const discoveredStaffList = Array.from(discoveredStaffMap.values());
+  const staffMap = new Map();
+
+  discoveredStaffList.forEach((staff) => {
+    staffMap.set(String(staff.id).trim(), {
+      staff,
+      added: [],
+      assigned: [],
+    });
+  });
+
+  const unassignedProspects = [];
+
+  allMarketingProspects.forEach((prospect) => {
+    let matchedCreatorStaff = null;
+    for (const s of discoveredStaffList) {
+      if (isProspectCreatedByStaff(prospect, s)) {
+        matchedCreatorStaff = s;
+        break;
+      }
+    }
+
+    let matchedAssigneeStaff = null;
+    for (const s of discoveredStaffList) {
+      if (isProspectAssignedToStaff(prospect, s)) {
+        matchedAssigneeStaff = s;
+        break;
+      }
+    }
+
+    if (matchedAssigneeStaff) {
+      staffMap.get(String(matchedAssigneeStaff.id).trim())?.assigned.push(prospect);
+    }
+
+    let fallbackStaff = null;
+    if (!matchedCreatorStaff && !matchedAssigneeStaff) {
+      for (const s of discoveredStaffList) {
+        if (isProspectAssignedOrCreatedByStaff(prospect, s)) {
+          fallbackStaff = s;
+          break;
+        }
+      }
+    }
+
+    const primaryStaff = matchedCreatorStaff || matchedAssigneeStaff || fallbackStaff;
+    if (primaryStaff) {
+      staffMap.get(String(primaryStaff.id).trim())?.added.push(prospect);
+    } else {
+      unassignedProspects.push(prospect);
+    }
+  });
+
+  const staffRows = discoveredStaffList.map((staff) => {
+    const entry = staffMap.get(String(staff.id).trim());
+    const addedProspects = entry?.added || [];
+    const totalProspects = addedProspects.length;
+    const meetingScheduled = addedProspects.filter((p) => p.status === 'meeting_scheduled').length;
+    const meetingCompleted = addedProspects.filter((p) => p.status === 'meeting_completed').length;
+    const converted = addedProspects.filter((p) => p.status === 'purchased').length;
+    const conversionRate = totalProspects > 0 ? Math.round((converted / totalProspects) * 1000) / 10 : 0;
+
+    return {
+      id: String(staff.id),
+      userId: String(staff.id),
+      name: staff.name,
+      role: staff.role || 'marketing_staff',
+      phone: staff.phone || '',
+      totalProspects,
+      addedProspects,
+      assignedProspects: entry?.assigned || [],
+      meetingScheduled,
+      meetingCompleted,
+      converted,
+      conversionRate,
+    };
+  });
+
+  staffRows.sort((a, b) => b.totalProspects - a.totalProspects);
+
+  let unassignedRow = null;
+  if (unassignedProspects.length > 0) {
+    const totalUnassigned = unassignedProspects.length;
+    const meetingScheduled = unassignedProspects.filter((p) => p.status === 'meeting_scheduled').length;
+    const meetingCompleted = unassignedProspects.filter((p) => p.status === 'meeting_completed').length;
+    const converted = unassignedProspects.filter((p) => p.status === 'purchased').length;
+    const conversionRate = totalUnassigned > 0 ? Math.round((converted / totalUnassigned) * 1000) / 10 : 0;
+
+    unassignedRow = {
+      id: 'unassigned_pool',
+      userId: 'unassigned_pool',
+      name: 'Direct / Inbound Marketing Leads (Unassigned)',
+      role: 'unassigned',
+      phone: '',
+      totalProspects: totalUnassigned,
+      addedProspects: unassignedProspects,
+      assignedProspects: [],
+      meetingScheduled,
+      meetingCompleted,
+      converted,
+      conversionRate,
+      isUnassignedPool: true,
+    };
+  }
+
+  const totalAttributedProspects = allMarketingProspects.length;
+
+  return {
+    marketerLeaderboard: staffRows,
+    unassignedLeadsRow: unassignedRow,
+    totalAttributedProspects,
+  };
+}
+
+test('Marketing Staff Dynamic Discovery: Staff who created prospects are discovered dynamically even if not in initial branch users list', () => {
+  // Scenario from Screenshot 1: Elizabeth Serwaa is in Kumasi branch query.
+  // Cecilia Donkor is not in the branch query, but entered prospects into the system.
+  const initialBranchStaff = [
+    { id: 'dir-1', firstName: 'Elizabeth', lastName: 'Serwaa', role: 'marketing_director', phone: '+233547009973' }
+  ];
+
+  const allMarketingProspects = [
+    // 114 prospects created by Elizabeth Serwaa
+    ...Array.from({ length: 114 }, (_, i) => ({
+      id: `pros-es-${i + 1}`,
+      createdByUserId: 'dir-1',
+      createdByName: 'ELIZABETH SERWAA',
+      status: 'new',
+    })),
+    // 150 prospects created by Cecilia Donkor (raw fields from backend)
+    ...Array.from({ length: 150 }, (_, i) => ({
+      id: `pros-cd-${i + 1}`,
+      createdBy: 'cecilia-donkor-id',
+      createdByName: 'CECILIA DONKOR',
+      status: i < 10 ? 'meeting_scheduled' : i < 15 ? 'purchased' : 'new',
+    })),
+    // 221 truly inbound leads from website with no staff member
+    ...Array.from({ length: 221 }, (_, i) => ({
+      id: `pros-inbound-${i + 1}`,
+      source: 'marketing',
+      status: 'new',
+    })),
+  ];
+
+  assert.equal(allMarketingProspects.length, 485);
+
+  const { marketerLeaderboard, unassignedLeadsRow, totalAttributedProspects } = distributeProspectsAcrossMarketingStaff(
+    allMarketingProspects,
+    initialBranchStaff,
+    [],
+    []
+  );
+
+  // 1. Both staff members must be represented in marketerLeaderboard
+  assert.equal(marketerLeaderboard.length, 2);
+  const staffNames = marketerLeaderboard.map((m) => m.name);
+  assert.ok(staffNames.some((n) => n.includes('CECILIA DONKOR')), 'Cecilia Donkor must be discovered');
+  assert.ok(staffNames.some((n) => n.includes('Elizabeth Serwaa')), 'Elizabeth Serwaa must be present');
+
+  // 2. Cecilia Donkor must have her 150 prospects properly attributed, not dumped into unassigned
+  const ceciliaRow = marketerLeaderboard.find((m) => m.name.includes('CECILIA DONKOR'));
+  assert.equal(ceciliaRow.totalProspects, 150);
+  assert.equal(ceciliaRow.meetingScheduled, 10);
+  assert.equal(ceciliaRow.converted, 5);
+
+  // 3. Elizabeth Serwaa must have her 114 prospects properly attributed
+  const elizabethRow = marketerLeaderboard.find((m) => m.name.includes('Elizabeth Serwaa'));
+  assert.equal(elizabethRow.totalProspects, 114);
+
+  // 4. Only genuine unassigned leads (221) remain in unassignedRow
+  assert.ok(unassignedLeadsRow);
+  assert.equal(unassignedLeadsRow.totalProspects, 221);
+
+  // 5. Total sum matches exactly 485 (114 + 150 + 221 = 485)
+  assert.equal(totalAttributedProspects, 485);
+  const sumOfAllRows = marketerLeaderboard.reduce((sum, r) => sum + r.totalProspects, 0) + unassignedLeadsRow.totalProspects;
+  assert.equal(sumOfAllRows, 485);
+});
+
+test('Marketing Director Appointments Scoping: Director sees all staff appointments in All mode and only their own in Personal mode', () => {
+  const director = { id: 'dir-1', firstName: 'Elizabeth', lastName: 'Serwaa', role: 'marketing_director' };
+  const marketer1 = { id: 'mkt-1', firstName: 'Cecilia', lastName: 'Donkor', role: 'marketing_staff' };
+  const marketer2 = { id: 'mkt-2', firstName: 'Kofi', lastName: 'Annan', role: 'marketing_staff' };
+
+  const allAppointments = [
+    // 2 appointments for Director
+    { id: 'app-1', createdByUserId: 'dir-1', scheduledFor: '2026-10-27T10:00:00Z', status: 'scheduled' },
+    { id: 'app-2', assignedUserId: 'dir-1', scheduledFor: '2026-10-28T14:00:00Z', status: 'scheduled' },
+    // 3 appointments for Cecilia Donkor
+    { id: 'app-3', createdByUserId: 'mkt-1', createdByName: 'CECILIA DONKOR', scheduledFor: '2026-10-29T09:00:00Z', status: 'scheduled' },
+    { id: 'app-4', createdByUserId: 'mkt-1', scheduledFor: '2026-10-29T11:00:00Z', status: 'scheduled' },
+    { id: 'app-5', assignedStaffId: 'mkt-1', scheduledFor: '2026-10-30T15:00:00Z', status: 'completed' },
+    // 1 appointment for Kofi Annan
+    { id: 'app-6', createdByUserId: 'mkt-2', scheduledFor: '2026-10-31T12:00:00Z', status: 'scheduled' },
+  ];
+
+  // In "All" mode: Director sees all 6 marketing appointments
+  const allMarketingAppts = allAppointments;
+  assert.equal(allMarketingAppts.length, 6);
+
+  // In "Personal" mode: Director sees only appointments created by or assigned to themselves
+  const directorPersonalAppts = getStaffAssignedAppointments(allAppointments, director);
+  assert.equal(directorPersonalAppts.length, 2);
+  assert.deepEqual(directorPersonalAppts.map((a) => a.id), ['app-1', 'app-2']);
+
+  // Cecilia Donkor's personal appointments
+  const ceciliaPersonalAppts = getStaffAssignedAppointments(allAppointments, marketer1);
+  assert.equal(ceciliaPersonalAppts.length, 3);
+  assert.deepEqual(ceciliaPersonalAppts.map((a) => a.id), ['app-3', 'app-4', 'app-5']);
+});
+
+test('Marketing Staff Appointment Consistency: Stat card and Appointments Page match with all 4 appointments across overdue, scheduled, and completed', () => {
+  const lawrencia = {
+    id: '6aa27d0c-lawrencia',
+    firstName: 'Lawrencia',
+    lastName: 'adugyemfi',
+    role: 'marketing_staff',
+    branchId: 'kumasi-main',
+  };
+
+  const marketingAppointments = [
+    {
+      id: 'appt-1',
+      clientName: 'MR. DERRICK LA',
+      phoneNumber: '+233248335938',
+      createdByUserId: '6aa27d0c-lawrencia',
+      createdByName: 'Lawrencia adugyemfi',
+      scheduledFor: '2026-10-13T01:00:00Z',
+      status: 'scheduled', // Overdue (13d ago)
+      source: 'staff',
+    },
+    {
+      id: 'appt-2',
+      clientName: 'LUKE MAN',
+      phoneNumber: '+233546714059',
+      createdByUserId: '6aa27d0c-lawrencia',
+      createdByName: 'Lawrencia adugyemfi',
+      scheduledFor: '2026-10-27T14:00:00Z',
+      status: 'scheduled',
+      source: 'staff',
+    },
+    {
+      id: 'appt-3',
+      clientName: 'MR. OWUSU',
+      phoneNumber: '+233244822906',
+      createdByUserId: '6aa27d0c-lawrencia',
+      createdByName: 'Lawrencia adugyemfi',
+      scheduledFor: '2026-09-15T10:00:00Z',
+      status: 'completed',
+      source: 'staff',
+    },
+    {
+      id: 'appt-4',
+      clientName: 'MR. DENNIS',
+      phoneNumber: '+233533039458',
+      createdByUserId: '6aa27d0c-lawrencia',
+      createdByName: 'Lawrencia adugyemfi',
+      scheduledFor: '2026-09-15T10:00:00Z',
+      status: 'completed',
+      source: 'staff',
+    },
+  ];
+
+  // 1. All 4 appointments must be attributed to Lawrencia adugyemfi
+  const staffAppts = getStaffAssignedAppointments(marketingAppointments, lawrencia);
+  assert.equal(staffAppts.length, 4, 'Must attribute exactly 4 appointments to Lawrencia');
+
+  // 2. Overdue/scheduled (2) and completed (2) must both be present
+  const activeOrOverdue = staffAppts.filter((a) => a.status === 'scheduled' || a.status === 'postponed');
+  const completed = staffAppts.filter((a) => a.status === 'completed');
+  assert.equal(activeOrOverdue.length, 2, '2 scheduled/overdue appointments');
+  assert.equal(completed.length, 2, '2 completed appointments');
+
+  // 3. Stat card count ({staffAppts.length} = 4) matches Appointments Page table count (4)
+  assert.equal(staffAppts.length, activeOrOverdue.length + completed.length);
+});
+
 
 
 

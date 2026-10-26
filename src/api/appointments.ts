@@ -217,13 +217,18 @@ export const appointmentsKeys = {
  * Never merges local storage mock/offline records into displayed results.
  */
 export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = true) {
+  const effectiveParams = useMemo(() => ({
+    pageSize: 1000,
+    ...params,
+  }), [params]);
+
   return useQuery({
-    queryKey: appointmentsKeys.list(params),
+    queryKey: appointmentsKeys.list(effectiveParams),
     queryFn: async () => {
       try {
-        const requestedLimit = params?.pageSize || 100;
+        const requestedLimit = effectiveParams.pageSize || 1000;
         const safePageSize = Math.min(requestedLimit, 100);
-        const requestParams = { page: 1, ...params, pageSize: safePageSize };
+        const requestParams = { page: 1, ...effectiveParams, pageSize: safePageSize };
         const response = await apiClient.get<ApiResponse<Appointment[]>>('/appointments', { params: requestParams });
         const result = unwrapList(response) as AppointmentsListResult;
 
@@ -307,7 +312,7 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
             message: error.response?.data?.message || error.message,
           });
         }
-        return { items: [], total: 0, page: 1, pageSize: params?.pageSize || 100, totalPages: 1 };
+        return { items: [], total: 0, page: 1, pageSize: effectiveParams.pageSize || 1000, totalPages: 1 };
       }
     },
     enabled,
@@ -320,12 +325,17 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
  * Returns both the scoped list and exact matching counts.
  */
 export function useScopedAppointments(params?: AppointmentsListParams, enabled = true) {
+  const effectiveParams = useMemo(() => ({
+    pageSize: 1000,
+    ...params,
+  }), [params]);
+
   const { user } = useAuth();
   const { data: usersData } = useUsersQuery({ pageSize: 1000 });
   const allUsers = useMemo(() => usersData?.items ?? [], [usersData]);
   const { interactions: allInteractions } = useAllStaffInteractionsQuery();
 
-  const query = useAppointmentsQuery(params, enabled);
+  const query = useAppointmentsQuery(effectiveParams, enabled);
   const rawItems = query.data?.items ?? [];
 
   const scopedAppointments = useMemo(() => {

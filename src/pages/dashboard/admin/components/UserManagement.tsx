@@ -34,6 +34,7 @@ import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import {
   consolidateAllProspects,
   getStaffAssignedProspectCount,
+  getStaffAssignedAppointments,
 } from '@/utils/prospectAssignment';
 import { useDepartmentsQuery, mockBranchDepartments } from '@/api/branches';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
@@ -172,7 +173,7 @@ export const UserManagement: React.FC<UserManagementProps> = ({
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
-  const { appointments: scopedAppointments, allInteractions } = useScopedAppointments();
+  const { appointments: scopedAppointments, allInteractions } = useScopedAppointments({ pageSize: 1000 });
 
   const allConsolidatedProspects = useMemo(() => {
     return consolidateAllProspects(
@@ -189,9 +190,17 @@ export const UserManagement: React.FC<UserManagementProps> = ({
     return getStaffAssignedProspectCount(allConsolidatedProspects, effectiveUser, branches);
   };
 
-  const getStaffAppointmentCount = (staffId: string, _role: string, _userRecord?: User) => {
-    const count = scopedAppointments.filter(
-      (a) => getAppointmentCreatorId(a, allInteractions) === staffId
+  const getStaffAppointmentCount = (staffId: string, _role: string, userRecord?: User) => {
+    const userObj = userRecord || users.find((u) => u.id === staffId) || { id: staffId, role: _role };
+    const stored = getStoredUserAssignment(staffId);
+    const effectiveUser = { ...stored, ...userObj, role: userObj.role || stored?.role || _role };
+    const count = getStaffAssignedAppointments(
+      scopedAppointments,
+      effectiveUser,
+      allConsolidatedProspects,
+      branches,
+      [],
+      allInteractions
     ).length;
     return { count };
   };

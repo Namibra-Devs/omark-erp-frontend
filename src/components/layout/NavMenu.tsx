@@ -153,7 +153,7 @@ export const NavMenu: React.FC = () => {
   );
 
   const canSeeAppointmentsBadge = Boolean(user?.id);
-  const { appointments: scopedAppointments } = useScopedAppointments();
+  const { appointments: scopedAppointments } = useScopedAppointments({ pageSize: 1000 });
 
   const { count: fallbackAppointmentsCount } = useUnseenCount(
     'appointments',

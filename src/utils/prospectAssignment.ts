@@ -169,13 +169,20 @@ export function isProspectCreatedByStaff(
     if (
       areIdsEqual(prospect.createdByUserId, staffId) ||
       areIdsEqual((prospect as any).creatorId, staffId) ||
+      areIdsEqual((prospect as any).createdBy, staffId) ||
+      areIdsEqual((prospect as any).created_by, staffId) ||
       areIdsEqual((prospect as any).created_by_user_id, staffId) ||
       areIdsEqual((prospect as any).creator?.id, staffId) ||
       areIdsEqual((prospect as any).created_by?.id, staffId) ||
       areIdsEqual((prospect as any).recordedByUserId, staffId) ||
       areIdsEqual((prospect as any).recorded_by_user_id, staffId) ||
       areIdsEqual((prospect as any).registeredByUserId, staffId) ||
-      areIdsEqual((prospect as any).registered_by_user_id, staffId)
+      areIdsEqual((prospect as any).registered_by_user_id, staffId) ||
+      areIdsEqual((prospect as any).userId, staffId) ||
+      areIdsEqual((prospect as any).user_id, staffId) ||
+      areIdsEqual((prospect as any).staffId, staffId) ||
+      areIdsEqual((prospect as any).marketerId, staffId) ||
+      areIdsEqual((prospect as any).agentId, staffId)
     ) {
       return true;
     }
@@ -236,6 +243,8 @@ export function isProspectAssignedToStaff(
       areIdsEqual(prospect.assignedUserId, staffId) ||
       areIdsEqual((prospect as any).assignedStaffId, staffId) ||
       areIdsEqual((prospect as any).assignedTo, staffId) ||
+      areIdsEqual((prospect as any).assigned_to, staffId) ||
+      areIdsEqual((prospect as any).assigned_to?.id, staffId) ||
       areIdsEqual((prospect as any).assigned_user_id, staffId) ||
       areIdsEqual((prospect as any).assigned_staff_id, staffId) ||
       areIdsEqual((prospect as any).userId, staffId) ||
@@ -393,27 +402,152 @@ export interface StaffProspectDistribution {
 }
 
 /**
+ * Helper to determine if a name represents a generic channel, inbound source,
+ * or system tag rather than a real human team member.
+ */
+export function isGenericInboundOrSystemName(nameRaw: string | undefined | null): boolean {
+  if (!nameRaw) return true;
+  const s = String(nameRaw).trim().toLowerCase();
+  if (!s || s.length < 2) return true;
+
+  const genericPatterns = [
+    'unassigned',
+    'inbound',
+    'direct',
+    'website',
+    'system',
+    'general',
+    'orphan',
+    'walk-in',
+    'walk in',
+    'walkin',
+    'online',
+    'portal',
+    'call center',
+    'call centre',
+    'customer service',
+    'cs team',
+    'reception',
+    'admin inbound',
+    'social media',
+    'facebook',
+    'instagram',
+    'tiktok',
+    'google',
+    'advert',
+    'campaign',
+    'no staff',
+    'none',
+    'n/a',
+    'unknown',
+    'lead',
+    'leads',
+    'prospect client',
+  ];
+
+  return genericPatterns.some(
+    (pattern) => s === pattern || s.startsWith(pattern + ' ') || s.endsWith(' ' + pattern)
+  );
+}
+
+/**
  * Cleanly partitions all marketing prospects across all marketing staff (including director)
  * and unassigned leads so that the sum of prospects across the table amounts to the exact
- * total marketing prospects (e.g. 364), without double-counting or inflating the director's row.
+ * total marketing prospects (e.g. 364 or 485), without double-counting or inflating the director's row.
+ * Discovers any staff members referenced in prospects, apiMarketers, or appointments so that
+ * team-created leads are properly attributed to their profile instead of dumped into unassigned.
  */
 export function distributeProspectsAcrossMarketingStaff(
   allMarketingProspects: Prospect[],
   marketingStaffUsers: any[],
   apiMarketers: any[] = [],
-  allAppointments: any[] = []
+  allAppointments: any[] = [],
+  allCustomers: any[] = [],
+  allInteractions: any[] = []
 ): {
   staffRows: StaffProspectDistribution[];
   unassignedRow: StaffProspectDistribution | null;
   totalAttributedProspects: number;
 } {
+  // 1. Build comprehensive marketing staff list including any staff referenced in prospects,
+  // apiMarketers, or appointments
+  const discoveredStaffList: any[] = [...marketingStaffUsers];
+
+  const findStaff = (candidateId?: any, candidateName?: any) => {
+    for (const s of discoveredStaffList) {
+      if (candidateId && areIdsEqual(s.id, candidateId)) return s;
+      if (candidateName && isStaffNameMatching(candidateName, s)) return s;
+    }
+    return null;
+  };
+
+  const registerStaffIfMissing = (
+    id?: any,
+    name?: string,
+    role = 'marketing_staff',
+    phone = '',
+    email = ''
+  ) => {
+    if (!name || isGenericInboundOrSystemName(name)) return;
+    const cleanName = name.trim();
+    if (findStaff(id, cleanName)) return;
+
+    const parts = cleanName.split(' ').filter(Boolean);
+    const effectiveId = id ? String(id).trim() : `staff-${cleanName.toLowerCase().replace(/\s+/g, '-')}`;
+    discoveredStaffList.push({
+      id: effectiveId,
+      userId: effectiveId,
+      firstName: parts[0] || cleanName,
+      lastName: parts.slice(1).join(' '),
+      name: cleanName,
+      role: role || 'marketing_staff',
+      department: 'Marketing',
+      phone,
+      email,
+      isActive: true,
+    });
+  };
+
+  // Check apiMarketers
+  (apiMarketers || []).forEach((m) => {
+    if (!m) return;
+    const mName = m.name || (m.firstName ? `${m.firstName} ${m.lastName || ''}`.trim() : '');
+    registerStaffIfMissing(
+      m.userId || m.id,
+      mName,
+      'marketing_staff',
+      m.phone || (typeof m.phoneNumber === 'string' ? m.phoneNumber : '') || '',
+      m.email || ''
+    );
+  });
+
+  // Check all marketing prospects
+  (allMarketingProspects || []).forEach((p) => {
+    if (!p) return;
+    const cName = p.createdByName || (p as any).creatorName || (p as any).creator?.name;
+    const cId = p.createdByUserId || (p as any).creatorId || (p as any).createdBy || (p as any).userId;
+    registerStaffIfMissing(cId, cName);
+
+    const aName = (p as any).assignedUserName || (p as any).assignedStaffName || (p as any).marketerName;
+    const aId = p.assignedUserId || (p as any).assignedStaffId || (p as any).assignedTo;
+    registerStaffIfMissing(aId, aName);
+  });
+
+  // Check all appointments
+  (allAppointments || []).forEach((a) => {
+    if (!a) return;
+    const cName = a.createdByName || a.staffName || a.assignedUserName;
+    const cId = a.createdByUserId || a.staffId || a.assignedUserId;
+    registerStaffIfMissing(cId, cName);
+  });
+
   const staffMap = new Map<string, {
     staff: any;
     added: Prospect[];
     assigned: Prospect[];
   }>();
 
-  marketingStaffUsers.forEach((staff) => {
+  discoveredStaffList.forEach((staff) => {
     staffMap.set(String(staff.id).trim(), {
       staff,
       added: [],
@@ -426,7 +560,7 @@ export function distributeProspectsAcrossMarketingStaff(
   allMarketingProspects.forEach((prospect) => {
     // 1. Check if created by a marketing staff member
     let matchedCreatorStaff: any = null;
-    for (const s of marketingStaffUsers) {
+    for (const s of discoveredStaffList) {
       if (isProspectCreatedByStaff(prospect, s)) {
         matchedCreatorStaff = s;
         break;
@@ -435,7 +569,7 @@ export function distributeProspectsAcrossMarketingStaff(
 
     // 2. Check if assigned to a marketing staff member
     let matchedAssigneeStaff: any = null;
-    for (const s of marketingStaffUsers) {
+    for (const s of discoveredStaffList) {
       if (isProspectAssignedToStaff(prospect, s)) {
         matchedAssigneeStaff = s;
         break;
@@ -449,7 +583,7 @@ export function distributeProspectsAcrossMarketingStaff(
     // 3. Fallback: if not matched specifically as creator or assignee, check general isProspectAssignedOrCreatedByStaff
     let fallbackStaff: any = null;
     if (!matchedCreatorStaff && !matchedAssigneeStaff) {
-      for (const s of marketingStaffUsers) {
+      for (const s of discoveredStaffList) {
         if (isProspectAssignedOrCreatedByStaff(prospect, s)) {
           fallbackStaff = s;
           break;
@@ -466,58 +600,76 @@ export function distributeProspectsAcrossMarketingStaff(
     }
   });
 
-  const staffRows: StaffProspectDistribution[] = marketingStaffUsers.map((staff) => {
-    const entry = staffMap.get(String(staff.id).trim());
-    const addedProspects = entry?.added || [];
-    const assignedProspects = entry?.assigned || [];
-    const staffName = getUserFullName(staff);
+  const staffRows: StaffProspectDistribution[] = discoveredStaffList
+    .map((staff) => {
+      const entry = staffMap.get(String(staff.id).trim());
+      const addedProspects = entry?.added || [];
+      const assignedProspects = entry?.assigned || [];
+      const staffName = getUserFullName(staff) || staff.name || `${staff.firstName || ''} ${staff.lastName || ''}`.trim();
 
-    const apiRecord = apiMarketers.find(
-      (m) => m.userId === staff.id || m.id === staff.id || m.name?.toLowerCase() === staffName.toLowerCase()
-    );
+      const apiRecord = apiMarketers.find(
+        (m) =>
+          areIdsEqual(m.userId, staff.id) ||
+          areIdsEqual(m.id, staff.id) ||
+          isStaffNameMatching(m.name, staff)
+      );
 
-    // Count is strictly based on the prospects added/attributed to this staff member
-    const totalProspects = addedProspects.length;
-    const staffAppts = Array.isArray(allAppointments) && allAppointments.length > 0
-      ? getStaffAssignedAppointments(allAppointments, staff, allMarketingProspects)
-      : [];
-    const scheduledFromAppts = staffAppts.filter((a) => a.status === 'scheduled' || a.status === 'postponed').length;
-    const completedFromAppts = staffAppts.filter((a) => a.status === 'completed').length;
+      // Count is strictly based on the prospects added/attributed to this staff member
+      const totalProspects = addedProspects.length;
+      const staffAppts = Array.isArray(allAppointments) && allAppointments.length > 0
+        ? getStaffAssignedAppointments(allAppointments, staff, allMarketingProspects, [], allCustomers, allInteractions)
+        : [];
+      const scheduledFromAppts = staffAppts.filter((a) => a.status === 'scheduled' || a.status === 'postponed').length;
+      const completedFromAppts = staffAppts.filter((a) => a.status === 'completed').length;
 
-    const meetingScheduled = Math.max(
-      addedProspects.filter((p) => p.status === 'meeting_scheduled').length,
-      scheduledFromAppts
-    );
-    const meetingCompleted = Math.max(
-      addedProspects.filter((p) => p.status === 'meeting_completed').length,
-      completedFromAppts
-    );
-    const converted = Math.max(
-      addedProspects.filter((p) => p.status === 'purchased').length,
-      (staff.role !== 'marketing_director' ? Math.min(apiRecord?.converted ?? 0, totalProspects) : 0)
-    );
-    const conversionRate = totalProspects > 0 ? Math.round((converted / totalProspects) * 1000) / 10 : 0;
+      const meetingScheduled = Math.max(
+        addedProspects.filter((p) => p.status === 'meeting_scheduled').length,
+        scheduledFromAppts
+      );
+      const meetingCompleted = Math.max(
+        addedProspects.filter((p) => p.status === 'meeting_completed').length,
+        completedFromAppts
+      );
+      const converted = Math.max(
+        addedProspects.filter((p) => p.status === 'purchased').length,
+        (staff.role !== 'marketing_director' ? Math.min(apiRecord?.converted ?? 0, totalProspects) : 0)
+      );
+      const conversionRate = totalProspects > 0 ? Math.round((converted / totalProspects) * 1000) / 10 : 0;
 
-    return {
-      id: staff.id,
-      userId: staff.id,
-      name: staffName,
-      email: staff.email,
-      phone: staff.phoneNumber || (typeof staff.phone === 'string' ? staff.phone : staff.phone?.number) || '',
-      role: staff.role,
-      department: staff.department,
-      userObj: staff,
-      addedProspects,
-      assignedProspects,
-      totalProspects,
-      meetingScheduled,
-      meetingCompleted,
-      converted,
-      conversionRate,
-      revenueGeneratedMinor: converted * 4500000,
-      isUnassignedPool: false,
-    };
-  }).sort((a, b) => b.totalProspects - a.totalProspects || b.converted - a.converted);
+      return {
+        id: String(staff.id),
+        userId: String(staff.id),
+        name: staffName,
+        email: staff.email,
+        phone: staff.phoneNumber || (typeof staff.phone === 'string' ? staff.phone : staff.phone?.number) || '',
+        role: staff.role || 'marketing_staff',
+        department: staff.department || 'Marketing',
+        userObj: staff,
+        addedProspects,
+        assignedProspects,
+        totalProspects,
+        meetingScheduled,
+        meetingCompleted,
+        converted,
+        conversionRate,
+        revenueGeneratedMinor: converted * 4500000,
+        isUnassignedPool: false,
+      };
+    })
+    .filter((row) => {
+      // Keep row if it has prospects, or if it was explicitly in marketingStaffUsers, or is director
+      return (
+        row.totalProspects > 0 ||
+        row.role === 'marketing_director' ||
+        marketingStaffUsers.some((u) => areIdsEqual(u.id, row.id))
+      );
+    })
+    .sort((a, b) => {
+      // Prioritize director or sort by total prospects descending
+      if (a.role === 'marketing_director' && b.role !== 'marketing_director') return -1;
+      if (b.role === 'marketing_director' && a.role !== 'marketing_director') return 1;
+      return b.totalProspects - a.totalProspects || b.converted - a.converted;
+    });
 
   let unassignedRow: StaffProspectDistribution | null = null;
   if (unassignedProspects.length > 0) {
@@ -562,13 +714,33 @@ export function distributeProspectsAcrossMarketingStaff(
 export function isAppointmentAssignedToStaff(
   appointment: any,
   staffUser: any,
-  staffProspectIds?: Set<string>,
-  staffCustomerIds?: Set<string>,
+  staffProspectIds?: Set<string> | Array<any>,
+  staffCustomerIds?: Set<string> | Array<any>,
   allInteractions?: any[],
   allProspects?: Prospect[],
   allCustomers?: any[]
 ): boolean {
   if (!appointment || !staffUser) return false;
+
+  const resolvedProspectIdSet: Set<string> | undefined = staffProspectIds
+    ? staffProspectIds instanceof Set
+      ? staffProspectIds
+      : new Set(
+          Array.from(staffProspectIds).map((p: any) =>
+            typeof p === 'string' ? p.trim() : String(p.id || '').trim()
+          ).filter(Boolean)
+        )
+    : undefined;
+
+  const resolvedCustomerIdSet: Set<string> | undefined = staffCustomerIds
+    ? staffCustomerIds instanceof Set
+      ? staffCustomerIds
+      : new Set(
+          Array.from(staffCustomerIds).map((c: any) =>
+            typeof c === 'string' ? c.trim() : String(c.id || '').trim()
+          ).filter(Boolean)
+        )
+    : undefined;
 
   const staffId = typeof staffUser === 'string' ? staffUser : staffUser.id;
   const base = typeof staffUser === 'object' ? staffUser : {};
@@ -657,10 +829,11 @@ export function isAppointmentAssignedToStaff(
   }
 
   // 4. Prospect ownership check: If appointment belongs to a prospect of this staff member
+  // 4. Prospect ownership check: If appointment belongs to a prospect of this staff member
   if (
     appointment.prospectId &&
-    staffProspectIds &&
-    staffProspectIds.has(String(appointment.prospectId).trim())
+    resolvedProspectIdSet &&
+    resolvedProspectIdSet.has(String(appointment.prospectId).trim())
   ) {
     return true;
   }
@@ -668,8 +841,8 @@ export function isAppointmentAssignedToStaff(
   // 5. Customer ownership check: If appointment belongs to a customer of this staff member
   if (
     appointment.customerId &&
-    staffCustomerIds &&
-    staffCustomerIds.has(String(appointment.customerId).trim())
+    resolvedCustomerIdSet &&
+    resolvedCustomerIdSet.has(String(appointment.customerId).trim())
   ) {
     return true;
   }
@@ -784,20 +957,34 @@ export function consolidateAllAppointments(
     if (!appt || !appt.id) continue;
     if (seenIds.has(appt.id)) continue;
 
+    const cleanPhone = String(appt.phone || appt.phoneNumber || (appt as any).clientPhone || '').replace(/\D/g, '');
+    const cleanName = String(appt.clientName || appt.name || '').trim().toLowerCase();
     const personKey = appt.prospectId
       ? `prospect:${appt.prospectId}`
       : appt.customerId
       ? `customer:${appt.customerId}`
+      : cleanPhone && cleanPhone.length >= 7
+      ? `phone:${cleanPhone}`
+      : cleanName && cleanName.length > 2
+      ? `name:${cleanName}`
+      : null;
+
+    const timeSlotKey = appt.scheduledFor && (personKey || cleanName)
+      ? `${personKey || cleanName}_${new Date(appt.scheduledFor).toISOString().slice(0, 16)}`
       : null;
 
     const isActive = appt.status === 'scheduled' || appt.status === 'postponed';
 
-    if (personKey && isActive) {
-      if (seenActivePersons.has(personKey)) {
+    if (isActive) {
+      if (personKey && seenActivePersons.has(personKey)) {
         // Drop duplicate active appointment for the same person
         continue;
       }
-      seenActivePersons.add(personKey);
+      if (timeSlotKey && seenActivePersons.has(timeSlotKey)) {
+        continue;
+      }
+      if (personKey) seenActivePersons.add(personKey);
+      if (timeSlotKey) seenActivePersons.add(timeSlotKey);
     }
 
     seenIds.add(appt.id);

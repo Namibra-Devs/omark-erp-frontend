@@ -47,9 +47,11 @@ import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useUsersQuery, useUpdateUserMutation, useUserActivityQuery, toE164Phone, type UpdateUserPayload } from '@/api/users';
 import { useProspectsQuery } from '@/api/prospects';
+import { useCustomersQuery } from '@/api/customers';
 import {
   consolidateAllProspects,
   getStaffAssignedProspects,
+  getStaffAssignedAppointments,
 } from '@/utils/prospectAssignment';
 import { useScopedAppointments } from '@/api/appointments';
 import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
@@ -139,7 +141,10 @@ export const MyProfilePage: React.FC = () => {
   );
   const prospectsLoading = allProspectsLoading || staffProspectsLoading;
 
-  const { appointments: scopedAppointments, isLoading: appointmentsLoading, allInteractions } = useScopedAppointments();
+  const { data: customersData } = useCustomersQuery({ pageSize: 10000 });
+  const allCustomers = useMemo(() => customersData?.items ?? [], [customersData]);
+
+  const { appointments: scopedAppointments, isLoading: appointmentsLoading, allInteractions } = useScopedAppointments({ pageSize: 1000 });
 
   const { data: deedsData, isLoading: deedsLoading } = useDeedsQuery(
     {},
@@ -178,12 +183,17 @@ export const MyProfilePage: React.FC = () => {
   }, [allConsolidatedProspects, effectiveUser, branches]);
 
   const myAppointments = useMemo(() => {
-    const targetUserId = effectiveUser?.id || user?.id;
-    if (!targetUserId) return [];
-    return scopedAppointments.filter(
-      (a) => getAppointmentCreatorId(a, allInteractions) === targetUserId
+    const target = effectiveUser || user;
+    if (!target?.id) return [];
+    return getStaffAssignedAppointments(
+      scopedAppointments,
+      target,
+      allConsolidatedProspects,
+      branches,
+      allCustomers,
+      allInteractions
     );
-  }, [scopedAppointments, allInteractions, effectiveUser?.id, user?.id]);
+  }, [scopedAppointments, effectiveUser, user, allConsolidatedProspects, branches, allCustomers, allInteractions]);
   const myAttendance = Array.isArray(attendanceData) ? attendanceData : [];
   const myLeaves = Array.isArray(leaveData) ? leaveData : [];
 

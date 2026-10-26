@@ -98,6 +98,7 @@ import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import {
   consolidateAllProspects,
   getStaffAssignedProspectCount,
+  getStaffAssignedAppointments,
 } from '@/utils/prospectAssignment';
 import { useBranchesQuery, useDepartmentsQuery, DEFAULT_SYSTEM_BRANCHES, STANDARD_DEPARTMENTS } from '@/api/branches';
 import { useBranchContext } from '@/contexts/BranchContext';
@@ -160,7 +161,7 @@ export const UsersPage: React.FC = () => {
   const { data: allProspectsData } = useProspectsQuery({ pageSize: 10000 });
   const { data: mktProspectsData } = useProspectsQuery({ source: 'marketing', pageSize: 10000 });
   const { data: csProspectsData } = useProspectsQuery({ source: 'customer_service', pageSize: 10000 });
-  const { appointments: scopedAppointments, refetch: refetchAppointments, allInteractions } = useScopedAppointments();
+  const { appointments: scopedAppointments, refetch: refetchAppointments, allInteractions } = useScopedAppointments({ pageSize: 1000 });
   const { branches: contextBranches = [] } = useBranchContext();
   const { data: apiBranches = [] } = useBranchesQuery();
   const { data: apiDepartments = [] } = useDepartmentsQuery();
@@ -190,8 +191,15 @@ export const UsersPage: React.FC = () => {
   };
 
   const getStaffAppointmentCount = (userItem: User) => {
-    return scopedAppointments.filter(
-      (a) => getAppointmentCreatorId(a, allInteractions) === userItem.id
+    const stored = getStoredUserAssignment(userItem.id);
+    const effectiveUser = { ...stored, ...userItem, role: userItem.role || stored?.role };
+    return getStaffAssignedAppointments(
+      scopedAppointments,
+      effectiveUser,
+      allConsolidatedProspects,
+      allBranches,
+      [],
+      allInteractions
     ).length;
   };
 

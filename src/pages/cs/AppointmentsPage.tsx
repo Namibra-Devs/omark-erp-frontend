@@ -78,6 +78,8 @@ import {
   consolidateAllProspects,
   getAppointmentDueStatus,
   type AppointmentDueStatus,
+  isAppointmentAssignedToStaff,
+  getStaffAssignedAppointments,
 } from '@/utils/prospectAssignment';
 import {
   getAppointmentCreatorId,
@@ -234,9 +236,16 @@ export const AppointmentsPage: React.FC = () => {
   const effectiveAppointments = scopedAppointments;
 
   const personalAppointments = React.useMemo(() => {
-    if (!user?.id) return [];
-    return effectiveAppointments.filter((app) => getAppointmentCreatorId(app, allInteractions) === user.id);
-  }, [effectiveAppointments, user?.id, allInteractions]);
+    if (!user) return [];
+    return getStaffAssignedAppointments(
+      effectiveAppointments,
+      user,
+      consolidatedProspects,
+      branches,
+      customersData?.items ?? [],
+      allInteractions
+    );
+  }, [effectiveAppointments, user, consolidatedProspects, branches, customersData, allInteractions]);
 
   // Read-only diagnostic export for Administrator: downloads omark_stored_appointments and omark_stored_interactions
   const handleExportLocalStorageBackup = () => {
@@ -779,13 +788,17 @@ export const AppointmentsPage: React.FC = () => {
         if (staffFilter === 'unassigned') {
           matchesStaff = !creatorId;
         } else {
-          matchesStaff = creatorId === staffFilter;
+          const selectedStaffUser = allUsers.find((u) => u.id === staffFilter);
+          matchesStaff =
+            creatorId === staffFilter ||
+            (selectedStaffUser
+              ? isAppointmentAssignedToStaff(app, selectedStaffUser, consolidatedProspects, customersData?.items ?? [], allInteractions)
+              : false);
         }
       }
 
       if (scopeFilter === 'personal' && (isAdmin || user?.role === 'secretary' || user?.role === 'marketing_director')) {
-        const creatorId = getAppointmentCreatorId(app, allInteractions);
-        if (creatorId !== user?.id) {
+        if (!isAppointmentAssignedToStaff(app, user, consolidatedProspects, customersData?.items ?? [], allInteractions)) {
           return false;
         }
       }
@@ -817,31 +830,62 @@ export const AppointmentsPage: React.FC = () => {
     scopeFilter,
     staffFilter,
     allInteractions,
-    user?.id,
-    user?.role,
+    allUsers,
+    consolidatedProspects,
+    branches,
+    customersData,
+    user,
   ]);
 
-  // Status breakdown
+  // Status breakdown scoped to current filter (personal / selected staff)
+  const effectiveScopedList = React.useMemo(() => {
+    if (staffFilter === 'all' && scopeFilter === 'all') {
+      return mappedAppointments;
+    }
+    return mappedAppointments.filter((app) => {
+      if (scopeFilter === 'personal' && (isAdmin || user?.role === 'secretary' || user?.role === 'marketing_director')) {
+        if (!isAppointmentAssignedToStaff(app, user, consolidatedProspects, customersData?.items ?? [], allInteractions)) {
+          return false;
+        }
+      }
+      if (staffFilter !== 'all') {
+        const creatorId = getAppointmentCreatorId(app, allInteractions);
+        if (staffFilter === 'unassigned') {
+          if (creatorId) return false;
+        } else {
+          const selectedStaffUser = allUsers.find((u) => u.id === staffFilter);
+          const isAssigned =
+            creatorId === staffFilter ||
+            (selectedStaffUser
+              ? isAppointmentAssignedToStaff(app, selectedStaffUser, consolidatedProspects, customersData?.items ?? [], allInteractions)
+              : false);
+          if (!isAssigned) return false;
+        }
+      }
+      return true;
+    });
+  }, [mappedAppointments, staffFilter, scopeFilter, isAdmin, user, consolidatedProspects, customersData, allInteractions, allUsers]);
+
   const statusBreakdown = React.useMemo(() => {
     return {
-      total: mappedAppointments.length,
-      overdue: mappedAppointments.filter((a: Appointment) => getAppointmentDueStatus(a) === 'overdue').length,
-      dueToday: mappedAppointments.filter((a: Appointment) => getAppointmentDueStatus(a) === 'due_today').length,
-      scheduled: mappedAppointments.filter((a: Appointment) => a.status === 'scheduled').length,
-      postponed: mappedAppointments.filter((a: Appointment) => a.status === 'postponed').length,
-      completed: mappedAppointments.filter((a: Appointment) => a.status === 'completed').length,
-      canceled: mappedAppointments.filter((a: Appointment) => a.status === 'canceled').length,
-      noShow: mappedAppointments.filter((a: Appointment) => a.status === 'no_show').length,
+      total: effectiveScopedList.length,
+      overdue: effectiveScopedList.filter((a: Appointment) => getAppointmentDueStatus(a) === 'overdue').length,
+      dueToday: effectiveScopedList.filter((a: Appointment) => getAppointmentDueStatus(a) === 'due_today').length,
+      scheduled: effectiveScopedList.filter((a: Appointment) => a.status === 'scheduled').length,
+      postponed: effectiveScopedList.filter((a: Appointment) => a.status === 'postponed').length,
+      completed: effectiveScopedList.filter((a: Appointment) => a.status === 'completed').length,
+      canceled: effectiveScopedList.filter((a: Appointment) => a.status === 'canceled').length,
+      noShow: effectiveScopedList.filter((a: Appointment) => a.status === 'no_show').length,
     };
-  }, [mappedAppointments]);
+  }, [effectiveScopedList]);
 
   // Source breakdown
   const sourceBreakdown = React.useMemo(() => {
     return {
-      staff: mappedAppointments.filter((a: Appointment) => a.source === 'staff').length,
-      website: mappedAppointments.filter((a: Appointment) => a.source === 'website').length,
+      staff: effectiveScopedList.filter((a: Appointment) => a.source === 'staff').length,
+      website: effectiveScopedList.filter((a: Appointment) => a.source === 'website').length,
     };
-  }, [mappedAppointments]);
+  }, [effectiveScopedList]);
 
   // Export function
   const handleExport = () => {

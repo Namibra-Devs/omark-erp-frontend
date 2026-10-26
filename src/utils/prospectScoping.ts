@@ -34,11 +34,22 @@ export function isProspectAssignedOrCreatedByStaff(
     if (
       areIdsEqual(prospect.createdByUserId, staffId) ||
       areIdsEqual((prospect as any).creatorId, staffId) ||
+      areIdsEqual((prospect as any).createdBy, staffId) ||
+      areIdsEqual((prospect as any).created_by, staffId) ||
       areIdsEqual((prospect as any).created_by_user_id, staffId) ||
+      areIdsEqual((prospect as any).creator?.id, staffId) ||
+      areIdsEqual((prospect as any).created_by?.id, staffId) ||
       areIdsEqual((prospect as any).recordedByUserId, staffId) ||
       areIdsEqual((prospect as any).registeredByUserId, staffId) ||
+      areIdsEqual((prospect as any).userId, staffId) ||
+      areIdsEqual((prospect as any).user_id, staffId) ||
       areIdsEqual(prospect.assignedUserId, staffId) ||
-      areIdsEqual((prospect as any).assignedStaffId, staffId)
+      areIdsEqual((prospect as any).assignedStaffId, staffId) ||
+      areIdsEqual((prospect as any).assignedTo, staffId) ||
+      areIdsEqual((prospect as any).assigned_to, staffId) ||
+      areIdsEqual((prospect as any).assigned_to?.id, staffId) ||
+      areIdsEqual((prospect as any).staffId, staffId) ||
+      areIdsEqual((prospect as any).marketerId, staffId)
     ) {
       return true;
     }

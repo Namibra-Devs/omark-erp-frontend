@@ -104,6 +104,11 @@ import {
   distributeProspectsAcrossMarketingStaff,
   getAppointmentDueStatus,
   type AppointmentDueStatus,
+  isAppointmentAssignedToStaff,
+  consolidateAllAppointments,
+  isGenericInboundOrSystemName,
+  areIdsEqual,
+  isStaffNameMatching,
 } from '@/utils/prospectAssignment';
 import { getAppointmentCreatorId, isAppointmentEditableByUser } from '@/utils/appointmentScoping';
 import type { Role } from '@/types';
@@ -305,7 +310,7 @@ export const MarketingDashboardPage: React.FC = () => {
   const allCustomers = allCustomersData?.items ?? [];
   const properties = propertiesData?.items ?? [];
 
-  // Marketing staff users across all branches
+  // Marketing staff users across all branches, discovering any team members with marketing prospects or appointments
   const marketingStaffUsers = useMemo(() => {
     const list = allUsers.filter(
       (u) =>
@@ -318,8 +323,57 @@ export const MarketingDashboardPage: React.FC = () => {
         list.unshift(user as any);
       }
     }
+
+    const knownIds = new Set(list.map((u) => String(u.id)));
+    const knownNames = new Set(list.map((u) => getUserFullName(u).toLowerCase()));
+
+    const addIfNew = (id?: any, name?: string, phone?: string, email?: string) => {
+      if (!name || isGenericInboundOrSystemName(name)) return;
+      const sName = name.trim();
+      const sId = id ? String(id).trim() : '';
+      if (sId && knownIds.has(sId)) return;
+      if (knownNames.has(sName.toLowerCase())) return;
+      for (const existing of list) {
+        if (isStaffNameMatching(sName, existing)) return;
+      }
+
+      const nameParts = sName.split(' ').filter(Boolean);
+      const effectiveId = sId || `staff-${sName.toLowerCase().replace(/\s+/g, '-')}`;
+      const synthesized = {
+        id: effectiveId,
+        firstName: nameParts[0] || sName,
+        lastName: nameParts.slice(1).join(' '),
+        name: sName,
+        role: 'marketing_staff' as Role,
+        department: 'Marketing',
+        phone: phone || '',
+        email: email || '',
+        isActive: true,
+      };
+      list.push(synthesized as any);
+      knownIds.add(effectiveId);
+      knownNames.add(sName.toLowerCase());
+    };
+
+    (marketingApiData?.marketers || []).forEach((m) => {
+      addIfNew(m.userId || m.id, m.name, m.phone, m.email);
+    });
+
+    (allProspectsData?.items || []).forEach((p) => {
+      if (p.source === 'marketing' || !p.source) {
+        if (p.createdByName) addIfNew(p.createdByUserId, p.createdByName);
+        if (p.assignedUserName) addIfNew(p.assignedUserId, p.assignedUserName);
+      }
+    });
+
+    appointments.forEach((a) => {
+      if (a.createdByName) addIfNew(a.createdByUserId, a.createdByName);
+      if (a.assignedUserName) addIfNew(a.assignedUserId, a.assignedUserName);
+      if (a.staffName) addIfNew(a.staffId, a.staffName);
+    });
+
     return list;
-  }, [allUsers, user]);
+  }, [allUsers, user, marketingApiData?.marketers, allProspectsData?.items, appointments]);
 
   const marketingDirectorUser = useMemo(() => {
     return (
@@ -342,20 +396,45 @@ export const MarketingDashboardPage: React.FC = () => {
     });
   }, [allProspectsData, mktProspectsData, directorProspectsData, marketingDirectorUser]);
 
-  // Current staff member's personal appointments (creator-scoped)
+  // Current staff member's personal appointments (using full isAppointmentAssignedToStaff)
   const myStaffAppointments = useMemo(() => {
     if (!user?.id) return [];
-    return appointments.filter((a) => {
+    return appointments.filter((a) =>
+      isAppointmentAssignedToStaff(
+        a,
+        user,
+        undefined,
+        undefined,
+        allInteractions,
+        allMarketingProspects,
+        allCustomers
+      )
+    );
+  }, [appointments, user, allInteractions, allMarketingProspects, allCustomers]);
+
+  // Total deduplicated marketing appointments count
+  const allMarketingAppointmentsCount = useMemo(() => {
+    const rawBase = appointments.filter((a) => {
+      // Exclude pure Customer Service records without a marketing prospect
+      const creatorName = String(a.createdByName || a.staffName || '').toLowerCase();
+      const creatorRole = String((a as any).role || '').toLowerCase();
       const creatorId = getAppointmentCreatorId(a, allInteractions);
-      return (
-        creatorId === user.id ||
-        (a as any).staffId === user.id ||
-        (a as any).userId === user.id ||
-        (a as any).createdByUserId === user.id ||
-        (a as any).createdBy === user.id
-      );
+      const creator = allUsers.find((u) => areIdsEqual(u.id, creatorId));
+      const isCs = creatorRole.includes('customer') || creatorRole.includes('cs') || creatorName.includes('customer service') || (creator && creator.role === 'customer_service');
+      const isMarketingProspect = a.prospectId && allMarketingProspects.some((p) => areIdsEqual(p.id, a.prospectId));
+      if (isCs && !isMarketingProspect) return false;
+
+      if (isMarketingProspect) return true;
+      if (marketingStaffUsers.some((s) => isAppointmentAssignedToStaff(a, s))) return true;
+      if ((a as any).source === 'marketing') return true;
+      const reason = (a.reason || '').toLowerCase();
+      if (reason.includes('[marketing]') || reason.includes('site inspection') || reason.includes('property viewing')) {
+        return true;
+      }
+      return false;
     });
-  }, [appointments, user?.id, allInteractions]);
+    return consolidateAllAppointments(rawBase).length;
+  }, [appointments, allMarketingProspects, marketingStaffUsers, allUsers, allInteractions]);
 
   const liveMarketingProspectsCount = useMemo(() => {
     return Math.max(allMarketingProspects.length, mktProspectsData?.total ?? 0);
@@ -560,9 +639,11 @@ export const MarketingDashboardPage: React.FC = () => {
       allMarketingProspects,
       marketingStaffUsers,
       marketingApiData?.marketers || [],
-      appointments
+      appointments,
+      allCustomers,
+      allInteractions
     );
-  }, [allMarketingProspects, marketingStaffUsers, marketingApiData, appointments]);
+  }, [allMarketingProspects, marketingStaffUsers, marketingApiData, appointments, allCustomers, allInteractions]);
 
   // Combined data for table view so all rows amount to the total marketing prospects (364)
   const allMarketerTableData = useMemo(() => {
@@ -1112,12 +1193,34 @@ export const MarketingDashboardPage: React.FC = () => {
 
   // Filtered Appointments for the Appointments & Site Visits Tab
   const effectiveDashboardAppointments = useMemo(() => {
-    const baseList =
+    // 1. Base list: All marketing appointments OR current user's personal appointments
+    const rawBase =
       appointmentScope === 'all'
-        ? appointments
+        ? appointments.filter((a) => {
+            // Exclude pure Customer Service records without a marketing prospect
+            const creatorName = String(a.createdByName || a.staffName || '').toLowerCase();
+            const creatorRole = String((a as any).role || '').toLowerCase();
+            const creatorId = getAppointmentCreatorId(a, allInteractions);
+            const creator = allUsers.find((u) => areIdsEqual(u.id, creatorId));
+            const isCs = creatorRole.includes('customer') || creatorRole.includes('cs') || creatorName.includes('customer service') || (creator && creator.role === 'customer_service');
+            const isMarketingProspect = a.prospectId && allMarketingProspects.some((p) => areIdsEqual(p.id, a.prospectId));
+            if (isCs && !isMarketingProspect) return false;
+
+            if (isMarketingProspect) return true;
+            if (marketingStaffUsers.some((s) => isAppointmentAssignedToStaff(a, s))) return true;
+            if ((a as any).source === 'marketing') return true;
+            const reason = (a.reason || '').toLowerCase();
+            if (reason.includes('[marketing]') || reason.includes('site inspection') || reason.includes('property viewing')) {
+              return true;
+            }
+            return false;
+          })
         : myStaffAppointments;
 
-    return baseList.filter((appt) => {
+    // 2. Consolidate and deduplicate active appointments by person to eliminate duplicate rows
+    const deduplicated = consolidateAllAppointments(rawBase);
+
+    return deduplicated.filter((appt) => {
       // Status filter
       if (appointmentStatusFilter === 'overdue') {
         if (getAppointmentDueStatus(appt) !== 'overdue') return false;
@@ -1130,7 +1233,7 @@ export const MarketingDashboardPage: React.FC = () => {
       // Search text
       if (appointmentSearchText.trim()) {
         const q = appointmentSearchText.toLowerCase();
-        const matchedP = allMarketingProspects.find((p) => p.id === appt.prospectId);
+        const matchedP = allMarketingProspects.find((p) => areIdsEqual(p.id, appt.prospectId));
         const name = `${matchedP?.firstName || ''} ${matchedP?.lastName || ''} ${(appt as any).clientName || ''} ${(appt as any).name || ''}`.toLowerCase();
         const phone = `${matchedP?.phoneNumber || ''} ${(appt as any).phone || ''}`.toLowerCase();
         const reason = (appt.reason || '').toLowerCase();
@@ -1159,13 +1262,16 @@ export const MarketingDashboardPage: React.FC = () => {
     appointmentScope,
     appointments,
     myStaffAppointments,
+    allMarketingProspects,
+    marketingStaffUsers,
+    allUsers,
+    allInteractions,
     appointmentStatusFilter,
     appointmentSearchText,
-    allMarketingProspects,
   ]);
 
   const appointmentBreakdown = useMemo(() => {
-    const targetList = appointmentScope === 'all' ? appointments : myStaffAppointments;
+    const targetList = appointmentScope === 'all' ? effectiveDashboardAppointments : myStaffAppointments;
     return {
       total: targetList.length,
       dueToday: targetList.filter((a) => getAppointmentDueStatus(a) === 'due_today').length,
@@ -1175,27 +1281,50 @@ export const MarketingDashboardPage: React.FC = () => {
       postponed: targetList.filter((a) => a.status === 'postponed').length,
       canceled: targetList.filter((a) => a.status === 'canceled').length,
     };
-  }, [appointmentScope, appointments, myStaffAppointments]);
+  }, [appointmentScope, effectiveDashboardAppointments, myStaffAppointments]);
 
   const appointmentColumns = [
     {
       title: 'Prospect / Client',
       key: 'client',
-      width: 220,
+      width: 250,
       render: (_: any, record: any) => {
-        const matchedP = allMarketingProspects.find((p) => p.id === record.prospectId);
+        const matchedP = allMarketingProspects.find((p) => areIdsEqual(p.id, record.prospectId));
         const name = matchedP
           ? `${matchedP.firstName || ''} ${matchedP.lastName || ''}`.trim()
           : record.clientName || record.name || 'Prospect Client';
-        const phone = matchedP?.phoneNumber || record.phone || 'No phone recorded';
+        const phone = matchedP?.phoneNumber || record.phone || record.phoneNumber || '';
+        const initial = (name.replace(/^MR\.?\s*/i, '').replace(/^MRS\.?\s*/i, '').replace(/^MS\.?\s*/i, '').trim().charAt(0) || 'P').toUpperCase();
+
         return (
-          <Space>
-            <Avatar style={{ backgroundColor: '#0284c7' }} icon={<UserOutlined />} />
+          <Space align="center" style={{ flexWrap: 'nowrap', minWidth: 210 }}>
+            <Avatar
+              size={38}
+              style={{
+                background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                color: '#fff',
+                fontWeight: 700,
+                fontSize: 14,
+                flexShrink: 0,
+                boxShadow: '0 2px 6px rgba(2, 132, 199, 0.25)',
+              }}
+            >
+              {initial}
+            </Avatar>
             <div>
-              <Text strong>{name}</Text>
-              <div style={{ fontSize: 12, color: '#64748b' }}>
-                <PhoneOutlined /> {phone}
-              </div>
+              <Text strong style={{ fontSize: 13, color: '#0f172a', whiteSpace: 'nowrap', display: 'block' }}>
+                {name}
+              </Text>
+              {phone ? (
+                <div style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <PhoneOutlined style={{ color: '#0284c7', fontSize: 11 }} />
+                  <span style={{ fontFamily: 'monospace' }}>{phone}</span>
+                </div>
+              ) : (
+                <Text type="secondary" italic style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                  No phone recorded
+                </Text>
+              )}
             </div>
           </Space>
         );
@@ -1204,73 +1333,130 @@ export const MarketingDashboardPage: React.FC = () => {
     {
       title: 'Scheduled Date & Time',
       key: 'scheduledFor',
-      width: 220,
+      width: 230,
       render: (_: any, record: any) => {
         const dueStatus = getAppointmentDueStatus(record);
         const d = dayjs(record.scheduledFor || record.date);
         return (
-          <Space direction="vertical" size={2}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Text strong>{d.isValid() ? d.format('ddd, MMM D, YYYY') : 'Date N/A'}</Text>
+          <div style={{ whiteSpace: 'nowrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+              <Text strong style={{ fontSize: 13, color: '#0f172a' }}>
+                {d.isValid() ? d.format('ddd, MMM D, YYYY') : 'Date N/A'}
+              </Text>
               {dueStatus === 'due_today' && (
-                <Tag color="warning" icon={<ClockCircleOutlined />} style={{ margin: 0, fontWeight: 700 }}>
+                <Tag
+                  color="warning"
+                  icon={<ClockCircleOutlined />}
+                  style={{ margin: 0, fontWeight: 700, borderRadius: 12, fontSize: 10, padding: '0 6px' }}
+                >
                   DUE TODAY
                 </Tag>
               )}
               {dueStatus === 'overdue' && (
-                <Tag color="error" icon={<WarningOutlined />} style={{ margin: 0, fontWeight: 700 }}>
+                <Tag
+                  color="error"
+                  icon={<WarningOutlined />}
+                  style={{
+                    margin: 0,
+                    fontWeight: 700,
+                    borderRadius: 12,
+                    fontSize: 10,
+                    padding: '0 6px',
+                    background: '#fef2f2',
+                    borderColor: '#fecaca',
+                    color: '#dc2626',
+                  }}
+                >
                   OVERDUE
                 </Tag>
               )}
             </div>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              <ClockCircleOutlined /> {d.isValid() ? d.format('h:mm A') : record.time || ''}
+            <Text type="secondary" style={{ fontSize: 12, color: '#64748b' }}>
+              <ClockCircleOutlined style={{ marginRight: 4 }} />
+              {d.isValid() ? d.format('h:mm A') : record.time || 'Time N/A'}
             </Text>
-          </Space>
+          </div>
         );
       },
     },
     {
       title: 'Purpose / Location',
       key: 'reason',
-      render: (_: any, record: any) => (
-        <div>
-          <Text strong style={{ color: '#0f172a' }}>{record.reason || 'Site Inspection / Consultation'}</Text>
-          {record.feedback && (
-            <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>
-              📝 {record.feedback}
+      width: 280,
+      render: (_: any, record: any) => {
+        const rawReason = String(record.reason || 'Site Inspection / Consultation');
+        // Clean out any [marketing] tag so it NEVER displays as broken text "[marketin g]"
+        const cleanReason = rawReason
+          .replace(/\[\s*marketing\s*\]/gi, '')
+          .replace(/\s+/g, ' ')
+          .trim() || 'Site Inspection & Property Viewing';
+        const isMarketing = rawReason.toLowerCase().includes('marketing') || (record.source === 'marketing');
+
+        return (
+          <div style={{ maxWidth: 280, wordBreak: 'keep-all', overflowWrap: 'break-word', hyphens: 'none' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 2 }}>
+              <Tag
+                color={isMarketing ? 'cyan' : 'blue'}
+                icon={<EnvironmentOutlined />}
+                style={{
+                  fontSize: 11,
+                  padding: '1px 7px',
+                  margin: 0,
+                  fontWeight: 700,
+                  borderRadius: 6,
+                  border: 'none',
+                  background: isMarketing ? '#ecfeff' : '#eff6ff',
+                  color: isMarketing ? '#0e7490' : '#1d4ed8',
+                }}
+              >
+                {isMarketing ? 'Marketing Site Visit' : 'Site Inspection'}
+              </Tag>
             </div>
-          )}
-        </div>
-      ),
+            <Text strong style={{ color: '#0f172a', fontSize: 13, display: 'block', lineHeight: 1.4 }}>
+              {cleanReason}
+            </Text>
+            {record.feedback && (
+              <div style={{ fontSize: 12, color: '#64748b', marginTop: 3 }}>
+                📝 {record.feedback}
+              </div>
+            )}
+          </div>
+        );
+      },
     },
     {
       title: 'Created by',
       key: 'createdBy',
-      width: 180,
+      width: 210,
       render: (_: any, record: any) => {
         const creatorId = getAppointmentCreatorId(record, allInteractions);
-        if (!creatorId) {
-          return (
-            <Space direction="vertical" size={0}>
-              <Text strong style={{ fontSize: 13, color: '#8c8c8c' }}>
-                {record.source === 'website' ? 'Website Booking' : 'Unassigned / System'}
-              </Text>
-              <Tag color="default" style={{ fontSize: 10, margin: 0 }}>
-                {record.source === 'website' ? 'Website' : 'Orphan'}
-              </Tag>
-            </Space>
-          );
-        }
-        const matchedUser = allUsers.find((u) => u.id === creatorId);
+        const matchedUser = allUsers.find((u) => areIdsEqual(u.id, creatorId));
         const staffName = matchedUser
           ? getUserFullName(matchedUser)
           : record.createdByName || record.staffName || 'Marketing Staff';
-        const role = matchedUser ? (roleLabels[matchedUser.role as Role] || matchedUser.role) : 'Marketing Staff';
+        const role = matchedUser
+          ? (roleLabels[matchedUser.role as Role] || matchedUser.role)
+          : (record.role || 'Marketing Staff');
+        const isDirector = matchedUser?.role === 'marketing_director' || role.toLowerCase().includes('director');
+        const isMktStaff = matchedUser?.role === 'marketing_staff' || role.toLowerCase().includes('marketing');
         return (
-          <Space direction="vertical" size={0}>
-            <Text strong style={{ fontSize: 13 }}>{staffName}</Text>
-            <Tag color="geekblue" style={{ fontSize: 10, margin: 0 }}>{role}</Tag>
+          <Space direction="vertical" size={2} style={{ whiteSpace: 'nowrap' }}>
+            <Text strong style={{ fontSize: 13, color: '#1e293b', whiteSpace: 'nowrap' }}>
+              {staffName}
+            </Text>
+            <Tag
+              style={{
+                fontSize: 10,
+                margin: 0,
+                fontWeight: 600,
+                borderRadius: 4,
+                border: 'none',
+                background: isDirector ? '#f5f3ff' : isMktStaff ? '#eff6ff' : '#f1f5f9',
+                color: isDirector ? '#7c3aed' : isMktStaff ? '#1d4ed8' : '#475569',
+              }}
+            >
+              {role}
+            </Tag>
           </Space>
         );
       },
@@ -1284,31 +1470,29 @@ export const MarketingDashboardPage: React.FC = () => {
     {
       title: 'Actions',
       key: 'actions',
-      width: 220,
+      width: 250,
       render: (_: any, record: any) => {
-        const matchedP = allMarketingProspects.find((p) => p.id === record.prospectId);
+        const matchedP = allMarketingProspects.find((p) => areIdsEqual(p.id, record.prospectId));
         const isEditable = isAppointmentEditableByUser(record, user, allUsers, allInteractions);
         if (!isEditable) {
           return <Text type="secondary" style={{ fontSize: 12 }}>View only</Text>;
         }
         return (
-          <Space size={6}>
-            <Tooltip title="Reschedule Date">
-              <Button
-                size="small"
-                icon={<CalendarOutlined />}
-                onClick={() => handleOpenAppointmentModal(matchedP || { id: record.prospectId, name: record.clientName })}
-              >
-                Reschedule
-              </Button>
-            </Tooltip>
+          <Space size={6} style={{ flexWrap: 'nowrap' }}>
+            <Button
+              size="small"
+              icon={<CalendarOutlined style={{ color: '#0284c7' }} />}
+              onClick={() => handleOpenAppointmentModal(matchedP || { id: record.prospectId, name: record.clientName })}
+              style={{ borderRadius: 6, fontWeight: 600, borderColor: '#bae6fd', color: '#0369a1' }}
+            >
+              Reschedule
+            </Button>
             {record.status !== 'completed' && record.status !== 'canceled' && (
               <Tooltip title="Mark Attended & Completed">
                 <Button
                   size="small"
-                  type="primary"
-                  ghost
-                  icon={<CheckCircleOutlined />}
+                  icon={<CheckCircleOutlined style={{ color: '#16a34a' }} />}
+                  style={{ borderRadius: 6, borderColor: '#bbf7d0', background: '#f0fdf4' }}
                   onClick={async () => {
                     try {
                       await updateAppointmentMutation.mutateAsync({
@@ -1334,10 +1518,11 @@ export const MarketingDashboardPage: React.FC = () => {
                 />
               </Tooltip>
             )}
-            <Tooltip title="Update Status">
+            <Tooltip title="Update Status & Notes">
               <Button
                 size="small"
-                icon={<EditOutlined />}
+                icon={<EditOutlined style={{ color: '#64748b' }} />}
+                style={{ borderRadius: 6, borderColor: '#cbd5e1' }}
                 onClick={() => handleOpenStatusModal(record)}
               />
             </Tooltip>
@@ -1354,6 +1539,7 @@ export const MarketingDashboardPage: React.FC = () => {
                     size="small"
                     danger
                     icon={<CloseCircleOutlined />}
+                    style={{ borderRadius: 6 }}
                   />
                 </Popconfirm>
               </Tooltip>
@@ -2354,26 +2540,82 @@ export const MarketingDashboardPage: React.FC = () => {
 
                 {/* ── Upcoming Scheduled Appointments & Inspections ─────────────────── */}
                 <Card
-                  title={
-                    <Space>
-                      <CalendarOutlined style={{ color: '#0284c7' }} />
-                      <span>
-                        {appointmentScope === 'personal'
-                          ? `My Scheduled Appointments & Site Visits (${myStaffAppointments.length})`
-                          : `All Marketing Staff Appointments & Site Visits (${appointments.length})`}
-                      </span>
-                    </Space>
-                  }
-                  extra={
-                    <Space wrap>
+                  style={{
+                    marginTop: 24,
+                    borderRadius: 16,
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.04)',
+                    border: '1px solid #e2e8f0',
+                    overflow: 'hidden',
+                  }}
+                  bodyStyle={{ padding: 0 }}
+                >
+                  {/* Custom Responsive Header Bar */}
+                  <div
+                    style={{
+                      padding: '18px 24px',
+                      background: 'linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)',
+                      borderBottom: '1px solid #e2e8f0',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: 12,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 280 }}>
+                      <div
+                        style={{
+                          width: 42,
+                          height: 42,
+                          borderRadius: 10,
+                          background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#fff',
+                          boxShadow: '0 2px 8px rgba(2, 132, 199, 0.3)',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <CalendarOutlined style={{ fontSize: 20 }} />
+                      </div>
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <Title level={5} style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+                            {appointmentScope === 'personal'
+                              ? 'My Personal Appointments & Site Visits'
+                              : 'All Marketing Staff Appointments & Site Visits'}
+                          </Title>
+                          <Tag
+                            color="geekblue"
+                            style={{
+                              borderRadius: 12,
+                              fontWeight: 800,
+                              fontSize: 12,
+                              padding: '1px 10px',
+                              border: 'none',
+                              background: '#eff6ff',
+                              color: '#1d4ed8',
+                            }}
+                          >
+                            {appointmentScope === 'personal' ? myStaffAppointments.length : allMarketingAppointmentsCount} Total
+                          </Tag>
+                        </div>
+                        <Text type="secondary" style={{ fontSize: 12 }}>
+                          Live schedule of upcoming property viewings, inspections, and client consultations
+                        </Text>
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                       <Radio.Group
                         value={appointmentScope}
                         onChange={(e) => setAppointmentScope(e.target.value as 'personal' | 'all')}
                         buttonStyle="solid"
-                        size="small"
+                        size="middle"
                       >
                         <Radio.Button value="all">
-                          🌐 All Appointments ({appointments.length})
+                          🌐 All Appointments ({allMarketingAppointmentsCount})
                         </Radio.Button>
                         <Radio.Button value="personal">
                           👤 My Personal ({myStaffAppointments.length})
@@ -2381,40 +2623,55 @@ export const MarketingDashboardPage: React.FC = () => {
                       </Radio.Group>
                       <Button
                         type="primary"
-                        ghost
-                        size="small"
                         icon={<PlusOutlined />}
                         onClick={() => handleOpenAppointmentModal()}
+                        style={{
+                          background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                          borderColor: '#0284c7',
+                          fontWeight: 600,
+                          borderRadius: 8,
+                          boxShadow: '0 2px 6px rgba(2, 132, 199, 0.25)',
+                        }}
                       >
                         Book Inspection / Meeting
                       </Button>
-                      <Button type="link" size="small" onClick={() => setActiveTab('appointments')}>
-                        View All ({appointmentScope === 'personal' ? myStaffAppointments.length : appointments.length}) &rarr;
+                      <Button
+                        type="link"
+                        onClick={() => setActiveTab('appointments')}
+                        style={{ fontWeight: 600, color: '#0284c7' }}
+                      >
+                        View Full Pipeline &rarr;
                       </Button>
-                    </Space>
-                  }
-                  style={{ marginTop: 24, borderRadius: 14, boxShadow: '0 2px 10px rgba(0,0,0,0.03)', border: '1px solid #e2e8f0' }}
-                >
-                  <Table
-                    dataSource={effectiveDashboardAppointments.slice(0, 5)}
-                    columns={appointmentColumns}
-                    rowKey="id"
-                    pagination={false}
-                    size="small"
-                    scroll={{ x: 700 }}
-                    locale={{
-                      emptyText: (
-                        <Empty
-                          description="No appointments scheduled yet"
-                          image={Empty.PRESENTED_IMAGE_SIMPLE}
-                        >
-                          <Button type="primary" size="small" icon={<CalendarOutlined />} onClick={() => handleOpenAppointmentModal()}>
-                            Schedule Your First Site Inspection
-                          </Button>
-                        </Empty>
-                      ),
-                    }}
-                  />
+                    </div>
+                  </div>
+
+                  <div style={{ padding: '8px 16px 16px' }}>
+                    <Table
+                      dataSource={effectiveDashboardAppointments.slice(0, 5)}
+                      columns={appointmentColumns}
+                      rowKey="id"
+                      pagination={false}
+                      size="middle"
+                      scroll={{ x: 1250 }}
+                      locale={{
+                        emptyText: (
+                          <Empty
+                            description="No appointments scheduled yet"
+                            image={Empty.PRESENTED_IMAGE_SIMPLE}
+                          >
+                            <Button
+                              type="primary"
+                              icon={<CalendarOutlined />}
+                              onClick={() => handleOpenAppointmentModal()}
+                              style={{ background: '#0284c7', borderColor: '#0284c7' }}
+                            >
+                              Schedule Your First Site Inspection
+                            </Button>
+                          </Empty>
+                        ),
+                      }}
+                    />
+                  </div>
                 </Card>
 
                 {/* ── Marketing Staff Oversight & Prospect Distribution Snapshot ───── */}
@@ -2422,7 +2679,7 @@ export const MarketingDashboardPage: React.FC = () => {
                   title={
                     <Space>
                       <TrophyOutlined style={{ color: '#d97706' }} />
-                      <span>Marketing Staff Prospects & Performance Oversight ({marketingStaffUsers.length} Staff)</span>
+                      <span>Marketing Staff Prospects & Performance Oversight ({marketerLeaderboard.length} Staff)</span>
                     </Space>
                   }
                   extra={
@@ -2447,30 +2704,42 @@ export const MarketingDashboardPage: React.FC = () => {
                       {
                         title: 'Staff Member',
                         key: 'name',
+                        width: 260,
                         render: (_, record) => {
                           if (record.isUnassignedPool) {
                             return (
-                              <Space>
-                                <Avatar icon={<GlobalOutlined />} style={{ backgroundColor: '#0284c7' }} />
+                              <Space align="center" style={{ flexWrap: 'nowrap', minWidth: 200 }}>
+                                <Avatar icon={<GlobalOutlined />} style={{ backgroundColor: '#0284c7', flexShrink: 0 }} />
                                 <div>
-                                  <Text strong style={{ color: '#0284c7' }}>{record.name}</Text>
-                                  <div style={{ fontSize: 11, color: '#64748b' }}>Unassigned Pipeline Leads</div>
+                                  <Text strong style={{ color: '#0284c7', whiteSpace: 'nowrap', display: 'block', fontSize: 13 }}>
+                                    {record.name}
+                                  </Text>
+                                  <div style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>
+                                    Unassigned Pipeline Leads
+                                  </div>
                                 </div>
                               </Space>
                             );
                           }
                           const isDir = record.role === 'marketing_director';
                           return (
-                            <Space>
-                              <Avatar style={{ backgroundColor: isDir ? '#7c3aed' : '#0284c7' }}>
-                                {record.name.charAt(0)}
+                            <Space align="center" style={{ flexWrap: 'nowrap', minWidth: 220 }}>
+                              <Avatar style={{ backgroundColor: isDir ? '#7c3aed' : '#0284c7', flexShrink: 0, fontWeight: 700 }}>
+                                {record.name.charAt(0).toUpperCase()}
                               </Avatar>
                               <div>
-                                <Text strong>{record.name}</Text>
-                                <div>
-                                  <Tag color={isDir ? 'purple' : 'blue'}>
-                                    {isDir ? 'Director' : 'Marketer'}
+                                <Text strong style={{ whiteSpace: 'nowrap', display: 'block', fontSize: 13, color: '#0f172a' }}>
+                                  {record.name}
+                                </Text>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 2, flexWrap: 'nowrap' }}>
+                                  <Tag color={isDir ? 'purple' : 'blue'} style={{ fontSize: 11, margin: 0, fontWeight: 700, borderRadius: 4 }}>
+                                    {isDir ? 'Director' : 'Marketing Staff'}
                                   </Tag>
+                                  {record.phone && (
+                                    <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
+                                      {record.phone}
+                                    </Text>
+                                  )}
                                 </div>
                               </div>
                             </Space>
@@ -2549,7 +2818,7 @@ export const MarketingDashboardPage: React.FC = () => {
                       return (
                         <Table.Summary.Row style={{ background: '#f8fafc', fontWeight: 700 }}>
                           <Table.Summary.Cell index={0}>
-                            <Text strong>TOTAL ({marketingStaffUsers.length} Staff + Inbound)</Text>
+                            <Text strong style={{ whiteSpace: 'nowrap' }}>TOTAL ({marketerLeaderboard.length} Staff + Inbound)</Text>
                           </Table.Summary.Cell>
                           <Table.Summary.Cell index={1}>
                             <Tag color="geekblue" style={{ fontWeight: 800 }}>
@@ -2584,7 +2853,7 @@ export const MarketingDashboardPage: React.FC = () => {
               <span>
                 <CalendarOutlined /> Appointments & Site Visits
                 <Badge
-                  count={appointmentScope === 'personal' ? myStaffAppointments.length : appointments.length}
+                  count={appointmentScope === 'personal' ? myStaffAppointments.length : allMarketingAppointmentsCount}
                   overflowCount={999}
                   style={{ backgroundColor: '#0284c7', marginLeft: 6 }}
                 />
@@ -2592,18 +2861,73 @@ export const MarketingDashboardPage: React.FC = () => {
             ),
             children: (
               <Card
-                title={
-                  <Space>
-                    <CalendarOutlined style={{ color: '#0284c7' }} />
-                    <span>
-                      {appointmentScope === 'personal'
-                        ? `My Scheduled Appointments & Site Inspections (${myStaffAppointments.length})`
-                        : `All Marketing Staff Appointments & Site Inspections (${appointments.length})`}
-                    </span>
-                  </Space>
-                }
-                extra={
-                  <Space wrap>
+                style={{
+                  borderRadius: 16,
+                  boxShadow: '0 4px 20px rgba(0,0,0,0.04)',
+                  border: '1px solid #e2e8f0',
+                  overflow: 'hidden',
+                }}
+                bodyStyle={{ padding: 0 }}
+              >
+                {/* Custom Responsive Header Bar */}
+                <div
+                  style={{
+                    padding: '18px 24px',
+                    background: 'linear-gradient(180deg, #f8fafc 0%, #ffffff 100%)',
+                    borderBottom: '1px solid #e2e8f0',
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    flexWrap: 'wrap',
+                    gap: 12,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 280 }}>
+                    <div
+                      style={{
+                        width: 42,
+                        height: 42,
+                        borderRadius: 10,
+                        background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#fff',
+                        boxShadow: '0 2px 8px rgba(2, 132, 199, 0.3)',
+                        flexShrink: 0,
+                      }}
+                    >
+                      <CalendarOutlined style={{ fontSize: 20 }} />
+                    </div>
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <Title level={5} style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#0f172a' }}>
+                          {appointmentScope === 'personal'
+                            ? 'My Scheduled Appointments & Site Inspections'
+                            : 'All Marketing Staff Appointments & Site Inspections'}
+                        </Title>
+                        <Tag
+                          color="geekblue"
+                          style={{
+                            borderRadius: 12,
+                            fontWeight: 800,
+                            fontSize: 12,
+                            padding: '1px 10px',
+                            border: 'none',
+                            background: '#eff6ff',
+                            color: '#1d4ed8',
+                          }}
+                        >
+                          {appointmentScope === 'personal' ? myStaffAppointments.length : allMarketingAppointmentsCount} Total
+                        </Tag>
+                      </div>
+                      <Text type="secondary" style={{ fontSize: 12 }}>
+                        Complete portfolio of customer inspections, scheduled visits, and follow-up meetings
+                      </Text>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                     <Radio.Group
                       value={appointmentScope}
                       onChange={(e) => setAppointmentScope(e.target.value as 'personal' | 'all')}
@@ -2611,7 +2935,7 @@ export const MarketingDashboardPage: React.FC = () => {
                       size="middle"
                     >
                       <Radio.Button value="all">
-                        🌐 All Appointments ({appointments.length})
+                        🌐 All Appointments ({allMarketingAppointmentsCount})
                       </Radio.Button>
                       <Radio.Button value="personal">
                         👤 My Personal ({myStaffAppointments.length})
@@ -2621,92 +2945,90 @@ export const MarketingDashboardPage: React.FC = () => {
                       type="primary"
                       icon={<PlusOutlined />}
                       onClick={() => handleOpenAppointmentModal()}
-                      style={{ background: '#0284c7', borderColor: '#0284c7' }}
+                      style={{
+                        background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+                        borderColor: '#0284c7',
+                        fontWeight: 600,
+                        borderRadius: 8,
+                        boxShadow: '0 2px 6px rgba(2, 132, 199, 0.25)',
+                      }}
                     >
                       Book Inspection
                     </Button>
-                  </Space>
-                }
-                style={{ borderRadius: 14, boxShadow: '0 2px 10px rgba(0,0,0,0.03)', border: '1px solid #e2e8f0' }}
-              >
-                {/* Status Filter Chips and Search */}
-                <Row gutter={[12, 12]} style={{ marginBottom: 16 }} align="middle">
-                  <Col xs={24} sm={12} md={7}>
-                    <Radio.Group
-                      value={appointmentScope}
-                      onChange={(e) => setAppointmentScope(e.target.value as 'personal' | 'all')}
-                      buttonStyle="solid"
-                      size="middle"
-                    >
-                      <Radio.Button value="all">
-                        🌐 All Appointments ({appointments.length})
-                      </Radio.Button>
-                      <Radio.Button value="personal">
-                        👤 My Personal ({myStaffAppointments.length})
-                      </Radio.Button>
-                    </Radio.Group>
-                  </Col>
-                  <Col xs={24} md={7}>
-                    <Input
-                      placeholder="Search by client name, phone, or location..."
-                      prefix={<SearchOutlined />}
-                      value={appointmentSearchText}
-                      onChange={(e) => setAppointmentSearchText(e.target.value)}
-                      allowClear
-                    />
-                  </Col>
-                  <Col xs={24} md={10}>
-                    <Space wrap>
-                      <Button
-                        size="small"
-                        type={appointmentStatusFilter === 'all' ? 'primary' : 'default'}
-                        onClick={() => setAppointmentStatusFilter('all')}
-                      >
-                        All ({appointmentBreakdown.total})
-                      </Button>
-                      <Button
-                        size="small"
-                        danger={appointmentBreakdown.overdue > 0}
-                        type={appointmentStatusFilter === 'overdue' ? 'primary' : 'default'}
-                        onClick={() => setAppointmentStatusFilter('overdue')}
-                      >
-                        ⚠️ Overdue ({appointmentBreakdown.overdue})
-                      </Button>
-                      <Button
-                        size="small"
-                        style={{
-                          borderColor: appointmentStatusFilter === 'due_today' ? '#d97706' : undefined,
-                          color: appointmentStatusFilter === 'due_today' ? '#d97706' : undefined,
-                        }}
-                        type={appointmentStatusFilter === 'due_today' ? 'primary' : 'default'}
-                        onClick={() => setAppointmentStatusFilter('due_today')}
-                      >
-                        ⏰ Due Today ({appointmentBreakdown.dueToday})
-                      </Button>
-                      <Button
-                        size="small"
-                        type={appointmentStatusFilter === 'scheduled' ? 'primary' : 'default'}
-                        onClick={() => setAppointmentStatusFilter('scheduled')}
-                      >
-                        Scheduled ({appointmentBreakdown.scheduled})
-                      </Button>
-                      <Button
-                        size="small"
-                        type={appointmentStatusFilter === 'completed' ? 'primary' : 'default'}
-                        onClick={() => setAppointmentStatusFilter('completed')}
-                      >
-                        Completed ({appointmentBreakdown.completed})
-                      </Button>
-                    </Space>
-                  </Col>
-                </Row>
+                  </div>
+                </div>
 
-                <Table
-                  dataSource={effectiveDashboardAppointments}
-                  columns={appointmentColumns}
-                  rowKey="id"
-                  pagination={{ pageSize: 8 }}
-                  scroll={{ x: 800 }}
+                <div style={{ padding: '16px 20px 20px' }}>
+                  {/* Status Filter Chips and Search */}
+                  <Row gutter={[12, 12]} style={{ marginBottom: 16 }} align="middle">
+                    <Col xs={24} md={10}>
+                      <Input
+                        placeholder="Search by client name, phone, or location..."
+                        prefix={<SearchOutlined style={{ color: '#0284c7' }} />}
+                        value={appointmentSearchText}
+                        onChange={(e) => setAppointmentSearchText(e.target.value)}
+                        allowClear
+                        style={{ borderRadius: 8 }}
+                      />
+                    </Col>
+                    <Col xs={24} md={14}>
+                      <Space wrap>
+                        <Button
+                          size="small"
+                          type={appointmentStatusFilter === 'all' ? 'primary' : 'default'}
+                          onClick={() => setAppointmentStatusFilter('all')}
+                          style={{ borderRadius: 6 }}
+                        >
+                          All ({appointmentBreakdown.total})
+                        </Button>
+                        <Button
+                          size="small"
+                          danger={appointmentBreakdown.overdue > 0}
+                          type={appointmentStatusFilter === 'overdue' ? 'primary' : 'default'}
+                          onClick={() => setAppointmentStatusFilter('overdue')}
+                          style={{ borderRadius: 6 }}
+                        >
+                          ⚠️ Overdue ({appointmentBreakdown.overdue})
+                        </Button>
+                        <Button
+                          size="small"
+                          style={{
+                            borderRadius: 6,
+                            borderColor: appointmentStatusFilter === 'due_today' ? '#d97706' : undefined,
+                            color: appointmentStatusFilter === 'due_today' ? '#d97706' : undefined,
+                          }}
+                          type={appointmentStatusFilter === 'due_today' ? 'primary' : 'default'}
+                          onClick={() => setAppointmentStatusFilter('due_today')}
+                        >
+                          ⏰ Due Today ({appointmentBreakdown.dueToday})
+                        </Button>
+                        <Button
+                          size="small"
+                          type={appointmentStatusFilter === 'scheduled' ? 'primary' : 'default'}
+                          onClick={() => setAppointmentStatusFilter('scheduled')}
+                          style={{ borderRadius: 6 }}
+                        >
+                          Scheduled ({appointmentBreakdown.scheduled})
+                        </Button>
+                        <Button
+                          size="small"
+                          type={appointmentStatusFilter === 'completed' ? 'primary' : 'default'}
+                          onClick={() => setAppointmentStatusFilter('completed')}
+                          style={{ borderRadius: 6 }}
+                        >
+                          Completed ({appointmentBreakdown.completed})
+                        </Button>
+                      </Space>
+                    </Col>
+                  </Row>
+
+                  <Table
+                    dataSource={effectiveDashboardAppointments}
+                    columns={appointmentColumns}
+                    rowKey="id"
+                    pagination={{ pageSize: 8, showSizeChanger: true }}
+                    size="middle"
+                    scroll={{ x: 1250 }}
                   locale={{
                     emptyText: (
                       <Empty
@@ -2728,7 +3050,8 @@ export const MarketingDashboardPage: React.FC = () => {
                     ),
                   }}
                 />
-              </Card>
+              </div>
+            </Card>
             ),
           },
           {
@@ -3315,7 +3638,7 @@ export const MarketingDashboardPage: React.FC = () => {
             key: 'team',
             label: (
               <span>
-                <TrophyOutlined /> Team Prospects Oversight & Performance ({marketingStaffUsers.length})
+                <TrophyOutlined /> Team Prospects Oversight & Performance ({marketerLeaderboard.length})
               </span>
             ),
             children: (
@@ -3345,13 +3668,13 @@ export const MarketingDashboardPage: React.FC = () => {
                 <Alert
                   type="info"
                   showIcon
-                  style={{ marginBottom: 16, borderRadius: 8 }}
+                  style={{ marginBottom: 16, borderRadius: 10, background: '#f0f9ff', border: '1px solid #bae6fd' }}
                   message={
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-                      <span>
-                        <strong>Executive Oversight:</strong> Overseeing all {marketingStaffUsers.length} marketing staff with their respective prospects added. Staff-attributed and inbound leads combine to <strong>{totalAttributedProspects} Total Marketing Prospects</strong>.
+                      <span style={{ color: '#0369a1', fontSize: 13 }}>
+                        <strong style={{ color: '#0284c7' }}>Executive Oversight:</strong> Overseeing all <strong>{marketerLeaderboard.length}</strong> marketing staff with their respective prospects added. Staff-attributed and inbound leads combine to <strong>{totalAttributedProspects} Total Marketing Prospects</strong>.
                       </span>
-                      <Text type="secondary" style={{ fontSize: 12 }}>
+                      <Text type="secondary" style={{ fontSize: 12, color: '#0284c7' }}>
                         Click any marketer's count to filter the full prospects pipeline
                       </Text>
                     </div>
@@ -3361,12 +3684,12 @@ export const MarketingDashboardPage: React.FC = () => {
                   dataSource={allMarketerTableData}
                   rowKey="id"
                   pagination={{ pageSize: 10, showSizeChanger: true }}
-                  scroll={{ x: 1000 }}
+                  scroll={{ x: 1050 }}
                   columns={[
                     {
                       title: 'Rank',
                       key: 'rank',
-                      width: 75,
+                      width: 80,
                       render: (_, record, idx) => {
                         if (record.isUnassignedPool) return <Tag color="default">General</Tag>;
                         if (idx === 0) return <Tag color="gold" style={{ fontWeight: 800 }}>🥇 1st</Tag>;
@@ -3378,33 +3701,33 @@ export const MarketingDashboardPage: React.FC = () => {
                     {
                       title: 'Staff Member',
                       key: 'name',
-                      width: 240,
+                      width: 260,
                       render: (_, record) => {
                         if (record.isUnassignedPool) {
                           return (
-                            <Space>
-                              <Avatar icon={<GlobalOutlined />} style={{ backgroundColor: '#0284c7' }} />
+                            <Space align="center" style={{ flexWrap: 'nowrap', minWidth: 220 }}>
+                              <Avatar icon={<GlobalOutlined />} style={{ backgroundColor: '#0284c7', flexShrink: 0 }} />
                               <div>
-                                <Text strong style={{ color: '#0284c7' }}>{record.name}</Text>
-                                <div style={{ fontSize: 12, color: '#64748b' }}>Unassigned Pipeline Leads</div>
+                                <Text strong style={{ color: '#0284c7', whiteSpace: 'nowrap', display: 'block', fontSize: 13 }}>{record.name}</Text>
+                                <div style={{ fontSize: 12, color: '#64748b', whiteSpace: 'nowrap' }}>Unassigned Pipeline Leads</div>
                               </div>
                             </Space>
                           );
                         }
                         const isDir = record.role === 'marketing_director';
                         return (
-                          <Space>
-                            <Avatar style={{ backgroundColor: isDir ? '#7c3aed' : '#0284c7' }}>
-                              {record.name.charAt(0)}
+                          <Space align="center" style={{ flexWrap: 'nowrap', minWidth: 220 }}>
+                            <Avatar style={{ backgroundColor: isDir ? '#7c3aed' : '#0284c7', flexShrink: 0, fontWeight: 700 }}>
+                              {record.name.charAt(0).toUpperCase()}
                             </Avatar>
                             <div>
-                              <Text strong>{record.name}</Text>
-                              <div>
-                                <Tag color={isDir ? 'purple' : 'blue'}>
-                                  {isDir ? 'Director' : 'Marketer'}
+                              <Text strong style={{ whiteSpace: 'nowrap', display: 'block', fontSize: 13, color: '#0f172a' }}>{record.name}</Text>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, flexWrap: 'nowrap' }}>
+                                <Tag color={isDir ? 'purple' : 'geekblue'} style={{ margin: 0, fontSize: 11, fontWeight: 600 }}>
+                                  {isDir ? 'Director' : 'Marketing Staff'}
                                 </Tag>
                                 {record.phone && (
-                                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+                                  <Text type="secondary" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>
                                     {record.phone}
                                   </Text>
                                 )}
@@ -3544,8 +3867,8 @@ export const MarketingDashboardPage: React.FC = () => {
                             <Text strong style={{ color: '#0f172a' }}>TOTAL</Text>
                           </Table.Summary.Cell>
                           <Table.Summary.Cell index={1}>
-                            <Text strong style={{ color: '#0f172a' }}>
-                              All Marketing Staff & Pipeline ({marketingStaffUsers.length} Staff Members)
+                            <Text strong style={{ color: '#0f172a', whiteSpace: 'nowrap' }}>
+                              All Marketing Staff & Pipeline ({marketerLeaderboard.length} Staff Members)
                             </Text>
                           </Table.Summary.Cell>
                           <Table.Summary.Cell index={2}>
