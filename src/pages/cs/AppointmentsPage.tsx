@@ -202,10 +202,10 @@ export const AppointmentsPage: React.FC = () => {
   const { data: usersData } = useUsersQuery({ pageSize: 1000 });
   const allUsers = React.useMemo(() => usersData?.items ?? [], [usersData]);
 
-  // Allowed staff filter options for Admin and Marketing Director
-  const canFilterByStaff = user?.role === 'admin' || user?.role === 'marketing_director';
+  // Allowed staff filter options for Admin, Secretary, and Marketing Director
+  const canFilterByStaff = isAdmin || user?.role === 'secretary' || user?.role === 'marketing_director';
   const staffFilterOptions = React.useMemo(() => {
-    if (user?.role === 'admin') {
+    if (isAdmin || user?.role === 'secretary') {
       const staffList = allUsers.filter((u) => u.isActive !== false);
       return [
         { label: 'All Staff Members', value: 'all' },
@@ -783,7 +783,7 @@ export const AppointmentsPage: React.FC = () => {
         }
       }
 
-      if (scopeFilter === 'personal' && (user?.role === 'admin' || user?.role === 'marketing_director')) {
+      if (scopeFilter === 'personal' && (isAdmin || user?.role === 'secretary' || user?.role === 'marketing_director')) {
         const creatorId = getAppointmentCreatorId(app, allInteractions);
         if (creatorId !== user?.id) {
           return false;
@@ -1903,12 +1903,12 @@ export const AppointmentsPage: React.FC = () => {
       />
 
       {/* Scope Switcher: Restricted so it cannot widen beyond user's allowed scope */}
-      {isAdmin ? (
+      {isAdmin || user?.role === 'secretary' ? (
         <Card size="small" style={{ marginBottom: 16, background: '#f8fafc', border: '1px solid #e2e8f0' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
             <Space size={12} wrap>
               <Text strong style={{ fontSize: 13, color: '#334155' }}>
-                <UserOutlined style={{ marginRight: 6, color: tokens.primary }} /> Administrator Visibility Scope:
+                <UserOutlined style={{ marginRight: 6, color: tokens.primary }} /> {user?.role === 'secretary' ? 'Secretary' : 'Administrator'} Visibility Scope:
               </Text>
               <Radio.Group
                 value={scopeFilter}
@@ -2180,7 +2180,7 @@ export const AppointmentsPage: React.FC = () => {
               </Radio.Group>
             </Col>
           )}
-          <Col xs={24} md={(user?.role === 'marketing_director' || user?.role === 'admin') ? (canFilterByStaff && scopeFilter === 'all' ? 4 : 5) : (canFilterByStaff && scopeFilter === 'all' ? 5 : 6)}>
+          <Col xs={24} md={(user?.role === 'marketing_director' || isAdmin || user?.role === 'secretary') ? (canFilterByStaff && scopeFilter === 'all' ? 4 : 5) : (canFilterByStaff && scopeFilter === 'all' ? 5 : 6)}>
             <Input
               placeholder="Search by name, phone, reason"
               prefix={<SearchOutlined />}

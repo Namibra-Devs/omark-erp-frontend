@@ -74,7 +74,12 @@ import { useUsersQuery, getUserFullName } from '@/api/users';
 import { useBranchesQuery } from '@/api/branches';
 import { useAllStaffInteractionsQuery } from '@/api/interactions';
 import { filterEntitiesByBranch, tagPayloadWithBranch } from '@/utils/branchIsolation';
-import { isProspectAssignedOrCreatedByStaff, consolidateAllProspects } from '@/utils/prospectAssignment';
+import {
+  isProspectAssignedOrCreatedByStaff,
+  consolidateAllProspects,
+  resolveProspectAttribution,
+  canWriteProspects,
+} from '@/utils/prospectAssignment';
 import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import { roleLabels } from '@/constants/enums';
 import type { Role } from '@/types';
@@ -449,24 +454,16 @@ export const ProspectsPage: React.FC = () => {
       // `photo` isn't a real prospect field — POST /prospects would reject
       // it, so pull it out before spreading the rest into the payload.
       const { photo, ...prospectValues } = values;
-      const isSelfAssigned = user?.role === 'marketing_director' || user?.role === 'branch_manager' || user?.role === 'secretary' || user?.role === 'marketing_staff';
-      const effectiveAssignedUserId = isSelfAssigned ? user?.id : (values.assignedUserId || user?.id);
-      const effectiveSource = (user?.role === 'secretary' || user?.role === 'customer_service') ? 'customer_service' : 'marketing';
-      const fullName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined;
+      const attribution = resolveProspectAttribution(user, {
+        ...prospectValues,
+        source: values.source,
+      });
 
       const newProspect = await createProspectMutation.mutateAsync(
         tagPayloadWithBranch(
           {
             ...prospectValues,
-            source: effectiveSource,
-            assignedUserId: effectiveAssignedUserId,
-            assignedUserName: isSelfAssigned ? fullName : undefined,
-            createdByUserId: user?.id,
-            createdByName: fullName,
-            registeredByUserId: user?.id,
-            registeredByName: fullName,
-            recordedByUserId: user?.id,
-            recordedByName: fullName,
+            ...attribution,
           },
           user
         )

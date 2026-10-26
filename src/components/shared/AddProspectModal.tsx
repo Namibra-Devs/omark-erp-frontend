@@ -15,6 +15,7 @@ import {
   createDuplicateNameRule,
   assertNoProspectDuplicates,
 } from '@/utils/duplicateValidation';
+import { resolveProspectAttribution } from '@/utils/prospectAssignment';
 import type { ProspectSource } from '@/types';
 
 const { Option } = Select;
@@ -64,27 +65,14 @@ export const AddProspectModal: React.FC<AddProspectModalProps> = ({
       );
 
       const { photo, ...prospectValues } = values;
-      const isSelfAssigned = user?.role === 'marketing_director' || user?.role === 'branch_manager' || user?.role === 'secretary' || user?.role === 'marketing_staff' || user?.role === 'customer_service';
-      const effectiveAssignedUserId = isSelfAssigned ? user?.id : (values.assignedUserId || user?.id);
-      const fullName = user ? `${user.firstName || ''} ${user.lastName || ''}`.trim() : undefined;
-
-      const effectiveSource = values.source || (
-        user?.role === 'secretary' || user?.role === 'customer_service'
-          ? 'customer_service'
-          : (user?.role === 'marketing_director' || user?.role === 'marketing_staff' ? 'marketing' : defaultSource)
-      );
+      const attribution = resolveProspectAttribution(user, {
+        ...prospectValues,
+        source: values.source || defaultSource,
+      });
 
       const payload = {
         ...prospectValues,
-        source: effectiveSource,
-        assignedUserId: effectiveAssignedUserId,
-        assignedUserName: isSelfAssigned ? fullName : undefined,
-        createdByUserId: user?.id,
-        createdByName: fullName,
-        registeredByUserId: user?.id,
-        registeredByName: fullName,
-        recordedByUserId: user?.id,
-        recordedByName: fullName,
+        ...attribution,
       };
 
       const taggedPayload = tagPayloadWithBranch(payload, user);

@@ -144,9 +144,12 @@ test('A. Single Scoping Module: getVisibleStaffIds', async (t) => {
     assert.deepEqual(getVisibleStaffIds(marketingStaff2, allUsers), ['usr-mkt-2']);
   });
 
+  await t.test('Secretary returns "all" (unrestricted scope)', () => {
+    assert.equal(getVisibleStaffIds(secretaryUser, allUsers), 'all');
+  });
+
   await t.test('Other staff roles return only self', () => {
     assert.deepEqual(getVisibleStaffIds(csUser, allUsers), ['usr-cs']);
-    assert.deepEqual(getVisibleStaffIds(secretaryUser, allUsers), ['usr-sec']);
     assert.deepEqual(getVisibleStaffIds(managerUser, allUsers), ['usr-mgr']);
   });
 
@@ -224,15 +227,19 @@ test('B. Role-Based Visibility Rules: filterAppointmentsByScope', async (t) => {
     assert.deepEqual(visibleIds.sort(), ['apt-5', 'apt-7'].sort());
   });
 
-  await t.test('Assigned-but-not-created appointment is NOT visible to non-admin/non-director', () => {
+  await t.test('Assigned-but-not-created appointment is NOT visible to ordinary staff', () => {
     // apt-1 has assignedUserId: 'usr-cs', but was created by 'usr-admin'
     const visibleCs = filterAppointmentsByScope(sampleAppointments, csUser, allUsers, mockInteractions);
     assert.ok(!visibleCs.map((a) => a.id).includes('apt-1'), 'Assigned appointment must NOT appear for non-creator');
 
-    // apt-5 has assignedUserId: 'usr-admin', but was created by 'usr-cs'.
-    // Secretary should not see it even though someone else created it
+    // Manager only sees what they created (none in sampleAppointments)
+    const visibleMgr = filterAppointmentsByScope(sampleAppointments, managerUser, allUsers, mockInteractions);
+    assert.deepEqual(visibleMgr.map((a) => a.id), []);
+  });
+
+  await t.test('Secretary sees all appointments matching unrestricted scope', () => {
     const visibleSec = filterAppointmentsByScope(sampleAppointments, secretaryUser, allUsers, mockInteractions);
-    assert.deepEqual(visibleSec.map((a) => a.id), ['apt-6']);
+    assert.equal(visibleSec.length, 8);
   });
 
   await t.test('Missing creator is Admin-only (unassigned/website booking)', () => {

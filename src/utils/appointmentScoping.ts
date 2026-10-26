@@ -102,9 +102,9 @@ export function getAppointmentCreatorId(
 
 /**
  * Determines which staff IDs' appointments the given user is permitted to see.
- * - Admin (`role === 'admin'`) → 'all'
+ * - Admin and Secretary (`role IN ('admin', 'super_admin', 'secretary')`) → 'all' (unrestricted)
  * - Marketing Director (`role === 'marketing_director'`) → [self, ...marketing_staff IDs]
- * - Everyone else (branch_manager, customer_service, secretary, accounts, marketing_staff, unknown role) → [self]
+ * - Everyone else (branch_manager, customer_service, accounts, marketing_staff, unknown role) → [self]
  * - Unknown or missing role defaults to own-only, NEVER to all.
  */
 export function getVisibleStaffIds(
@@ -115,8 +115,8 @@ export function getVisibleStaffIds(
 
   const role = user.role;
 
-  // Admin sees all appointments across all staff and website bookings
-  if (role === 'admin') {
+  // Admin and Secretary run the office with unrestricted access across all staff and website bookings
+  if (role === 'admin' || role === 'super_admin' || role === 'secretary') {
     return 'all';
   }
 
@@ -134,8 +134,44 @@ export function getVisibleStaffIds(
 }
 
 /**
+ * Checks whether a single appointment record can be read/accessed by the given user.
+ * - Admin and Secretary: unrestricted (returns true for any appointment doc, including unassigned website bookings).
+ * - Marketing Director: can access own appointments and appointments created by marketing_staff.
+ * - Everyone else: only appointments they created.
+ */
+export function canAccessAppointmentDoc(
+  appointment: Partial<Appointment> | Record<string, any> | null | undefined,
+  user: { id?: string; role?: Role | string } | null | undefined,
+  allUsers: Array<{ id: string; role?: Role | string }> = [],
+  allInteractions?: Array<Partial<Interaction> | Record<string, any>> | null
+): boolean {
+  if (!user || !user.id || !appointment) return false;
+  const role = user.role;
+
+  // Admin and Secretary run the office with unrestricted access
+  if (role === 'admin' || role === 'super_admin' || role === 'secretary') {
+    return true;
+  }
+
+  const creatorId = getAppointmentCreatorId(appointment, allInteractions);
+  if (!creatorId) {
+    // Unassigned appointments (e.g. website bookings) are accessible only by unrestricted roles (admin/secretary)
+    return false;
+  }
+
+  const visibleScope = getVisibleStaffIds(user, allUsers);
+  if (visibleScope === 'all') return true;
+  return visibleScope.includes(creatorId);
+}
+
+/**
  * Checks if an appointment is editable / cancelable / reschedulable by the given user.
- * Convenience check for UI display; backend enforces it on PATCH/DELETE.
+ * Note: Secretary and Marketing Director can read records they cannot edit:
+ * - PATCH /appointments/:id is on admin and customer_service only.
+ * - Admin can edit any appointment.
+ * - Creator can edit own appointment.
+ * - Marketing Director can edit marketing staff appointments.
+ * - Secretary cannot edit other staff's appointments.
  */
 export function isAppointmentEditableByUser(
   appointment: Partial<Appointment> | Record<string, any> | null | undefined,
@@ -144,14 +180,24 @@ export function isAppointmentEditableByUser(
   allInteractions?: Array<Partial<Interaction> | Record<string, any>> | null
 ): boolean {
   if (!user || !user.id || !appointment) return false;
-  if (user.role === 'admin') return true;
+  if (user.role === 'admin' || user.role === 'super_admin') return true;
 
   const creatorId = getAppointmentCreatorId(appointment, allInteractions);
   if (!creatorId) return false;
 
-  const visibleScope = getVisibleStaffIds(user, allUsers);
-  if (visibleScope === 'all') return true;
-  return visibleScope.includes(creatorId);
+  // Creator can edit their own appointment
+  if (creatorId === user.id) return true;
+
+  // Marketing Director can edit marketing staff appointments
+  if (user.role === 'marketing_director') {
+    const marketingStaffIds = allUsers
+      .filter((u) => u && u.id && u.role === 'marketing_staff')
+      .map((u) => String(u.id));
+    return marketingStaffIds.includes(creatorId);
+  }
+
+  // Secretary and other staff cannot edit other staff's appointments
+  return false;
 }
 
 /**
@@ -159,10 +205,10 @@ export function isAppointmentEditableByUser(
  * 
  * Rules:
  * 1. Visibility is by creator only, never by assigned host.
- * 2. Admin sees all appointments (including unassigned/website).
+ * 2. Admin and Secretary see all appointments (including unassigned/website).
  * 3. Marketing Director sees own + marketing_staff's appointments.
  * 4. Other staff see only their own appointments.
- * 5. Appointments with NO creator (website bookings / orphans) appear ONLY for Admin.
+ * 5. Appointments with NO creator (website bookings / orphans) appear ONLY for Admin and Secretary.
  * 6. De-duplicates strictly by appointment `id` so nothing renders twice.
  */
 export function filterAppointmentsByScope<T extends { id: string }>(
@@ -198,7 +244,7 @@ export function filterAppointmentsByScope<T extends { id: string }>(
 
   const visibleScope = getVisibleStaffIds(user, allUsers);
 
-  // Admin sees all appointments, including unassigned website bookings
+  // Admin and Secretary see all appointments, including unassigned website bookings
   if (visibleScope === 'all') {
     return uniqueAppointments;
   }
