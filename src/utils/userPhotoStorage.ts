@@ -121,6 +121,60 @@ async function deleteIndexedDBAvatar(entityType: string, entityId: string): Prom
 let settingsSyncTimer: any = null;
 const pendingSettingsUpdates = new Map<string, string | null>();
 
+export async function flushSettingsAvatarSync(): Promise<void> {
+  if (settingsSyncTimer) {
+    clearTimeout(settingsSyncTimer);
+    settingsSyncTimer = null;
+  }
+  if (pendingSettingsUpdates.size === 0) return;
+
+  try {
+    const updateFn = customUpdateSettingsHandler;
+    const fetchFn = customFetchSettingsHandler;
+
+    if (!updateFn) return;
+
+    let currentSettings: any = {};
+    if (fetchFn) {
+      currentSettings = (await fetchFn().catch(() => ({}))) || {};
+    }
+
+    const currentEntityAvatars: Record<string, string> = { ...(currentSettings?.entityAvatars || {}) };
+    const currentCustomerAvatars: Record<string, string> = { ...(currentSettings?.customerAvatars || {}) };
+    const currentUserAvatars: Record<string, string> = { ...(currentSettings?.userAvatars || {}) };
+
+    for (const [key, url] of pendingSettingsUpdates.entries()) {
+      const [type, id] = key.split('_');
+      if (!id) continue;
+
+      if (url) {
+        currentEntityAvatars[key] = url;
+        if (type === 'customer') {
+          currentCustomerAvatars[id] = url;
+        } else if (type === 'staff' || type === 'user') {
+          currentUserAvatars[id] = url;
+        }
+      } else {
+        delete currentEntityAvatars[key];
+        if (type === 'customer') {
+          delete currentCustomerAvatars[id];
+        } else if (type === 'staff' || type === 'user') {
+          delete currentUserAvatars[id];
+        }
+      }
+    }
+    pendingSettingsUpdates.clear();
+
+    await updateFn({
+      entityAvatars: currentEntityAvatars,
+      customerAvatars: currentCustomerAvatars,
+      userAvatars: currentUserAvatars,
+    });
+  } catch (err) {
+    console.warn('[userPhotoStorage] Backend settings avatar sync error:', err);
+  }
+}
+
 function scheduleSettingsAvatarSync(entityType: string, entityId: string, photoUrl: string | undefined): void {
   const compositeKey = `${entityType}_${entityId}`;
   pendingSettingsUpdates.set(compositeKey, photoUrl || null);
@@ -131,53 +185,30 @@ function scheduleSettingsAvatarSync(entityType: string, entityId: string, photoU
   }
 
   if (settingsSyncTimer) clearTimeout(settingsSyncTimer);
-  settingsSyncTimer = setTimeout(async () => {
-    try {
-      const updateFn = customUpdateSettingsHandler;
-      const fetchFn = customFetchSettingsHandler;
-
-      if (!updateFn) return;
-
-      let currentSettings: any = {};
-      if (fetchFn) {
-        currentSettings = (await fetchFn().catch(() => ({}))) || {};
-      }
-
-      const currentEntityAvatars: Record<string, string> = { ...(currentSettings?.entityAvatars || {}) };
-      const currentCustomerAvatars: Record<string, string> = { ...(currentSettings?.customerAvatars || {}) };
-      const currentUserAvatars: Record<string, string> = { ...(currentSettings?.userAvatars || {}) };
-
-      for (const [key, url] of pendingSettingsUpdates.entries()) {
-        const [type, id] = key.split('_');
-        if (!id) continue;
-
-        if (url) {
-          currentEntityAvatars[key] = url;
-          if (type === 'customer') {
-            currentCustomerAvatars[id] = url;
-          } else if (type === 'staff' || type === 'user') {
-            currentUserAvatars[id] = url;
-          }
-        } else {
-          delete currentEntityAvatars[key];
-          if (type === 'customer') {
-            delete currentCustomerAvatars[id];
-          } else if (type === 'staff' || type === 'user') {
-            delete currentUserAvatars[id];
-          }
-        }
-      }
-      pendingSettingsUpdates.clear();
-
-      await updateFn({
-        entityAvatars: currentEntityAvatars,
-        customerAvatars: currentCustomerAvatars,
-        userAvatars: currentUserAvatars,
-      });
-    } catch (err) {
-      console.warn('[userPhotoStorage] Backend settings avatar sync error:', err);
-    }
+  settingsSyncTimer = setTimeout(() => {
+    flushSettingsAvatarSync().catch(() => {});
   }, 250);
+}
+
+/**
+ * Persists an entity avatar immediately to direct entity endpoints and PostgreSQL settings store.
+ */
+export async function syncPhotoToBackendImmediate(entityType: string, entityId: string, photoUrl: string | undefined): Promise<void> {
+  if (!entityId) return;
+
+  const compositeKey = `${entityType}_${entityId}`;
+  pendingSettingsUpdates.set(compositeKey, photoUrl || null);
+  if (entityType === 'staff' || entityType === 'user') {
+    pendingSettingsUpdates.set(`staff_${entityId}`, photoUrl || null);
+    pendingSettingsUpdates.set(`user_${entityId}`, photoUrl || null);
+  }
+
+  const promises: Promise<any>[] = [flushSettingsAvatarSync()];
+  if (customDirectSyncHandler) {
+    promises.push(customDirectSyncHandler(entityType, entityId, photoUrl).catch(() => {}));
+  }
+
+  await Promise.all(promises);
 }
 
 /**
@@ -261,6 +292,15 @@ export function setEntityPhoto(
   if (entityType === 'staff' || entityType === 'user') {
     memoryAvatarCache.set(`${AVATAR_STORAGE_PREFIX}user_${entityId}`, photoUrl);
     memoryAvatarCache.set(`${AVATAR_STORAGE_PREFIX}staff_${entityId}`, photoUrl);
+    try {
+      if (typeof localStorage !== 'undefined') {
+        const raw = localStorage.getItem('omark_user_assignments');
+        const map = raw ? JSON.parse(raw) : {};
+        const existing = map[entityId] || { userId: entityId };
+        map[entityId] = { ...existing, avatarUrl: photoUrl, photoUrl };
+        localStorage.setItem('omark_user_assignments', JSON.stringify(map));
+      }
+    } catch {}
   }
 
   try {
@@ -379,6 +419,18 @@ export function rehydrateAvatarsFromSettings(settings: any): number {
   // 3. userAvatars map: { "456": "https://..." }
   if (settings.userAvatars && typeof settings.userAvatars === 'object') {
     for (const [userId, url] of Object.entries(settings.userAvatars)) {
+      if (typeof url === 'string' && url) {
+        setEntityPhoto('staff', userId, url, false);
+        setEntityPhoto('user', userId, url, false);
+        rehydratedCount++;
+      }
+    }
+  }
+
+  // 4. userAssignments map: { "456": { avatarUrl: "https://...", ... } }
+  if (settings.userAssignments && typeof settings.userAssignments === 'object') {
+    for (const [userId, assign] of Object.entries(settings.userAssignments)) {
+      const url = (assign as any)?.avatarUrl || (assign as any)?.photoUrl;
       if (typeof url === 'string' && url) {
         setEntityPhoto('staff', userId, url, false);
         setEntityPhoto('user', userId, url, false);

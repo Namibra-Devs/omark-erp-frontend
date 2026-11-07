@@ -43,9 +43,11 @@ import dayjs from 'dayjs';
 import { useAuth } from '@/contexts/AuthContext';
 import { PageHeader } from '@/components/shared/PageHeader';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { setPhoto, getEntityPhoto, syncPhotoToBackendImmediate } from '@/utils/userPhotoStorage';
 import { roleLabels } from '@/constants/enums';
 import { tokens } from '@/constants/tokens';
 import { useUsersQuery, useUpdateUserMutation, useUserActivityQuery, toE164Phone, type UpdateUserPayload } from '@/api/users';
+import { syncStaffRecordToServer } from '@/api/settings';
 import { useProspectsQuery } from '@/api/prospects';
 import { useCustomersQuery } from '@/api/customers';
 import {
@@ -59,7 +61,7 @@ import { useDeedsQuery } from '@/api/deeds';
 import { usePayrollQuery, type PayrollRecord } from '@/api/payroll';
 import { useBranchesQuery } from '@/api/branches';
 import { getUserBranchRoleTitle } from '@/utils/branchIsolation';
-import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { getStoredUserAssignment, setStoredUserAssignment, syncUserAssignmentsToBackendImmediate } from '@/utils/userAssignmentStorage';
 import type { Role } from '@/types';
 import { useBonusesQuery, type StaffBonusRecord } from '@/api/bonuses';
 import { useAttendanceQuery } from '@/api/attendance';
@@ -329,6 +331,23 @@ export const MyProfilePage: React.FC = () => {
         phoneNumber: sanitizedPhone,
       };
 
+      setStoredUserAssignment(user.id, {
+        firstName: payload.firstName,
+        lastName: payload.lastName,
+        name: `${payload.firstName || ''} ${payload.lastName || ''}`.trim() || undefined,
+        email: payload.email,
+        phoneNumber: payload.phoneNumber,
+      });
+
+      await Promise.all([
+        syncStaffRecordToServer(user.id, {
+          ...payload,
+          avatarUrl: user.avatarUrl,
+          photoUrl: user.photoUrl,
+          branchId: user.branchId,
+        }).catch(() => {}),
+        syncUserAssignmentsToBackendImmediate().catch(() => {}),
+      ]);
       await updateUser.mutateAsync({ id: user.id, payload });
       await refreshUser();
       message.success('Profile details updated successfully');
@@ -477,9 +496,25 @@ export const MyProfilePage: React.FC = () => {
               entityId={user.id}
               size={84}
               editable={true}
-              src={user.avatarUrl || user.photoUrl}
+              src={user.avatarUrl || user.photoUrl || getEntityPhoto('staff', user.id) || getEntityPhoto('user', user.id)}
               onPhotoChange={async (url) => {
                 try {
+                  if (url) {
+                    setPhoto('staff', user.id, url);
+                    setStoredUserAssignment(user.id, { avatarUrl: url, photoUrl: url });
+                    await Promise.all([
+                      syncStaffRecordToServer(user.id, {
+                        avatarUrl: url,
+                        photoUrl: url,
+                        firstName: user.firstName,
+                        lastName: user.lastName,
+                        phoneNumber: user.phoneNumber,
+                        branchId: user.branchId,
+                      }).catch(() => {}),
+                      syncPhotoToBackendImmediate('staff', user.id, url).catch(() => {}),
+                      syncUserAssignmentsToBackendImmediate().catch(() => {}),
+                    ]);
+                  }
                   await updateUser.mutateAsync({
                     id: user.id,
                     payload: { avatarUrl: url, photoUrl: url, profilePictureUrl: url },
@@ -853,9 +888,25 @@ export const MyProfilePage: React.FC = () => {
             entityId={user.id}
             size={84}
             editable={true}
-            src={user.avatarUrl || user.photoUrl}
+            src={user.avatarUrl || user.photoUrl || getEntityPhoto('staff', user.id) || getEntityPhoto('user', user.id)}
             onPhotoChange={async (url) => {
               try {
+                if (url) {
+                  setPhoto('staff', user.id, url);
+                  setStoredUserAssignment(user.id, { avatarUrl: url, photoUrl: url });
+                  await Promise.all([
+                    syncStaffRecordToServer(user.id, {
+                      avatarUrl: url,
+                      photoUrl: url,
+                      firstName: user.firstName,
+                      lastName: user.lastName,
+                      phoneNumber: user.phoneNumber,
+                      branchId: user.branchId,
+                    }).catch(() => {}),
+                    syncPhotoToBackendImmediate('staff', user.id, url).catch(() => {}),
+                    syncUserAssignmentsToBackendImmediate().catch(() => {}),
+                  ]);
+                }
                 await updateUser.mutateAsync({
                   id: user.id,
                   payload: { avatarUrl: url, photoUrl: url, profilePictureUrl: url },

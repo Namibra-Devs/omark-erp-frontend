@@ -28,6 +28,8 @@ const {
   rehydrateAvatarsFromSettings,
   rehydrateEntityPhotos,
   setPhotoApiHandlers,
+  setPhotoSettingsHandlers,
+  syncPhotoToBackendImmediate,
   AVATAR_STORAGE_PREFIX,
 } = await import('./userPhotoStorage.ts');
 
@@ -155,4 +157,98 @@ test('Backend Sync Handler: triggers pluggable persistence callback on photo upd
 
   // Reset handler
   setPhotoApiHandlers(null);
+});
+
+test('Staff Dashboard Persistence: avatar in userAssignments persists across localStorage wipe', () => {
+  localStorage.clear();
+
+  // Staff updates avatar on dashboard
+  setEntityPhoto('staff', 'staff-999', 'https://example.com/staff999.png', false);
+
+  assert.equal(getEntityPhoto('staff', 'staff-999'), 'https://example.com/staff999.png');
+
+  // Verify it synced into user assignments
+  const rawAssign = localStorage.getItem('omark_user_assignments');
+  assert.ok(rawAssign);
+  const parsed = JSON.parse(rawAssign);
+  assert.equal(parsed['staff-999']?.avatarUrl, 'https://example.com/staff999.png');
+
+  // Clear cache / localStorage (simulating user clearing cached data)
+  localStorage.clear();
+  assert.equal(localStorage.getItem('omark_avatar_staff_staff-999'), null);
+
+  // Settings from backend (or recovered store) with userAssignments
+  const remoteSettings = {
+    userAssignments: {
+      'staff-999': {
+        userId: 'staff-999',
+        firstName: 'Staff',
+        lastName: 'Member',
+        avatarUrl: 'https://example.com/staff999.png',
+      },
+    },
+  };
+
+  rehydrateAvatarsFromSettings(remoteSettings);
+
+  // Avatar must be restored!
+  assert.equal(getEntityPhoto('staff', 'staff-999'), 'https://example.com/staff999.png');
+});
+
+test('Immediate Remote Avatar Sync: synchronizes immediately without debounce delay', async () => {
+  let updatedSettings = null;
+  setPhotoSettingsHandlers(
+    async () => ({}),
+    async (payload) => {
+      updatedSettings = payload;
+      return payload;
+    }
+  );
+
+  await syncPhotoToBackendImmediate('staff', 'staff-imm-1', 'https://example.com/imm.png');
+  assert.ok(updatedSettings);
+  assert.equal(updatedSettings.userAvatars['staff-imm-1'], 'https://example.com/imm.png');
+
+  setPhotoSettingsHandlers(null, null);
+});
+
+test('Staff Dashboard Remote Record Persistence: restores staff avatar and profile across full client storage wipe', async () => {
+  localStorage.clear();
+
+  // Simulate a remote staff record stored in PostgreSQL on api.erp.omarkrealestate.com
+  const staffUserId = '6aa3f78b-elizabeth';
+  const remoteAvatarUrl = 'https://api.erp.omarkrealestate.com/uploads/1762543-elizabeth.png';
+
+  // Initially storage is empty
+  assert.equal(getEntityPhoto('staff', staffUserId), undefined);
+
+  // Directly set photo simulating staff update
+  setEntityPhoto('staff', staffUserId, remoteAvatarUrl, false);
+  assert.equal(getEntityPhoto('staff', staffUserId), remoteAvatarUrl);
+
+  // Simulate user clearing browsing cache & site data (wipes localStorage completely)
+  localStorage.clear();
+  assert.equal(localStorage.getItem(`${AVATAR_STORAGE_PREFIX}staff_${staffUserId}`), null);
+
+  // Simulate rehydrating from remote server record
+  const mockServerRecord = {
+    userAvatars: {
+      [staffUserId]: remoteAvatarUrl,
+    },
+    userAssignments: {
+      [staffUserId]: {
+        userId: staffUserId,
+        avatarUrl: remoteAvatarUrl,
+        firstName: 'Elizabeth',
+        lastName: 'Serwaa',
+        phoneNumber: '+233547009973',
+      },
+    },
+  };
+
+  rehydrateAvatarsFromSettings(mockServerRecord);
+
+  // Verify that after cache wipe, the avatar is restored permanently
+  assert.equal(getEntityPhoto('staff', staffUserId), remoteAvatarUrl);
+  assert.equal(getEntityPhoto('user', staffUserId), remoteAvatarUrl);
 });

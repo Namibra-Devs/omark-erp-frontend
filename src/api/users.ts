@@ -3,9 +3,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import apiClient, { unwrapData, unwrapList } from '@/api/client';
 import { AxiosError } from 'axios';
 import type { Role } from '@/types';
-import { getStoredUserAssignment, setStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { getStoredUserAssignment, setStoredUserAssignment, syncUserAssignmentsToBackendImmediate } from '@/utils/userAssignmentStorage';
 import { recordEntityBranch } from '@/utils/branchIsolation';
-import { rehydrateEntityPhotos, getEntityPhoto } from '@/utils/userPhotoStorage';
+import { rehydrateEntityPhotos, getEntityPhoto, setEntityPhoto, syncPhotoToBackendImmediate } from '@/utils/userPhotoStorage';
+import { syncStaffRecordToServer } from '@/api/settings';
 
 // --- Types ---
 // Matches the `User` schema from GET/POST/PATCH /api/v1/users in the API docs.
@@ -251,7 +252,7 @@ export function useUsersQuery(params?: UsersListParams) {
 
         const enrichedItems = allItems.map((u) => {
           const stored = getStoredUserAssignment(u.id);
-          const photo = u.avatarUrl || u.photoUrl || u.profilePictureUrl || getEntityPhoto('staff', u.id) || getEntityPhoto('user', u.id);
+          const photo = stored?.avatarUrl || stored?.photoUrl || getEntityPhoto('staff', u.id) || getEntityPhoto('user', u.id) || u.avatarUrl || u.photoUrl || u.profilePictureUrl;
           return {
             ...u,
             firstName: stored?.firstName || u.firstName,
@@ -288,7 +289,7 @@ export function useUserQuery(id: string | undefined) {
         const user = unwrapData(res);
         if (user && id) {
           const stored = getStoredUserAssignment(id);
-          const photo = user.avatarUrl || user.photoUrl || user.profilePictureUrl || getEntityPhoto('staff', id) || getEntityPhoto('user', id);
+          const photo = stored?.avatarUrl || stored?.photoUrl || getEntityPhoto('staff', id) || getEntityPhoto('user', id) || user.avatarUrl || user.photoUrl || user.profilePictureUrl;
           const enriched: UserEntity = {
             ...user,
             firstName: stored?.firstName || user.firstName,
@@ -439,6 +440,8 @@ export function useUpdateUserMutation() {
         phoneNumber: sanitizedPhone,
       };
 
+      const photoUrl = sanitizedPayload.avatarUrl || sanitizedPayload.photoUrl || sanitizedPayload.profilePictureUrl;
+
       // 1. Immediately persist changes locally in client storage for 100% responsiveness
       setStoredUserAssignment(id, {
         ...(sanitizedPayload.firstName !== undefined ? { firstName: sanitizedPayload.firstName } : {}),
@@ -448,10 +451,28 @@ export function useUpdateUserMutation() {
           : {}),
         ...(sanitizedPayload.email !== undefined ? { email: sanitizedPayload.email } : {}),
         ...(sanitizedPhone !== undefined ? { phoneNumber: sanitizedPhone } : {}),
+        ...(photoUrl ? { avatarUrl: photoUrl, photoUrl } : {}),
         ...(originalRole ? { role: originalRole } : {}),
       });
 
-      // 2. If password update is requested, attempt auth reset endpoint
+      if (photoUrl) {
+        setEntityPhoto('staff', id, photoUrl);
+      }
+
+      // 2. Immediately persist to authoritative backend settings store and remote task records so it survives any cache wipes
+      await Promise.all([
+        syncStaffRecordToServer(id, {
+          avatarUrl: photoUrl,
+          photoUrl,
+          firstName: sanitizedPayload.firstName,
+          lastName: sanitizedPayload.lastName,
+          phoneNumber: sanitizedPhone,
+        }).catch(() => {}),
+        syncUserAssignmentsToBackendImmediate().catch(() => {}),
+        photoUrl ? syncPhotoToBackendImmediate('staff', id, photoUrl).catch(() => {}) : Promise.resolve(),
+      ]);
+
+      // 3. If password update is requested, attempt auth reset endpoint
       if (payload.password) {
         apiClient.post('/auth/reset-password', {
           password: payload.password,
@@ -459,7 +480,7 @@ export function useUpdateUserMutation() {
         }).catch(() => {});
       }
 
-      // 3. Attempt live backend update
+      // 4. Attempt live backend update
       try {
         const res = await apiClient.patch<import('@/types').ApiResponse<UserEntity>>(`/users/${id}`, sanitizedPayload);
         return unwrapData(res);
@@ -468,9 +489,32 @@ export function useUpdateUserMutation() {
         // When non-admin staff update their profile, the backend restricts /users/:id to admin only.
         const isForbidden = error?.response?.status === 403 ||
                             error?.status === 403 ||
-                            String(error?.response?.data?.message || error?.message).toLowerCase().includes('required role');
+                            String(error?.response?.data?.message || error?.message).toLowerCase().includes('required role') ||
+                            String(error?.response?.data?.message || error?.message).toLowerCase().includes('access denied');
 
         if (isForbidden) {
+          // Attempt non-admin self-update endpoints on the backend API
+          const selfEndpoints = [
+            { method: 'patch', url: '/auth/me' },
+            { method: 'put', url: '/auth/me' },
+            { method: 'patch', url: '/users/me' },
+            { method: 'put', url: '/users/me' },
+          ];
+
+          for (const ep of selfEndpoints) {
+            try {
+              const selfRes = ep.method === 'patch'
+                ? await apiClient.patch<import('@/types').ApiResponse<UserEntity>>(ep.url, sanitizedPayload)
+                : await apiClient.put<import('@/types').ApiResponse<UserEntity>>(ep.url, sanitizedPayload);
+              const unwrapped = unwrapData(selfRes);
+              if (unwrapped && (unwrapped.id || unwrapped.email)) {
+                return unwrapped;
+              }
+            } catch {
+              // continue trying
+            }
+          }
+
           console.warn('[Omark ERP] Non-admin self-profile update: persisted locally to ensure full functionality:', id);
           const fallbackUser: UserEntity = {
             id,
@@ -480,6 +524,9 @@ export function useUpdateUserMutation() {
             phoneNumber: sanitizedPayload.phoneNumber || '',
             role: (originalRole || 'marketing_staff') as any,
             isActive: sanitizedPayload.isActive !== undefined ? sanitizedPayload.isActive : true,
+            avatarUrl: photoUrl,
+            photoUrl: photoUrl,
+            profilePictureUrl: photoUrl,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
           };

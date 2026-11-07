@@ -3,8 +3,9 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { useNavigate } from 'react-router-dom';
 import { App } from 'antd'; // Changed from 'message' to 'App'
 import apiClient, { setTokens, clearTokens, getAccessToken, getRefreshToken } from '@/api/client';
-import { getEntityPhoto, setEntityPhoto } from '@/utils/userPhotoStorage';
-import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { getEntityPhoto, setEntityPhoto, initPhotoStorage } from '@/utils/userPhotoStorage';
+import { getStoredUserAssignment, setStoredUserAssignment, initUserAssignmentStorage } from '@/utils/userAssignmentStorage';
+import { fetchAppSettings, fetchStaffRecordsFromServer } from '@/api/settings';
 import type { User, Role } from '@/types';
 
 interface AuthContextType {
@@ -52,12 +53,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           if (!prev) return null;
           const nextFirst = updateData.firstName || prev.firstName;
           const nextLast = updateData.lastName !== undefined ? updateData.lastName : prev.lastName;
+          const nextAvatar = updateData.avatarUrl || updateData.photoUrl || prev.avatarUrl;
           return {
             ...prev,
             ...updateData,
             firstName: nextFirst,
             lastName: nextLast,
             name: `${nextFirst} ${nextLast}`.trim(),
+            avatarUrl: nextAvatar,
+            photoUrl: nextAvatar,
           };
         });
       }
@@ -98,19 +102,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       setTokens(accessToken, refreshToken || '');
 
+      // Rehydrate remote settings and staff records from PostgreSQL backend so avatars and profiles are restored
+      const [, remoteRecordsResult] = await Promise.all([
+        fetchAppSettings().catch(() => ({})),
+        fetchStaffRecordsFromServer(userData.branchId || userData.branch, userData.id).catch(() => ({})),
+      ]);
+      const remoteRecords: Record<string, any> = remoteRecordsResult && typeof remoteRecordsResult === 'object' ? remoteRecordsResult : {};
+
       const storedAssignment = getStoredUserAssignment(userData.id);
       const effectiveRole = (storedAssignment?.role as Role) || userData.role || 'admin';
       const branchId = storedAssignment?.branchId || userData.branchId || userData.branch;
       const departmentId = storedAssignment?.departmentId || userData.departmentId || userData.department;
       const serverAvatar = userData.avatarUrl || userData.photoUrl || userData.profilePictureUrl;
-      const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
-      const resolvedAvatar = serverAvatar || storedAvatar;
-      if (serverAvatar && userData.id) {
-        setEntityPhoto('staff', userData.id, serverAvatar, false);
+      const remoteAvatar = remoteRecords[userData.id]?.avatarUrl || remoteRecords[userData.id]?.photoUrl;
+      const storedAvatar = storedAssignment?.avatarUrl || storedAssignment?.photoUrl || getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
+      const resolvedAvatar = remoteAvatar || storedAvatar || serverAvatar;
+      if (resolvedAvatar && userData.id) {
+        setEntityPhoto('staff', userData.id, resolvedAvatar, false);
       }
 
-      const fName = storedAssignment?.firstName || userData.firstName || 'User';
-      const lName = storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || '');
+      const fName = remoteRecords[userData.id]?.firstName || storedAssignment?.firstName || userData.firstName || 'User';
+      const lName = remoteRecords[userData.id]?.lastName !== undefined 
+        ? remoteRecords[userData.id].lastName 
+        : (storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || ''));
+      const phone = remoteRecords[userData.id]?.phoneNumber || storedAssignment?.phoneNumber || userData.phoneNumber || userData.phone || '';
       const userObj: User = {
         id: userData.id,
         firstName: fName,
@@ -119,7 +134,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         email: storedAssignment?.email || userData.email,
         role: effectiveRole,
         isActive: userData.isActive !== undefined ? userData.isActive : true,
-        phoneNumber: storedAssignment?.phoneNumber || userData.phoneNumber || userData.phone || '',
+        phoneNumber: phone,
         branchId,
         branch: userData.branch || branchId,
         departmentId,
@@ -205,19 +220,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userData = dataContainer.user || dataContainer;
 
       if (userData && userData.id) {
-        const storedAssignment = getStoredUserAssignment(userData.id);
+        // Rehydrate remote settings and staff records from PostgreSQL backend
+        const [, remoteRecordsResult] = await Promise.all([
+          fetchAppSettings().catch(() => ({})),
+          fetchStaffRecordsFromServer(userData.branchId || userData.branch, userData.id).catch(() => ({})),
+        ]);
+        const remoteRecords: Record<string, any> = remoteRecordsResult && typeof remoteRecordsResult === 'object' ? remoteRecordsResult : {};
+
+        let storedAssignment = getStoredUserAssignment(userData.id);
         const effectiveRole = (storedAssignment?.role as Role) || userData.role || 'admin';
         const branchId = storedAssignment?.branchId || userData.branchId || userData.branch;
         const departmentId = storedAssignment?.departmentId || userData.departmentId || userData.department;
         const serverAvatar = userData.avatarUrl || userData.photoUrl || userData.profilePictureUrl;
-        const storedAvatar = getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
-        const resolvedAvatar = serverAvatar || storedAvatar;
-        if (serverAvatar && userData.id) {
-          setEntityPhoto('staff', userData.id, serverAvatar, false);
+        const remoteAvatar = remoteRecords[userData.id]?.avatarUrl || remoteRecords[userData.id]?.photoUrl;
+        let storedAvatar = storedAssignment?.avatarUrl || storedAssignment?.photoUrl || getEntityPhoto('staff', userData.id) || getEntityPhoto('user', userData.id);
+
+        const resolvedAvatar = remoteAvatar || storedAvatar || serverAvatar;
+        if (resolvedAvatar && userData.id) {
+          setEntityPhoto('staff', userData.id, resolvedAvatar, false);
         }
 
-        const fName = storedAssignment?.firstName || userData.firstName || 'User';
-        const lName = storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || '');
+        const fName = remoteRecords[userData.id]?.firstName || storedAssignment?.firstName || userData.firstName || 'User';
+        const lName = remoteRecords[userData.id]?.lastName !== undefined 
+          ? remoteRecords[userData.id].lastName 
+          : (storedAssignment?.lastName !== undefined ? storedAssignment.lastName : (userData.lastName || ''));
+        const phone = remoteRecords[userData.id]?.phoneNumber || storedAssignment?.phoneNumber || userData.phoneNumber || userData.phone || '';
         const userObj: User = {
           id: userData.id,
           firstName: fName,
@@ -226,7 +253,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           email: storedAssignment?.email || userData.email,
           role: effectiveRole,
           isActive: userData.isActive !== undefined ? userData.isActive : true,
-          phoneNumber: storedAssignment?.phoneNumber || userData.phoneNumber || userData.phone || '',
+          phoneNumber: phone,
           branchId,
           branch: userData.branch || branchId,
           departmentId,
@@ -271,6 +298,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           setIsLoading(false);
           return;
         }
+
+        // Recover storage caches from IndexedDB before user refresh in case cache was cleared
+        await Promise.all([
+          initPhotoStorage().catch(() => {}),
+          initUserAssignmentStorage().catch(() => {}),
+        ]);
+
+        // Rehydrate remote settings from PostgreSQL backend so clearing cache restores all staff photos/profiles
+        await fetchAppSettings().catch(() => {});
 
         await refreshUser();
       } catch (error) {

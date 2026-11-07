@@ -2,9 +2,124 @@
 import { useState, useEffect } from 'react';
 import { recordEntityBranch, getStoredEntityBranch, getBranchCanonicalKey, getUserBranchName } from '@/utils/branchIsolation';
 
-const USER_ASSIGNMENT_STORAGE_KEY = 'omark_user_assignments';
+export const USER_ASSIGNMENT_STORAGE_KEY = 'omark_user_assignments';
+export const USER_ASSIGNMENT_DB_NAME = 'omark_erp_user_assignments_db';
+export const USER_ASSIGNMENT_STORE_NAME = 'assignments';
 const BRANCH_STAFF_STORAGE_KEY = 'omark_branch_staff_roster';
 const BRANCH_OVERRIDES_STORAGE_KEY = 'omark_branch_overrides';
+
+// In-memory cache for ultra-fast 0ms lookups across render cycles
+const memoryAssignmentCache = new Map<string, StoredUserAssignment>();
+
+// Pluggable sync handlers for backend settings persistence
+export type AssignmentFetchSettingsHandler = () => Promise<any>;
+export type AssignmentUpdateSettingsHandler = (payload: any) => Promise<any>;
+
+let customFetchSettingsHandler: AssignmentFetchSettingsHandler | null = null;
+let customUpdateSettingsHandler: AssignmentUpdateSettingsHandler | null = null;
+
+export function setUserAssignmentSettingsHandlers(
+  fetchFn: AssignmentFetchSettingsHandler | null,
+  updateFn: AssignmentUpdateSettingsHandler | null
+) {
+  customFetchSettingsHandler = fetchFn;
+  customUpdateSettingsHandler = updateFn;
+}
+
+// ── IndexedDB Durable Persistence Layer ─────────────────────────────────────
+function openAssignmentDB(): Promise<IDBDatabase | null> {
+  if (typeof window === 'undefined' || !window.indexedDB) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve) => {
+    try {
+      const request = window.indexedDB.open(USER_ASSIGNMENT_DB_NAME, 1);
+      request.onupgradeneeded = (event) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+        if (!db.objectStoreNames.contains(USER_ASSIGNMENT_STORE_NAME)) {
+          db.createObjectStore(USER_ASSIGNMENT_STORE_NAME, { keyPath: 'userId' });
+        }
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+export async function getIndexedDBAssignments(): Promise<StoredUserAssignment[] | null> {
+  try {
+    const db = await openAssignmentDB();
+    if (!db) return null;
+    return new Promise((resolve) => {
+      const tx = db.transaction(USER_ASSIGNMENT_STORE_NAME, 'readonly');
+      const store = tx.objectStore(USER_ASSIGNMENT_STORE_NAME);
+      const req = store.getAll();
+      req.onsuccess = () => resolve(Array.isArray(req.result) ? req.result : []);
+      req.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function setIndexedDBAssignment(assignment: StoredUserAssignment): Promise<void> {
+  try {
+    const db = await openAssignmentDB();
+    if (!db) return;
+    return new Promise((resolve) => {
+      const tx = db.transaction(USER_ASSIGNMENT_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(USER_ASSIGNMENT_STORE_NAME);
+      store.put(assignment);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {}
+}
+
+async function deleteIndexedDBAssignment(userId: string): Promise<void> {
+  try {
+    const db = await openAssignmentDB();
+    if (!db) return;
+    return new Promise((resolve) => {
+      const tx = db.transaction(USER_ASSIGNMENT_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(USER_ASSIGNMENT_STORE_NAME);
+      store.delete(userId);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {}
+}
+
+// ── Remote Settings Synchronization ─────────────────────────────────────────
+let assignmentSyncTimer: any = null;
+
+export async function flushSettingsAssignmentSync(): Promise<void> {
+  if (assignmentSyncTimer) {
+    clearTimeout(assignmentSyncTimer);
+    assignmentSyncTimer = null;
+  }
+  try {
+    const updateFn = customUpdateSettingsHandler;
+    if (!updateFn) return;
+    const all = getAllStoredUserAssignments();
+    await updateFn({ userAssignments: all });
+  } catch (err) {
+    console.warn('[userAssignmentStorage] Settings sync notice:', err);
+  }
+}
+
+export async function syncUserAssignmentsToBackendImmediate(): Promise<void> {
+  await flushSettingsAssignmentSync();
+}
+
+function scheduleSettingsAssignmentSync(): void {
+  if (assignmentSyncTimer) clearTimeout(assignmentSyncTimer);
+  assignmentSyncTimer = setTimeout(() => {
+    flushSettingsAssignmentSync().catch(() => {});
+  }, 250);
+}
 
 export interface StoredUserAssignment {
   userId: string;
@@ -47,13 +162,28 @@ export const resolveDefaultDepartment = (role?: string): string => {
  */
 export const getAllStoredUserAssignments = (): Record<string, StoredUserAssignment> => {
   try {
-    const raw = localStorage.getItem(USER_ASSIGNMENT_STORAGE_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw);
+    const raw = typeof localStorage !== 'undefined' ? localStorage.getItem(USER_ASSIGNMENT_STORAGE_KEY) : null;
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        for (const [id, val] of Object.entries(parsed)) {
+          if (val && typeof val === 'object') {
+            memoryAssignmentCache.set(id, val as StoredUserAssignment);
+          }
+        }
+        return parsed;
+      }
+    }
   } catch (err) {
     console.warn('Failed to parse user assignments from storage:', err);
-    return {};
   }
+
+  // Fallback to memory cache
+  const result: Record<string, StoredUserAssignment> = {};
+  for (const [k, v] of memoryAssignmentCache.entries()) {
+    result[k] = v;
+  }
+  return result;
 };
 
 /**
@@ -61,13 +191,27 @@ export const getAllStoredUserAssignments = (): Record<string, StoredUserAssignme
  */
 export const getStoredUserAssignment = (userId: string | undefined): StoredUserAssignment | undefined => {
   if (!userId) return undefined;
+
+  // 1. In-memory cache first for fast 0ms access
+  const mem = memoryAssignmentCache.get(userId);
+  if (mem) return mem;
+
   try {
     const map = getAllStoredUserAssignments();
     const stored = map[userId];
     
-    // Check if there is an entity branch record stored via branchIsolation as fallback
     const fallbackBranchId = getStoredEntityBranch(userId);
-    if (!stored && fallbackBranchId) {
+    if (stored) {
+      if (!stored.branchId && fallbackBranchId) {
+        const enriched: StoredUserAssignment = { ...stored, branchId: fallbackBranchId };
+        memoryAssignmentCache.set(userId, enriched);
+        return enriched;
+      }
+      memoryAssignmentCache.set(userId, stored);
+      return stored;
+    }
+
+    if (fallbackBranchId) {
       return {
         userId,
         branchId: fallbackBranchId,
@@ -75,16 +219,9 @@ export const getStoredUserAssignment = (userId: string | undefined): StoredUserA
       };
     }
 
-    if (stored && !stored.branchId && fallbackBranchId) {
-      return {
-        ...stored,
-        branchId: fallbackBranchId,
-      };
-    }
-
-    return stored;
-  } catch {
     return undefined;
+  } catch {
+    return memoryAssignmentCache.get(userId);
   }
 };
 
@@ -99,7 +236,7 @@ export const setStoredUserAssignment = (
   if (!userId) return;
   try {
     const map = getAllStoredUserAssignments();
-    const existing = map[userId] || { userId };
+    const existing = map[userId] || memoryAssignmentCache.get(userId) || { userId };
 
     const updated: StoredUserAssignment = {
       ...existing,
@@ -116,7 +253,17 @@ export const setStoredUserAssignment = (
     }
 
     map[userId] = updated;
-    localStorage.setItem(USER_ASSIGNMENT_STORAGE_KEY, JSON.stringify(map));
+    memoryAssignmentCache.set(userId, updated);
+
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(USER_ASSIGNMENT_STORAGE_KEY, JSON.stringify(map));
+    }
+
+    // Persist to client-side IndexedDB for resilient offline availability across cache wipes
+    setIndexedDBAssignment(updated).catch(() => {});
+
+    // Sync to backend settings API
+    scheduleSettingsAssignmentSync();
 
     // Also link with branchIsolation so branch-level filtering recognizes this staff member
     if (updated.branchId) {
@@ -144,11 +291,106 @@ export const removeStoredUserAssignment = (userId: string): void => {
   try {
     const map = getAllStoredUserAssignments();
     delete map[userId];
-    localStorage.setItem(USER_ASSIGNMENT_STORAGE_KEY, JSON.stringify(map));
+    memoryAssignmentCache.delete(userId);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(USER_ASSIGNMENT_STORAGE_KEY, JSON.stringify(map));
+    }
+    deleteIndexedDBAssignment(userId).catch(() => {});
+    scheduleSettingsAssignmentSync();
   } catch (err) {
     console.warn('Failed to remove user assignment from storage:', err);
   }
 };
+
+/**
+ * Rehydrates user assignments from backend /settings (PostgreSQL database).
+ */
+export function rehydrateUserAssignmentsFromSettings(settings: any): number {
+  if (!settings || typeof settings !== 'object') return 0;
+  let rehydratedCount = 0;
+
+  if (settings.userAssignments && typeof settings.userAssignments === 'object') {
+    const map = getAllStoredUserAssignments();
+    for (const [userId, assignment] of Object.entries(settings.userAssignments)) {
+      if (assignment && typeof assignment === 'object') {
+        const existing = map[userId] || memoryAssignmentCache.get(userId) || { userId };
+        const updated: StoredUserAssignment = { ...existing, ...(assignment as any), userId };
+        map[userId] = updated;
+        memoryAssignmentCache.set(userId, updated);
+        setIndexedDBAssignment(updated).catch(() => {});
+        rehydratedCount++;
+      }
+    }
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(USER_ASSIGNMENT_STORAGE_KEY, JSON.stringify(map));
+      }
+    } catch {}
+    if (rehydratedCount > 0 && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('omark-assignment-changed', { detail: { restored: true } }));
+    }
+  }
+  return rehydratedCount;
+}
+
+/**
+ * Bootstraps and restores user assignment storage on startup or after cache wipe.
+ */
+export async function initUserAssignmentStorage(): Promise<void> {
+  if (typeof window === 'undefined') return;
+
+  // 1. Check if localStorage has any assignments
+  let hasLocalAssignments = false;
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(USER_ASSIGNMENT_STORAGE_KEY);
+      if (raw && raw !== '{}') {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+          hasLocalAssignments = true;
+          for (const [id, val] of Object.entries(parsed)) {
+            if (val && typeof val === 'object') {
+              memoryAssignmentCache.set(id, val as StoredUserAssignment);
+            }
+          }
+        }
+      }
+    }
+  } catch {}
+
+  // 2. If localStorage was cleared (e.g. user cleared cookies/cached data), recover immediately from IndexedDB
+  if (!hasLocalAssignments) {
+    try {
+      const idbAssignments = await getIndexedDBAssignments();
+      if (idbAssignments && idbAssignments.length > 0) {
+        const map: Record<string, StoredUserAssignment> = {};
+        for (const item of idbAssignments) {
+          if (item && item.userId) {
+            memoryAssignmentCache.set(item.userId, item);
+            map[item.userId] = item;
+          }
+        }
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(USER_ASSIGNMENT_STORAGE_KEY, JSON.stringify(map));
+        }
+        window.dispatchEvent(new CustomEvent('omark-assignment-changed', { detail: { restored: true } }));
+      }
+    } catch (idbErr) {
+      console.warn('[userAssignmentStorage] IDB recovery notice:', idbErr);
+    }
+  }
+
+  // 3. Asynchronously load remote userAssignments from authoritative PostgreSQL /settings
+  try {
+    const fetchFn = customFetchSettingsHandler;
+    if (fetchFn) {
+      const settings = await fetchFn();
+      if (settings) {
+        rehydrateUserAssignmentsFromSettings(settings);
+      }
+    }
+  } catch (err) {}
+}
 
 // ── Branch Staff Roster Storage ─────────────────────────────────────────────
 

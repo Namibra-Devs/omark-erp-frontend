@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { useAuth } from '@/contexts/AuthContext';
 import { PhotoUpload } from '@/components/shared/PhotoUpload';
+import { getEntityPhoto } from '@/utils/userPhotoStorage';
 import { useBranchesQuery } from '@/api/branches';
 import { getUserBranchRoleTitle } from '@/utils/branchIsolation';
 import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
@@ -406,7 +407,7 @@ export const TopHeader: React.FC = () => {
                   entityType="staff"
                   entityId={currentUser?.id || user.id}
                   size={36}
-                  src={currentUser?.avatarUrl || currentUser?.photoUrl || user.avatarUrl || user.photoUrl}
+                  src={currentUser?.avatarUrl || currentUser?.photoUrl || user.avatarUrl || user.photoUrl || getEntityPhoto('staff', currentUser?.id || user.id) || getEntityPhoto('user', currentUser?.id || user.id)}
                   editable={false}
                 />
                 <Space direction="vertical" size={0} style={{ lineHeight: 1.2 }}>
