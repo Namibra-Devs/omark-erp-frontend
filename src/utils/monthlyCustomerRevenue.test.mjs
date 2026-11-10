@@ -14,7 +14,8 @@ test('Monthly Revenue: Currency formatter formats Ghanaian Cedis ₵ accurately'
 });
 
 test('Monthly Revenue: Groups new customer revenue by month and enforces folding rule', () => {
-  const currentMonth = '2026-10';
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const pastMonth = '2026-09';
   const olderMonth = '2026-08';
 
@@ -27,7 +28,7 @@ test('Monthly Revenue: Groups new customer revenue by month and enforces folding
       address: 'East Legon, Accra',
       type: 'payment_plan',
       propertyId: 'prop-1',
-      createdAt: '2026-10-05T10:00:00Z',
+      createdAt: `${currentMonth}-05T10:00:00Z`,
     },
     {
       id: 'cust-2',
@@ -37,7 +38,7 @@ test('Monthly Revenue: Groups new customer revenue by month and enforces folding
       address: 'Ahodwo, Kumasi',
       type: 'outright',
       propertyId: 'prop-2',
-      createdAt: '2026-10-12T14:30:00Z',
+      createdAt: `${currentMonth}-12T14:30:00Z`,
     },
     {
       id: 'cust-3',

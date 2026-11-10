@@ -1008,21 +1008,113 @@ export function synthesizeAllAppointments(
   allProspects: Prospect[] = []
 ): any[] {
   const baseAppointments = consolidateAllAppointments(...appointmentSources);
-  const seenIds = new Set<string>(baseAppointments.map((a) => String(a.id)));
-  const seenProspects = new Set<string>(baseAppointments.filter((a) => a.prospectId).map((a) => String(a.prospectId)));
-  const list = [...baseAppointments];
-
-  // 1. Incorporate booking records from interactions
   const interactionsPool = Array.isArray(allInteractions) && allInteractions.length > 0
     ? allInteractions
     : getStoredInteractions();
 
+  // 1. Resolve creator and attribution for all base appointments (aligns with docs/MISSING_ENDPOINTS.md Section 3.1)
+  const resolvedBase = baseAppointments.map((appt) => {
+    if (!appt || !appt.id) return appt;
+
+    let resolvedCreatorId =
+      appt.createdBy ||
+      appt.createdByUserId ||
+      (appt as any).created_by ||
+      (appt as any).created_by_user_id ||
+      (appt as any).creatorUserId ||
+      (appt as any).creatorId;
+
+    let resolvedCreatorName =
+      appt.createdByName ||
+      (appt as any).created_by_name ||
+      (appt as any).creatorName;
+
+    // A. Match linked interaction log
+    if (!resolvedCreatorId && appt.id) {
+      const apptIdStr = String(appt.id);
+      const matchedInteraction = interactionsPool.find((i) => {
+        if (!i) return false;
+        return (
+          (i.appointmentId && String(i.appointmentId) === apptIdStr) ||
+          (i.id && String(i.id) === apptIdStr) ||
+          (appt.prospectId && i.prospectId && String(i.prospectId) === String(appt.prospectId))
+        );
+      });
+      if (matchedInteraction) {
+        resolvedCreatorId =
+          matchedInteraction.loggedByUserId ||
+          (matchedInteraction as any).logged_by_user_id ||
+          (matchedInteraction as any).userId;
+        resolvedCreatorName =
+          resolvedCreatorName ||
+          matchedInteraction.loggedByUserName ||
+          (matchedInteraction as any).logged_by_user_name;
+      }
+    }
+
+    // B. Direct staff assignment on appointment record
+    if (!resolvedCreatorId) {
+      const directStaff =
+        appt.assignedUserId ||
+        (appt as any).assigned_user_id ||
+        appt.staffId ||
+        (appt as any).staff_id ||
+        (appt as any).userId ||
+        (appt as any).hostUserId ||
+        (appt as any).bookedByUserId;
+      if (directStaff && typeof directStaff === 'string' && directStaff.trim().length > 0) {
+        resolvedCreatorId = directStaff.trim();
+        resolvedCreatorName = resolvedCreatorName || appt.assignedUserName || appt.staffName;
+      }
+    }
+
+    // C. Linked prospect owner or creator
+    if (!resolvedCreatorId && appt.prospectId && Array.isArray(allProspects) && allProspects.length > 0) {
+      const matchedP = allProspects.find((p) => p && areIdsEqual(p.id, appt.prospectId));
+      if (matchedP) {
+        resolvedCreatorId =
+          matchedP.assignedUserId ||
+          matchedP.createdByUserId ||
+          matchedP.createdBy ||
+          (matchedP as any).creatorId ||
+          (matchedP as any).registeredByUserId ||
+          (matchedP as any).recordedByUserId;
+        resolvedCreatorName =
+          resolvedCreatorName ||
+          (matchedP as any).assignedUserName ||
+          (matchedP as any).createdByName;
+      }
+    }
+
+    const finalCreatorId = resolvedCreatorId ? String(resolvedCreatorId).trim() : undefined;
+    const finalCreatorName = resolvedCreatorName ? String(resolvedCreatorName).trim() : undefined;
+
+    return {
+      ...appt,
+      createdBy: finalCreatorId || appt.createdBy,
+      createdByUserId: finalCreatorId || appt.createdByUserId,
+      createdByName: finalCreatorName || appt.createdByName,
+      assignedUserId: appt.assignedUserId || finalCreatorId,
+      assignedUserName: appt.assignedUserName || finalCreatorName,
+      staffId: appt.staffId || finalCreatorId,
+      staffName: appt.staffName || finalCreatorName,
+      source: appt.source || (finalCreatorId ? 'staff' : 'website'),
+    };
+  });
+
+  const seenIds = new Set<string>(resolvedBase.map((a) => String(a.id)));
+  const seenProspects = new Set<string>(resolvedBase.filter((a) => a.prospectId).map((a) => String(a.prospectId)));
+  const list = [...resolvedBase];
+
+  // 2. Incorporate booking records from interactions
   interactionsPool.forEach((inter) => {
     if (!inter) return;
     const apptId = inter.appointmentId;
     if (apptId && !seenIds.has(String(apptId))) {
       seenIds.add(String(apptId));
       if (inter.prospectId) seenProspects.add(String(inter.prospectId));
+      const creatorId = inter.loggedByUserId || (inter as any).userId;
+      const creatorName = inter.loggedByUserName || (inter as any).userName;
       list.push({
         id: String(apptId),
         prospectId: inter.prospectId,
@@ -1031,28 +1123,40 @@ export function synthesizeAllAppointments(
         scheduledFor: inter.occurredAt || inter.createdAt,
         status: 'scheduled',
         reason: inter.response || 'Staff Booking Scheduled',
-        createdByUserId: inter.loggedByUserId,
-        createdByName: inter.loggedByUserName,
-        assignedUserId: inter.loggedByUserId,
-        assignedUserName: inter.loggedByUserName,
-        staffId: inter.loggedByUserId,
-        staffName: inter.loggedByUserName,
+        createdBy: creatorId,
+        createdByUserId: creatorId,
+        createdByName: creatorName,
+        assignedUserId: creatorId,
+        assignedUserName: creatorName,
+        staffId: creatorId,
+        staffName: creatorName,
         createdAt: inter.createdAt || inter.occurredAt,
         updatedAt: inter.createdAt || inter.occurredAt,
       });
     }
   });
 
-  // 2. Incorporate prospects whose status is meeting_scheduled or meeting_completed
+  // 3. Incorporate prospects whose status is meeting_scheduled or meeting_completed, or have inspection/meeting notes
   (allProspects || []).forEach((p) => {
     if (!p || !p.id) return;
+    const notesLower = String(p.notes || '').toLowerCase();
+    const reasonLower = String(p.reasonForContact || '').toLowerCase();
+    const hasMeetingNote =
+      notesLower.includes('meet') ||
+      notesLower.includes('appoint') ||
+      notesLower.includes('inspect') ||
+      notesLower.includes('visit') ||
+      reasonLower.includes('meet') ||
+      reasonLower.includes('appoint') ||
+      reasonLower.includes('inspect') ||
+      reasonLower.includes('visit');
+
     const isMeetingStatus =
       p.status === 'meeting_scheduled' ||
       p.status === 'meeting_completed' ||
-      (p.status === 'postponed' &&
-        (p.notes?.toLowerCase().includes('meet') ||
-          p.notes?.toLowerCase().includes('appoint') ||
-          p.reasonForContact?.toLowerCase().includes('meet')));
+      (p.status as any) === 'scheduled' ||
+      (p.status === 'postponed' && hasMeetingNote) ||
+      hasMeetingNote;
 
     if (isMeetingStatus && !seenProspects.has(String(p.id))) {
       seenProspects.add(String(p.id));
@@ -1066,6 +1170,16 @@ export function synthesizeAllAppointments(
             ? 'postponed'
             : 'scheduled';
 
+        const creatorId =
+          p.assignedUserId ||
+          p.createdByUserId ||
+          p.createdBy ||
+          (p as any).creatorId ||
+          (p as any).registeredByUserId ||
+          (p as any).recordedByUserId;
+
+        const creatorName = (p as any).assignedUserName || (p as any).createdByName;
+
         list.push({
           id: meetingId,
           prospectId: p.id,
@@ -1073,12 +1187,13 @@ export function synthesizeAllAppointments(
           scheduledFor: p.updatedAt || p.createdAt,
           status: mappedStatus,
           reason: p.notes || p.reasonForContact || 'Consultation Meeting Scheduled',
-          createdByUserId: p.assignedUserId || p.createdByUserId,
-          createdByName: (p as any).assignedUserName || (p as any).createdByName,
-          assignedUserId: p.assignedUserId || p.createdByUserId,
-          assignedUserName: (p as any).assignedUserName || (p as any).createdByName,
-          staffId: p.assignedUserId || p.createdByUserId,
-          staffName: (p as any).assignedUserName || (p as any).createdByName,
+          createdBy: creatorId,
+          createdByUserId: creatorId,
+          createdByName: creatorName,
+          assignedUserId: creatorId,
+          assignedUserName: creatorName,
+          staffId: creatorId,
+          staffName: creatorName,
           createdAt: p.createdAt,
           updatedAt: p.updatedAt,
         });

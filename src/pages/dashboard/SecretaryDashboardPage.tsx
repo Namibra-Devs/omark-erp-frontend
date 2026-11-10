@@ -26,6 +26,11 @@ import {
   Tooltip,
   Tabs,
   Divider,
+  Upload,
+  Switch,
+  Drawer,
+  Popconfirm,
+  Descriptions,
 } from 'antd';
 import {
   DollarOutlined,
@@ -51,6 +56,12 @@ import {
   SearchOutlined,
   EyeOutlined,
   DashboardOutlined,
+  EditOutlined,
+  UploadOutlined,
+  InboxOutlined,
+  DownloadOutlined,
+  DeleteOutlined,
+  FolderOpenOutlined,
 } from '@ant-design/icons';
 import {
   ResponsiveContainer,
@@ -70,6 +81,16 @@ import {
 import { useAuth } from '@/contexts/AuthContext';
 import { useSecretaryDashboardQuery } from '@/api/dashboard';
 import { useCustomersQuery, useCreateCustomerMutation, useUpdateCustomerMutation } from '@/api/customers';
+import {
+  useCustomerDocumentsQuery,
+  useUploadCustomerDocumentMutation,
+  useDeleteCustomerDocumentMutation,
+  documentCategoryMeta,
+  formatBytes,
+  downloadFile,
+  type CustomerDocument,
+  type CustomerDocumentCategory,
+} from '@/api/customerDocuments';
 import { useProspectsQuery, getStoredProspects } from '@/api/prospects';
 import { usePaymentPlansQuery, getProgressBand } from '@/api/paymentPlans';
 import { saveStoredPaymentPlan, saveCustomerPlanDefinition } from '@/utils/paymentPlansStorage';
@@ -279,6 +300,143 @@ export const SecretaryDashboardPage: React.FC = () => {
   const [customAmountEntered, setCustomAmountEntered] = useState<number | null>(null);
   const [prospectSearchText, setProspectSearchText] = useState('');
   const [prospectStatusFilter, setProspectStatusFilter] = useState('all');
+
+  // ── Customer Documents & Customer Profile Management (Secretary) ───────────
+  const { data: customerDocsData, refetch: refetchCustomerDocs } = useCustomerDocumentsQuery();
+  const allCustomerDocs = customerDocsData?.items ?? [];
+  const uploadDocMutation = useUploadCustomerDocumentMutation();
+  const deleteDocMutation = useDeleteCustomerDocumentMutation();
+
+  const [editCustomerModalOpen, setEditCustomerModalOpen] = useState(false);
+  const [selectedCustomerForEdit, setSelectedCustomerForEdit] = useState<any | null>(null);
+  const [editCustomerForm] = Form.useForm();
+  const [editCustomerSubmitting, setEditCustomerSubmitting] = useState(false);
+
+  const [uploadDocModalOpen, setUploadDocModalOpen] = useState(false);
+  const [selectedCustomerForDocUpload, setSelectedCustomerForDocUpload] = useState<any | null>(null);
+  const [uploadDocForm] = Form.useForm();
+  const [uploadDocFileList, setUploadDocFileList] = useState<any[]>([]);
+
+  const [viewDocsDrawerOpen, setViewDocsDrawerOpen] = useState(false);
+  const [selectedCustomerForDocsView, setSelectedCustomerForDocsView] = useState<any | null>(null);
+
+  const [customerSearchText, setCustomerSearchText] = useState('');
+  const [customerTypeFilter, setCustomerTypeFilter] = useState<'all' | 'payment_plan' | 'outright'>('all');
+
+  const docCountsByCustomerId = useMemo(() => {
+    const counts: Record<string, number> = {};
+    allCustomerDocs.forEach((d) => {
+      if (d.customerId) {
+        counts[d.customerId] = (counts[d.customerId] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [allCustomerDocs]);
+
+  const handleOpenEditCustomerModal = (customerRecord: any) => {
+    const rawId = customerRecord.customerId || customerRecord.id;
+    const matched = rawCustomers.find((c: any) => c.id === rawId) || customerRecord;
+    setSelectedCustomerForEdit(matched);
+    editCustomerForm.resetFields();
+    editCustomerForm.setFieldsValue({
+      firstName: matched.firstName || customerRecord.name?.split(' ')[0] || '',
+      lastName: matched.lastName || customerRecord.name?.split(' ').slice(1).join(' ') || '',
+      phoneNumber: matched.phoneNumber || customerRecord.phone || '',
+      address: matched.address || '',
+      type: matched.type || 'payment_plan',
+      propertyId: matched.propertyId || customerRecord.propertyId || undefined,
+    });
+    setEditCustomerModalOpen(true);
+  };
+
+  const handleUpdateCustomerSubmit = async (values: any) => {
+    if (!selectedCustomerForEdit) return;
+    setEditCustomerSubmitting(true);
+    try {
+      const customerId = selectedCustomerForEdit.customerId || selectedCustomerForEdit.id;
+      await updateCustomer.mutateAsync({
+        id: customerId,
+        data: {
+          firstName: values.firstName?.trim(),
+          lastName: values.lastName?.trim(),
+          phoneNumber: values.phoneNumber?.trim(),
+          address: values.address?.trim(),
+          type: values.type,
+          propertyId: values.propertyId,
+        },
+      });
+      message.success(`Customer profile for ${values.firstName} ${values.lastName} updated successfully!`);
+      setEditCustomerModalOpen(false);
+      setSelectedCustomerForEdit(null);
+      editCustomerForm.resetFields();
+      refetchCustomers();
+    } catch (err: any) {
+      console.error('Error updating customer profile:', err);
+      message.error(err?.message || 'Failed to update customer profile');
+    } finally {
+      setEditCustomerSubmitting(false);
+    }
+  };
+
+  const handleOpenUploadDocModal = (customerRecord: any) => {
+    const rawId = customerRecord.customerId || customerRecord.id;
+    const matched = rawCustomers.find((c: any) => c.id === rawId) || customerRecord;
+    setSelectedCustomerForDocUpload(matched);
+    uploadDocForm.resetFields();
+    uploadDocForm.setFieldsValue({
+      title: '',
+      category: 'sales_agreement',
+      visibleToCustomer: true,
+      description: '',
+    });
+    setUploadDocFileList([]);
+    setUploadDocModalOpen(true);
+  };
+
+  const handleUploadDocSubmit = async (values: any) => {
+    if (!selectedCustomerForDocUpload) return;
+    const file = uploadDocFileList[0]?.originFileObj || uploadDocFileList[0];
+    if (!file) {
+      message.error('Please select or drag a document file to upload');
+      return;
+    }
+
+    const customerId = selectedCustomerForDocUpload.customerId || selectedCustomerForDocUpload.id;
+    const customerName = selectedCustomerForDocUpload.name ||
+      `${selectedCustomerForDocUpload.firstName || ''} ${selectedCustomerForDocUpload.lastName || ''}`.trim() ||
+      'Customer';
+
+    try {
+      await uploadDocMutation.mutateAsync({
+        customerId,
+        customerName,
+        title: values.title.trim(),
+        category: values.category as CustomerDocumentCategory,
+        file,
+        description: values.description?.trim(),
+        visibleToCustomer: values.visibleToCustomer !== false,
+        uploadedByStaffId: user?.id,
+        uploadedByStaffName: `${user?.firstName || ''} ${user?.lastName || ''}`.trim() || user?.email || 'Branch Secretary',
+      });
+
+      message.success(`Document "${values.title}" uploaded successfully and linked to ${customerName}!`);
+      setUploadDocModalOpen(false);
+      setSelectedCustomerForDocUpload(null);
+      setUploadDocFileList([]);
+      uploadDocForm.resetFields();
+      refetchCustomerDocs();
+    } catch (err: any) {
+      console.error('Error uploading document:', err);
+      message.error(err?.message || 'Failed to upload document');
+    }
+  };
+
+  const handleOpenViewDocsDrawer = (customerRecord: any) => {
+    const rawId = customerRecord.customerId || customerRecord.id;
+    const matched = rawCustomers.find((c: any) => c.id === rawId) || customerRecord;
+    setSelectedCustomerForDocsView(matched);
+    setViewDocsDrawerOpen(true);
+  };
 
   const createExpenseMutation = useCreateExpenseMutation();
 
@@ -899,7 +1057,7 @@ export const SecretaryDashboardPage: React.FC = () => {
           (p: any) => p.customerId === record.customerId || p.id === record.planId
         );
         return (
-          <Space size={4}>
+          <Space size={4} wrap>
             <Button 
               type="link" 
               size="small"
@@ -927,6 +1085,22 @@ export const SecretaryDashboardPage: React.FC = () => {
                 Statement
               </Button>
             )}
+            <Button
+              type="link"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleOpenEditCustomerModal(record)}
+            >
+              Edit Profile
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              icon={<UploadOutlined />}
+              onClick={() => handleOpenUploadDocModal(record)}
+            >
+              Upload Doc
+            </Button>
           </Space>
         );
       },
@@ -991,7 +1165,7 @@ export const SecretaryDashboardPage: React.FC = () => {
           (p: any) => p.customerId === record.customerId || p.id === record.planId
         );
         return (
-          <Space size={4}>
+          <Space size={4} wrap>
             <Button 
               type="link" 
               size="small"
@@ -1018,6 +1192,178 @@ export const SecretaryDashboardPage: React.FC = () => {
               >
                 Statement
               </Button>
+            )}
+            <Button
+              type="link"
+              size="small"
+              icon={<EditOutlined />}
+              onClick={() => handleOpenEditCustomerModal(record)}
+            >
+              Edit Profile
+            </Button>
+            <Button
+              type="link"
+              size="small"
+              icon={<UploadOutlined />}
+              onClick={() => handleOpenUploadDocModal(record)}
+            >
+              Upload Doc
+            </Button>
+          </Space>
+        );
+      },
+    },
+  ];
+
+  // ── Customer Management Table Columns & Filters (Secretary) ───────────────
+  const filteredBranchCustomers = useMemo(() => {
+    return customers.filter((c: any) => {
+      if (customerTypeFilter !== 'all' && c.type !== customerTypeFilter) return false;
+      if (customerSearchText.trim()) {
+        const q = customerSearchText.trim().toLowerCase();
+        const fullName = `${c.firstName || ''} ${c.lastName || ''}`.toLowerCase();
+        const phone = (c.phoneNumber || '').toLowerCase();
+        const address = (c.address || '').toLowerCase();
+        const propTitle = (propertyMap[c.propertyId]?.houseNumber || propertyMap[c.propertyId]?.title || '').toLowerCase();
+        return fullName.includes(q) || phone.includes(q) || address.includes(q) || propTitle.includes(q);
+      }
+      return true;
+    });
+  }, [customers, customerTypeFilter, customerSearchText, propertyMap]);
+
+  const customerManagementColumns = [
+    {
+      title: 'Customer Name',
+      key: 'name',
+      render: (_: any, record: any) => {
+        const fullName = `${record.firstName || ''} ${record.lastName || ''}`.trim() || 'Customer';
+        const typeLabel = record.type === 'outright' ? 'Outright Buyer' : 'Payment Plan';
+        const typeColor = record.type === 'outright' ? 'green' : 'blue';
+        return (
+          <Space>
+            <UserOutlined style={{ color: tokens.primary }} />
+            <div>
+              <a onClick={() => navigate(`/customers/${record.id}`)} style={{ fontWeight: 600 }}>
+                {fullName}
+              </a>
+              <div style={{ marginTop: 2 }}>
+                <Tag color={typeColor} style={{ fontSize: 11, padding: '0 6px', borderRadius: 4 }}>
+                  {typeLabel}
+                </Tag>
+              </div>
+            </div>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Phone Number',
+      dataIndex: 'phoneNumber',
+      key: 'phone',
+      render: (phone: string) =>
+        phone ? (
+          <a href={`tel:${phone}`}><PhoneOutlined /> {phone}</a>
+        ) : (
+          <Text type="secondary">—</Text>
+        ),
+    },
+    {
+      title: 'Property',
+      key: 'property',
+      render: (_: any, record: any) => {
+        const prop = propertyMap[record.propertyId];
+        return prop ? (
+          <Text strong>{prop.houseNumber || prop.title}</Text>
+        ) : (
+          <Text type="secondary">—</Text>
+        );
+      },
+    },
+    {
+      title: 'Address',
+      dataIndex: 'address',
+      key: 'address',
+      ellipsis: true,
+      render: (addr: string) => addr || <Text type="secondary">—</Text>,
+    },
+    {
+      title: 'Documents',
+      key: 'docs',
+      render: (_: any, record: any) => {
+        const count = docCountsByCustomerId[record.id] || 0;
+        return (
+          <Button
+            size="small"
+            type="link"
+            icon={<FileTextOutlined />}
+            onClick={() => handleOpenViewDocsDrawer(record)}
+            style={{ padding: 0 }}
+          >
+            <Tag color={count > 0 ? 'cyan' : 'default'} style={{ cursor: 'pointer' }}>
+              {count} {count === 1 ? 'Doc' : 'Docs'}
+            </Tag>
+          </Button>
+        );
+      },
+    },
+    {
+      title: 'Actions',
+      key: 'actions',
+      render: (_: any, record: any) => {
+        const custPlan = paymentPlans.find(
+          (p: any) => p.customerId === record.id || p.id === record.planId
+        );
+        return (
+          <Space size={6} wrap>
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<EditOutlined />}
+              onClick={() => handleOpenEditCustomerModal(record)}
+            >
+              Edit Profile
+            </Button>
+            <Button
+              size="small"
+              icon={<UploadOutlined />}
+              onClick={() => handleOpenUploadDocModal(record)}
+            >
+              Upload Doc
+            </Button>
+            <Button
+              size="small"
+              icon={<FolderOpenOutlined />}
+              onClick={() => handleOpenViewDocsDrawer(record)}
+            >
+              Docs
+            </Button>
+            {custPlan && (
+              <>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setSelectedCustomer({ ...record, customerId: record.id, name: `${record.firstName} ${record.lastName}` });
+                    setAddPaymentModal(true);
+                  }}
+                >
+                  Payment
+                </Button>
+                <Button
+                  size="small"
+                  onClick={() => {
+                    setStatementPlan(custPlan);
+                    setStatementCustomerName(`${record.firstName} ${record.lastName}`);
+                    setStatementCustomerPhone(record.phoneNumber);
+                    setStatementPropertyName(
+                      propertyMap[custPlan.propertyId]?.houseNumber || propertyMap[custPlan.propertyId]?.title
+                    );
+                    setStatementModalOpen(true);
+                  }}
+                >
+                  Statement
+                </Button>
+              </>
             )}
           </Space>
         );
@@ -2004,8 +2350,472 @@ export const SecretaryDashboardPage: React.FC = () => {
               </div>
             ),
           },
+          {
+            key: 'customers',
+            label: (
+              <span>
+                <TeamOutlined /> Customers & Documents ({customers.length})
+              </span>
+            ),
+            children: (
+              <div style={{ marginTop: 8 }}>
+                <Card
+                  title={
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+                      <div>
+                        <Space>
+                          <TeamOutlined style={{ color: tokens.primary }} />
+                          <span style={{ fontWeight: 600 }}>Branch Customer Portfolio & Document Records</span>
+                        </Space>
+                        <div style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 'normal', marginTop: 2 }}>
+                          Manage customer profiles, update contact records, and upload / deliver client documents
+                        </div>
+                      </div>
+                      <Space wrap>
+                        <Input
+                          placeholder="Search customer by name, phone, or address..."
+                          prefix={<SearchOutlined />}
+                          allowClear
+                          value={customerSearchText}
+                          onChange={(e) => setCustomerSearchText(e.target.value)}
+                          style={{ width: 280 }}
+                        />
+                        <Select
+                          value={customerTypeFilter}
+                          onChange={setCustomerTypeFilter}
+                          style={{ width: 170 }}
+                        >
+                          <Option value="all">All Buyer Types</Option>
+                          <Option value="payment_plan">Payment Plan</Option>
+                          <Option value="outright">Outright Buyer</Option>
+                        </Select>
+                        <Button
+                          type="primary"
+                          icon={<PlusOutlined />}
+                          onClick={() => {
+                            setSelectedProspectForConversion(null);
+                            setAddCustomerModal(true);
+                          }}
+                          style={{ background: tokens.primary }}
+                        >
+                          Add Customer
+                        </Button>
+                      </Space>
+                    </div>
+                  }
+                  style={{
+                    borderRadius: 12,
+                    boxShadow: '0 2px 10px rgba(0,0,0,0.03)',
+                    border: '1px solid #f0f0f0',
+                    marginBottom: 24,
+                  }}
+                >
+                  <Table
+                    columns={customerManagementColumns}
+                    dataSource={filteredBranchCustomers}
+                    rowKey="id"
+                    pagination={{ pageSize: 10, showSizeChanger: true }}
+                    size="middle"
+                    scroll={{ x: 1000 }}
+                  />
+                </Card>
+              </div>
+            ),
+          },
         ]}
       />
+
+      {/* ── Edit Customer Profile Modal (Secretary) ────────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <EditOutlined style={{ color: tokens.primary }} />
+            <span>
+              Edit Customer Profile: {selectedCustomerForEdit?.firstName} {selectedCustomerForEdit?.lastName}
+            </span>
+          </Space>
+        }
+        open={editCustomerModalOpen}
+        onCancel={() => {
+          setEditCustomerModalOpen(false);
+          setSelectedCustomerForEdit(null);
+          editCustomerForm.resetFields();
+        }}
+        footer={null}
+        destroyOnClose
+        width={580}
+      >
+        <Form
+          form={editCustomerForm}
+          layout="vertical"
+          onFinish={handleUpdateCustomerSubmit}
+          style={{ marginTop: 16 }}
+        >
+          <Row gutter={16}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="firstName"
+                label="First Name"
+                rules={[{ required: true, message: 'Please enter customer first name' }]}
+              >
+                <Input placeholder="e.g. John" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="lastName"
+                label="Last Name"
+                rules={[{ required: true, message: 'Please enter customer last name' }]}
+              >
+                <Input placeholder="e.g. Mensah" />
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Row gutter={16}>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="phoneNumber"
+                label="Phone Number"
+                rules={[
+                  { required: true, message: 'Please enter contact phone number' },
+                  { pattern: /^[+]?[0-9\s-]{9,15}$/, message: 'Please enter a valid phone number' },
+                ]}
+              >
+                <Input prefix={<PhoneOutlined />} placeholder="e.g. +233 54 123 4567" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12}>
+              <Form.Item
+                name="type"
+                label="Customer Category"
+                rules={[{ required: true, message: 'Please select customer type' }]}
+              >
+                <Select>
+                  <Option value="payment_plan">Payment Plan Buyer</Option>
+                  <Option value="outright">Outright Buyer</Option>
+                </Select>
+              </Form.Item>
+            </Col>
+          </Row>
+
+          <Form.Item name="address" label="Residential / Postal Address">
+            <Input placeholder="e.g. Plot 42, Ahodwo Residential Area, Kumasi" />
+          </Form.Item>
+
+          <Form.Item name="propertyId" label="Allocated Property / Unit">
+            <Select placeholder="Select allocated property" allowClear showSearch optionFilterProp="children">
+              {properties.map((p: any) => (
+                <Option key={p.id} value={p.id}>
+                  {p.houseNumber ? `${p.houseNumber} - ` : ''}{p.title} ({p.location || 'Branch Area'})
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
+            <Button
+              onClick={() => {
+                setEditCustomerModalOpen(false);
+                setSelectedCustomerForEdit(null);
+                editCustomerForm.resetFields();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={editCustomerSubmitting}
+              style={{ background: tokens.primary }}
+            >
+              Save Profile Changes
+            </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      {/* ── Upload Customer Document Modal (Secretary) ─────────────────────── */}
+      <Modal
+        title={
+          <Space>
+            <UploadOutlined style={{ color: tokens.primary }} />
+            <span>Upload Customer Document</span>
+          </Space>
+        }
+        open={uploadDocModalOpen}
+        onCancel={() => {
+          setUploadDocModalOpen(false);
+          setSelectedCustomerForDocUpload(null);
+          setUploadDocFileList([]);
+          uploadDocForm.resetFields();
+        }}
+        footer={null}
+        destroyOnClose
+        width={620}
+      >
+        <Alert
+          message={
+            <span>
+              Uploading document for{' '}
+              <strong>
+                {selectedCustomerForDocUpload?.name ||
+                  `${selectedCustomerForDocUpload?.firstName || ''} ${selectedCustomerForDocUpload?.lastName || ''}`.trim() ||
+                  'Customer'}
+              </strong>
+              {selectedCustomerForDocUpload?.phoneNumber || selectedCustomerForDocUpload?.phone
+                ? ` (${selectedCustomerForDocUpload.phoneNumber || selectedCustomerForDocUpload.phone})`
+                : ''}
+            </span>
+          }
+          type="info"
+          showIcon
+          style={{ marginBottom: 16, marginTop: 8 }}
+        />
+
+        <Form
+          form={uploadDocForm}
+          layout="vertical"
+          onFinish={handleUploadDocSubmit}
+        >
+          <Form.Item
+            name="title"
+            label="Document Title"
+            rules={[{ required: true, message: 'Please enter a clear document title' }]}
+          >
+            <Input placeholder="e.g. Signed Sales Agreement, Title Deed, Site Plan" />
+          </Form.Item>
+
+          <Form.Item
+            name="category"
+            label="Document Category"
+            rules={[{ required: true, message: 'Please select document category' }]}
+          >
+            <Select placeholder="Select document classification">
+              {Object.entries(documentCategoryMeta).map(([catKey, meta]) => (
+                <Option key={catKey} value={catKey}>
+                  <Space>
+                    <span>{meta.iconEmoji}</span>
+                    <span>{meta.label}</span>
+                  </Space>
+                </Option>
+              ))}
+            </Select>
+          </Form.Item>
+
+          <Form.Item label="Document File" required>
+            <Upload.Dragger
+              maxCount={1}
+              fileList={uploadDocFileList}
+              beforeUpload={(file) => {
+                setUploadDocFileList([file]);
+                const curTitle = uploadDocForm.getFieldValue('title');
+                if (!curTitle || curTitle.trim() === '') {
+                  const nameWithoutExt = file.name.replace(/\.[^/.]+$/, '');
+                  uploadDocForm.setFieldsValue({ title: nameWithoutExt });
+                }
+                return false;
+              }}
+              onRemove={() => setUploadDocFileList([])}
+              accept=".pdf,.png,.jpg,.jpeg,.doc,.docx"
+            >
+              <p className="ant-upload-drag-icon">
+                <InboxOutlined style={{ color: tokens.primary, fontSize: 36 }} />
+              </p>
+              <p className="ant-upload-text" style={{ fontSize: 14 }}>
+                Click or drag document file to this area to attach
+              </p>
+              <p className="ant-upload-hint" style={{ fontSize: 12, color: '#8c8c8c' }}>
+                Supports PDF, scanned images (PNG, JPG), or Word documents (up to 15MB)
+              </p>
+            </Upload.Dragger>
+          </Form.Item>
+
+          <Form.Item
+            name="visibleToCustomer"
+            valuePropName="checked"
+            label="Customer Portal Delivery"
+          >
+            <Space align="center">
+              <Switch defaultChecked />
+              <Text style={{ fontSize: 13 }}>
+                Make this document immediately downloadable by the customer in their portal
+              </Text>
+            </Space>
+          </Form.Item>
+
+          <Form.Item name="description" label="Notes / Official Remarks (Optional)">
+            <Input.TextArea rows={2} placeholder="Optional verification notes, stamped seal details, or reference numbers..." />
+          </Form.Item>
+
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 24 }}>
+            <Button
+              onClick={() => {
+                setUploadDocModalOpen(false);
+                setSelectedCustomerForDocUpload(null);
+                setUploadDocFileList([]);
+                uploadDocForm.resetFields();
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="primary"
+              htmlType="submit"
+              loading={uploadDocMutation.isPending}
+              style={{ background: tokens.primary }}
+            >
+              Upload Document
+            </Button>
+          </div>
+        </Form>
+      </Modal>
+
+      {/* ── View Customer Documents Drawer (Secretary) ────────────────────── */}
+      <Drawer
+        title={
+          <Space>
+            <FolderOpenOutlined style={{ color: tokens.primary }} />
+            <span>
+              Customer Documents:{' '}
+              {selectedCustomerForDocsView?.name ||
+                `${selectedCustomerForDocsView?.firstName || ''} ${selectedCustomerForDocsView?.lastName || ''}`.trim() ||
+                'Customer'}
+            </span>
+          </Space>
+        }
+        open={viewDocsDrawerOpen}
+        onClose={() => {
+          setViewDocsDrawerOpen(false);
+          setSelectedCustomerForDocsView(null);
+        }}
+        width={560}
+        extra={
+          <Button
+            type="primary"
+            size="small"
+            icon={<UploadOutlined />}
+            onClick={() => {
+              handleOpenUploadDocModal(selectedCustomerForDocsView);
+            }}
+            style={{ background: tokens.primary }}
+          >
+            Upload New Document
+          </Button>
+        }
+      >
+        {selectedCustomerForDocsView && (
+          <div>
+            <div style={{ marginBottom: 16 }}>
+              <Descriptions size="small" column={1} bordered>
+                <Descriptions.Item label="Customer Phone">
+                  {selectedCustomerForDocsView.phoneNumber || selectedCustomerForDocsView.phone || '—'}
+                </Descriptions.Item>
+                <Descriptions.Item label="Property / Allocation">
+                  {propertyMap[selectedCustomerForDocsView.propertyId]?.houseNumber ||
+                    propertyMap[selectedCustomerForDocsView.propertyId]?.title ||
+                    '—'}
+                </Descriptions.Item>
+              </Descriptions>
+            </div>
+
+            <Divider style={{ margin: '12px 0' }} />
+
+            {(() => {
+              const custId = selectedCustomerForDocsView.id || selectedCustomerForDocsView.customerId;
+              const custDocs = allCustomerDocs.filter((d) => d.customerId === custId);
+
+              if (custDocs.length === 0) {
+                return (
+                  <Empty
+                    description="No documents uploaded for this customer yet"
+                    style={{ margin: '40px 0' }}
+                  >
+                    <Button
+                      type="primary"
+                      icon={<UploadOutlined />}
+                      onClick={() => handleOpenUploadDocModal(selectedCustomerForDocsView)}
+                    >
+                      Upload First Document
+                    </Button>
+                  </Empty>
+                );
+              }
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {custDocs.map((doc) => {
+                    const catMeta = documentCategoryMeta[doc.category] || documentCategoryMeta.other;
+                    return (
+                      <Card
+                        key={doc.id}
+                        size="small"
+                        style={{
+                          borderRadius: 8,
+                          border: '1px solid #f0f0f0',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <Tag color={catMeta.color} style={{ margin: 0 }}>
+                                {catMeta.iconEmoji} {catMeta.label}
+                              </Tag>
+                              {doc.visibleToCustomer ? (
+                                <Tag color="green" style={{ margin: 0 }}>Portal Visible</Tag>
+                              ) : (
+                                <Tag color="default" style={{ margin: 0 }}>Internal Only</Tag>
+                              )}
+                            </div>
+                            <div style={{ fontWeight: 600, fontSize: 14, marginTop: 6 }}>
+                              {doc.title}
+                            </div>
+                            <div style={{ fontSize: 12, color: '#8c8c8c', marginTop: 2 }}>
+                              {doc.fileName} &bull; {formatBytes(doc.fileSize)} &bull; {dayjs(doc.uploadedAt).format('MMM D, YYYY h:mm A')}
+                            </div>
+                            {doc.description && (
+                              <div style={{ fontSize: 12, color: '#595959', marginTop: 4, background: '#f8fafc', padding: '4px 8px', borderRadius: 4 }}>
+                                {doc.description}
+                              </div>
+                            )}
+                          </div>
+                          <Space size={4}>
+                            <Button
+                              size="small"
+                              type="link"
+                              icon={<DownloadOutlined />}
+                              onClick={() => downloadFile(doc.fileUrl, doc.fileName)}
+                            >
+                              Download
+                            </Button>
+                            <Popconfirm
+                              title="Delete Document"
+                              description="Are you sure you want to delete this document?"
+                              onConfirm={async () => {
+                                try {
+                                  await deleteDocMutation.mutateAsync(doc.id);
+                                  message.success('Document deleted');
+                                  refetchCustomerDocs();
+                                } catch (err: any) {
+                                  message.error(err?.message || 'Failed to delete document');
+                                }
+                              }}
+                              okText="Yes"
+                              cancelText="No"
+                            >
+                              <Button size="small" type="link" danger icon={<DeleteOutlined />} />
+                            </Popconfirm>
+                          </Space>
+                        </div>
+                      </Card>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+        )}
+      </Drawer>
 
       {/* ── Add Customer Modal ────────────────────────────────────────────── */}
       <AddCustomerModal

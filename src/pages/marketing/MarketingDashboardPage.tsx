@@ -424,17 +424,22 @@ export const MarketingDashboardPage: React.FC = () => {
       const isMarketingProspect = a.prospectId && allMarketingProspects.some((p) => areIdsEqual(p.id, a.prospectId));
       if (isCs && !isMarketingProspect) return false;
 
-      if (isMarketingProspect) return true;
-      if (marketingStaffUsers.some((s) => isAppointmentAssignedToStaff(a, s))) return true;
-      if ((a as any).source === 'marketing') return true;
-      const reason = (a.reason || '').toLowerCase();
-      if (reason.includes('[marketing]') || reason.includes('site inspection') || reason.includes('property viewing')) {
+      // Always include if created by or assigned to the current user (personal scope)
+      if (user?.id && (areIdsEqual(a.createdByUserId, user.id) || areIdsEqual(a.createdBy, user.id) || areIdsEqual(a.assignedUserId, user.id) || areIdsEqual(a.staffId, user.id))) {
         return true;
       }
+
+      // Include marketing staff under the director
+      if (marketingStaffUsers.some((s) => isAppointmentAssignedToStaff(a, s) || areIdsEqual(s.id, a.createdByUserId) || areIdsEqual(s.id, a.createdBy) || areIdsEqual(s.id, a.assignedUserId) || areIdsEqual(s.id, a.staffId))) {
+        return true;
+      }
+
+      if (isMarketingProspect) return true;
+
       return false;
     });
     return consolidateAllAppointments(rawBase).length;
-  }, [appointments, allMarketingProspects, marketingStaffUsers, allUsers, allInteractions]);
+  }, [appointments, allMarketingProspects, marketingStaffUsers, allUsers, allInteractions, user]);
 
   const liveMarketingProspectsCount = useMemo(() => {
     return Math.max(allMarketingProspects.length, mktProspectsData?.total ?? 0);
@@ -1206,13 +1211,18 @@ export const MarketingDashboardPage: React.FC = () => {
             const isMarketingProspect = a.prospectId && allMarketingProspects.some((p) => areIdsEqual(p.id, a.prospectId));
             if (isCs && !isMarketingProspect) return false;
 
-            if (isMarketingProspect) return true;
-            if (marketingStaffUsers.some((s) => isAppointmentAssignedToStaff(a, s))) return true;
-            if ((a as any).source === 'marketing') return true;
-            const reason = (a.reason || '').toLowerCase();
-            if (reason.includes('[marketing]') || reason.includes('site inspection') || reason.includes('property viewing')) {
+            // Always include if created by or assigned to the current user (personal scope)
+            if (user?.id && (areIdsEqual(a.createdByUserId, user.id) || areIdsEqual(a.createdBy, user.id) || areIdsEqual(a.assignedUserId, user.id) || areIdsEqual(a.staffId, user.id))) {
               return true;
             }
+
+            // Include marketing staff under the director
+            if (marketingStaffUsers.some((s) => isAppointmentAssignedToStaff(a, s) || areIdsEqual(s.id, a.createdByUserId) || areIdsEqual(s.id, a.createdBy) || areIdsEqual(s.id, a.assignedUserId) || areIdsEqual(s.id, a.staffId))) {
+              return true;
+            }
+
+            if (isMarketingProspect) return true;
+
             return false;
           })
         : myStaffAppointments;
@@ -2140,7 +2150,7 @@ export const MarketingDashboardPage: React.FC = () => {
                 size="middle"
               >
                 <Radio.Button value="all">
-                  🌐 All Appointments ({appointments.length})
+                  👥 Marketing Team ({allMarketingAppointmentsCount})
                 </Radio.Button>
                 <Radio.Button value="personal">
                   👤 My Personal ({myStaffAppointments.length})
@@ -2615,7 +2625,7 @@ export const MarketingDashboardPage: React.FC = () => {
                         size="middle"
                       >
                         <Radio.Button value="all">
-                          🌐 All Appointments ({allMarketingAppointmentsCount})
+                          👥 Marketing Team ({allMarketingAppointmentsCount})
                         </Radio.Button>
                         <Radio.Button value="personal">
                           👤 My Personal ({myStaffAppointments.length})
@@ -2935,7 +2945,7 @@ export const MarketingDashboardPage: React.FC = () => {
                       size="middle"
                     >
                       <Radio.Button value="all">
-                        🌐 All Appointments ({allMarketingAppointmentsCount})
+                        👥 Marketing Team ({allMarketingAppointmentsCount})
                       </Radio.Button>
                       <Radio.Button value="personal">
                         👤 My Personal ({myStaffAppointments.length})

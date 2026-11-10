@@ -120,10 +120,26 @@ export function getVisibleStaffIds(
     return 'all';
   }
 
-  // Marketing Director sees own appointments + appointments created by every user with role === 'marketing_staff'
+  // Marketing Director sees own appointments + appointments created by marketing staff under them
   if (role === 'marketing_director') {
     const marketingStaffIds = allUsers
-      .filter((u) => u && u.id && u.role === 'marketing_staff')
+      .filter((u) => {
+        if (!u || !u.id) return false;
+        if (u.role === 'marketing_staff') return true;
+        const dept = String((u as any).department || '').toLowerCase();
+        if (
+          (dept.includes('market') || dept.includes('sales')) &&
+          u.role !== 'admin' &&
+          u.role !== 'super_admin' &&
+          u.role !== 'customer_service' &&
+          u.role !== 'secretary' &&
+          u.role !== 'accounts' &&
+          u.role !== 'branch_manager'
+        ) {
+          return true;
+        }
+        return false;
+      })
       .map((u) => String(u.id));
     const uniqueIds = new Set<string>([String(user.id), ...marketingStaffIds]);
     return Array.from(uniqueIds);
@@ -191,9 +207,25 @@ export function isAppointmentEditableByUser(
   // Marketing Director can edit marketing staff appointments
   if (user.role === 'marketing_director') {
     const marketingStaffIds = allUsers
-      .filter((u) => u && u.id && u.role === 'marketing_staff')
+      .filter((u) => {
+        if (!u || !u.id) return false;
+        if (u.role === 'marketing_staff') return true;
+        const dept = String((u as any).department || '').toLowerCase();
+        if (
+          (dept.includes('market') || dept.includes('sales')) &&
+          u.role !== 'admin' &&
+          u.role !== 'super_admin' &&
+          u.role !== 'customer_service' &&
+          u.role !== 'secretary' &&
+          u.role !== 'accounts' &&
+          u.role !== 'branch_manager'
+        ) {
+          return true;
+        }
+        return false;
+      })
       .map((u) => String(u.id));
-    return marketingStaffIds.includes(creatorId);
+    return marketingStaffIds.includes(creatorId) || creatorId === user.id;
   }
 
   // Secretary and other staff cannot edit other staff's appointments

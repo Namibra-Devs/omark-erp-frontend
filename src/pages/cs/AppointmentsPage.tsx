@@ -221,7 +221,7 @@ export const AppointmentsPage: React.FC = () => {
     if (user?.role === 'marketing_director') {
       const marketingStaff = allUsers.filter((u) => u.role === 'marketing_staff' && u.isActive !== false);
       return [
-        { label: 'All Marketing Team', value: 'all' },
+        { label: 'All Marketing Staff Under You', value: 'all' },
         { label: `${getUserFullName(user)} (Self - Director)`, value: user.id },
         ...marketingStaff.map((u) => ({
           label: `${getUserFullName(u)} (Marketing Staff)`,
@@ -1999,7 +1999,7 @@ export const AppointmentsPage: React.FC = () => {
                 size="middle"
               >
                 <Radio.Button value="all">
-                  🌐 All Appointments
+                  👥 Marketing Team ({effectiveScopedList.length})
                 </Radio.Button>
                 <Radio.Button value="personal">
                   👤 My Personal ({personalAppointments.length})
@@ -2009,7 +2009,7 @@ export const AppointmentsPage: React.FC = () => {
             <Tag color={scopeFilter === 'personal' ? 'blue' : 'purple'} style={{ margin: 0, fontWeight: 600 }}>
               {scopeFilter === 'personal'
                 ? 'Showing your personal bookings only'
-                : 'Showing all marketing staff appointments and your own'}
+                : 'Showing marketing staff under your supervision and your personal bookings only'}
             </Tag>
           </div>
         </Card>
@@ -2216,7 +2216,7 @@ export const AppointmentsPage: React.FC = () => {
                 size="middle"
               >
                 <Radio.Button value="all">
-                  🌐 All Appointments
+                  {user?.role === 'marketing_director' ? `👥 Marketing Team (${effectiveScopedList.length})` : '🌐 All Appointments'}
                 </Radio.Button>
                 <Radio.Button value="personal">
                   👤 My Personal ({personalAppointments.length})
@@ -2493,6 +2493,7 @@ export const AppointmentsPage: React.FC = () => {
             }
           }}
           initialValues={{
+            entityType: 'prospect',
             logBookingInteraction: true,
             interactionChannel: 'call',
           }}
@@ -2502,28 +2503,45 @@ export const AppointmentsPage: React.FC = () => {
             label="Appointment With"
             rules={[{ required: true, message: 'Please select entity type' }]}
           >
-            <Select placeholder="Select type">
+            <Select
+              placeholder="Select type"
+              onChange={() => form.setFieldsValue({ entityId: undefined })}
+            >
               <Option value="prospect">Prospect</Option>
               <Option value="customer">Customer</Option>
             </Select>
           </Form.Item>
 
           <Form.Item
-            name="entityId"
-            label="Select Person"
-            rules={[{ required: true, message: 'Please select a person' }]}
+            noStyle
+            shouldUpdate={(prev, cur) => prev.entityType !== cur.entityType}
           >
-            <Select 
-              placeholder="Search by name" 
-              showSearch
-              optionFilterProp="children"
-            >
-              {allEntities.map(entity => (
-                <Option key={`${entity.type}-${entity.id}`} value={entity.id}>
-                  {entity.name} - {entity.phone} ({entity.type})
-                </Option>
-              ))}
-            </Select>
+            {({ getFieldValue }) => {
+              const selectedType = getFieldValue('entityType');
+              const displayedEntities = selectedType
+                ? allEntities.filter((e) => e.type === selectedType)
+                : allEntities;
+
+              return (
+                <Form.Item
+                  name="entityId"
+                  label="Select Person"
+                  rules={[{ required: true, message: 'Please select a person' }]}
+                >
+                  <Select 
+                    placeholder="Search by name" 
+                    showSearch
+                    optionFilterProp="children"
+                  >
+                    {displayedEntities.map(entity => (
+                      <Option key={`${entity.type}-${entity.id}`} value={entity.id}>
+                        {entity.name} - {entity.phone} ({entity.type})
+                      </Option>
+                    ))}
+                  </Select>
+                </Form.Item>
+              );
+            }}
           </Form.Item>
 
           <Form.Item

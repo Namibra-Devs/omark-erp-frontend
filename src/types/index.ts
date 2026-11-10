@@ -66,6 +66,7 @@ export interface Prospect {
   source: ProspectSource;
   assignedUserId: string;
   assignedUserName?: string;
+  createdBy?: string;
   createdByUserId?: string;
   createdByName?: string;
   registeredByUserId?: string;
@@ -103,6 +104,7 @@ export interface Appointment {
   feedback?: string;
   assignedUserId?: string;
   assignedUserName?: string;
+  createdBy?: string;
   createdByUserId?: string;
   createdByName?: string;
   staffId?: string;
