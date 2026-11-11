@@ -73,6 +73,14 @@ import {
   type UserEntity,
 } from '@/api/users';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
+import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { normalizeDepartmentName } from '@/utils/departmentExpenses';
+import {
+  resolveExpenseRecorderDefaults,
+  resolveExpenseUserBranch,
+  formatExpenseRoleLabel,
+} from '@/utils/expenseRecorderDefaults';
+import { ExpenseRecorderIdentitySummary } from '@/components/expenses/ExpenseRecorderIdentitySummary';
 import { tokens } from '@/constants/tokens';
 import type { Role } from '@/types';
 
@@ -193,11 +201,20 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
   const createExpenseMutation = useCreateExpenseMutation();
   const decisionMutation = useExpenseDecisionMutation();
 
+  const modalStaffUsers: UserEntity[] = useMemo(() => {
+    if (!user?.id) return liveUsers;
+    const exists = liveUsers.some(
+      (u) => u.id === user.id || (user.email && u.email?.toLowerCase() === user.email.toLowerCase())
+    );
+    if (exists) return liveUsers;
+    return [user as unknown as UserEntity, ...liveUsers];
+  }, [liveUsers, user]);
+
   // ── Fast User Dictionaries ─────────────────────────────────────────────────
   const { usersById, usersByName } = useMemo(() => {
     const byId = new Map<string, UserEntity>();
     const byName = new Map<string, UserEntity>();
-    liveUsers.forEach((u) => {
+    modalStaffUsers.forEach((u) => {
       byId.set(u.id, u);
       const fullName = getUserFullName(u).toLowerCase().trim();
       if (fullName) byName.set(fullName, u);
@@ -206,7 +223,7 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
       if (u.email) byName.set(u.email.toLowerCase().trim(), u);
     });
     return { usersById: byId, usersByName: byName };
-  }, [liveUsers]);
+  }, [modalStaffUsers]);
 
   // ── Real-Time Cross-System Event Sync ──────────────────────────────────────
   useEffect(() => {
@@ -264,9 +281,19 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
         : (expense.recordedByUserName || (user ? getUserFullName(user) : 'Staff Member'));
 
       // 4. Resolve live branch
-      const branchId = expense.branchId || matchedUser?.branchId || (matchedUser as any)?.branch || user?.branchId;
-      const branchObj = branches.find((b) => b.id === branchId);
-      const liveBranchName = expense.branchName || branchObj?.name || 'Head Office';
+      const userAssignment = matchedUser?.id ? getStoredUserAssignment(matchedUser.id) : undefined;
+      const resolvedBranch = resolveExpenseUserBranch(
+        matchedUser || {
+          id: expense.recordedByUserId,
+          branchId: expense.branchId,
+          branchName: expense.branchName,
+          role: liveRole,
+        },
+        branches,
+        userAssignment
+      );
+      const branchId = expense.branchId || resolvedBranch.branchId;
+      const liveBranchName = expense.branchName || resolvedBranch.branchName;
 
       // 5. Live contact & avatar info
       const liveAvatar = matchedUser?.avatarUrl || matchedUser?.photoUrl || matchedUser?.profilePictureUrl;
@@ -310,6 +337,39 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
   const [staffMode, setStaffMode] = useState<'system' | 'custom'>('system');
   const [selectedStaffUser, setSelectedStaffUser] = useState<UserEntity | null>(null);
   const [form] = Form.useForm();
+  const watchedModalRole = Form.useWatch('role', form);
+  const watchedCustomStaffName = Form.useWatch('customStaffName', form);
+
+  const currentUserDefaults = useMemo(
+    () =>
+      resolveExpenseRecorderDefaults({
+        user,
+        branches,
+        storedAssignment: user?.id ? getStoredUserAssignment(user.id) : undefined,
+        fallbackRole: (user?.role as Role) || 'admin',
+      }),
+    [user, branches]
+  );
+
+  const activeModalSummary = useMemo(() => {
+    const activeStaff = staffMode === 'system' ? (selectedStaffUser || user) : user;
+    const base = resolveExpenseRecorderDefaults({
+      user: activeStaff,
+      branches,
+      storedAssignment: activeStaff?.id ? getStoredUserAssignment(activeStaff.id) : undefined,
+      fallbackRole: currentUserDefaults.role,
+    });
+    const effectiveRole = watchedModalRole || base.role;
+    const effectiveName =
+      staffMode === 'custom' && watchedCustomStaffName?.trim()
+        ? watchedCustomStaffName.trim()
+        : base.userName;
+    return {
+      userName: effectiveName,
+      roleLabel: formatExpenseRoleLabel(effectiveRole),
+      branchName: base.branchName,
+    };
+  }, [staffMode, selectedStaffUser, user, branches, currentUserDefaults.role, watchedModalRole, watchedCustomStaffName]);
 
   // ── Role Metrics Calculation ───────────────────────────────────────────────
   const roleMetrics = useMemo(() => {
@@ -410,29 +470,27 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
     form.resetFields();
     setStaffMode('system');
 
-    // Find default staff matching selectedRole if not 'all'
-    const targetRole = selectedRole !== 'all' ? selectedRole : 'secretary';
-    const defaultUser = liveUsers.find((u) => u.role === targetRole) || liveUsers[0];
+    const defaultUser =
+      (user?.id && modalStaffUsers.find((u) => u.id === user.id)) ||
+      (user?.email && modalStaffUsers.find((u) => u.email?.toLowerCase() === user.email.toLowerCase())) ||
+      modalStaffUsers[0] ||
+      (user as unknown as UserEntity | undefined);
 
-    if (defaultUser) {
-      setSelectedStaffUser(defaultUser);
-      form.setFieldsValue({
-        staffUserId: defaultUser.id,
-        staffName: getUserFullName(defaultUser),
-        role: defaultUser.role || targetRole,
-        branchId: defaultUser.branchId || (defaultUser as any).branch || branches[0]?.id,
-        type: 'internal',
-        incurredOn: dayjs(),
-      });
-    } else {
-      setSelectedStaffUser(null);
-      form.setFieldsValue({
-        role: targetRole,
-        type: 'internal',
-        incurredOn: dayjs(),
-        branchId: user?.branchId || branches[0]?.id,
-      });
-    }
+    const defaults = resolveExpenseRecorderDefaults({
+      user: defaultUser || user,
+      branches,
+      storedAssignment: (defaultUser?.id || user?.id) ? getStoredUserAssignment((defaultUser?.id || user?.id)!) : undefined,
+      fallbackRole: currentUserDefaults.role,
+    });
+
+    setSelectedStaffUser(defaultUser || null);
+    form.setFieldsValue({
+      staffUserId: defaultUser?.id,
+      staffName: defaults.userName,
+      role: defaults.role,
+      type: 'internal',
+      incurredOn: dayjs(),
+    });
 
     setRecordModalOpen(true);
   };
@@ -443,8 +501,7 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
     if (targetUser) {
       setSelectedStaffUser(targetUser);
       form.setFieldsValue({
-        role: targetUser.role || 'branch_manager',
-        branchId: targetUser.branchId || (targetUser as any).branch || branches[0]?.id,
+        role: targetUser.role || currentUserDefaults.role,
         staffName: getUserFullName(targetUser),
       });
     }
@@ -454,7 +511,9 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
   const handleModalRoleChange = (newRole: string) => {
     form.setFieldsValue({ role: newRole });
     if (staffMode === 'system') {
-      const matchInRole = liveUsers.find((u) => u.role === newRole);
+      const matchInRole =
+        (user?.role === newRole && modalStaffUsers.find((u) => u.id === user.id)) ||
+        modalStaffUsers.find((u) => u.role === newRole);
       if (matchInRole) {
         handleStaffUserSelect(matchInRole.id);
         form.setFieldsValue({ staffUserId: matchInRole.id });
@@ -465,32 +524,37 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
   // ── Record New Expense Submission ──────────────────────────────────────────
   const handleRecordExpense = async (values: any) => {
     try {
-      let finalUserId = user?.id;
-      let finalUserName = user ? getUserFullName(user) : 'Staff Member';
-      let finalRole = values.role;
+      const activeStaff =
+        staffMode === 'system'
+          ? selectedStaffUser || modalStaffUsers.find((u) => u.id === values.staffUserId) || user
+          : user;
+      const resolved = resolveExpenseRecorderDefaults({
+        user: activeStaff,
+        branches,
+        storedAssignment: activeStaff?.id ? getStoredUserAssignment(activeStaff.id) : undefined,
+        fallbackRole: values.role || currentUserDefaults.role,
+      });
 
-      if (staffMode === 'system' && selectedStaffUser) {
-        finalUserId = selectedStaffUser.id;
-        finalUserName = getUserFullName(selectedStaffUser);
-        finalRole = values.role || selectedStaffUser.role;
-      } else if (staffMode === 'custom' && values.customStaffName) {
-        finalUserId = undefined;
-        finalUserName = values.customStaffName.trim();
-        finalRole = values.role;
-      } else if (values.staffName) {
-        finalUserName = values.staffName.trim();
-      }
+      const finalUserId = staffMode === 'system' ? activeStaff?.id : undefined;
+      const finalUserName =
+        staffMode === 'custom' && values.customStaffName
+          ? values.customStaffName.trim()
+          : (values.staffName?.trim() || resolved.userName);
+      const finalRole = values.role || resolved.role;
 
       const payload: CreateExpensePayload = {
         category: values.category,
         type: values.type,
         amountMinor: Math.round(Number(values.amount) * 100),
         incurredOn: values.incurredOn ? values.incurredOn.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-        branchId: values.branchId || selectedStaffUser?.branchId || user?.branchId,
+        branchId: resolved.branchId,
+        branchName: resolved.branchName,
+        department: normalizeDepartmentName(activeStaff?.department, finalRole),
         description: values.description,
         recordedByUserId: finalUserId,
         recordedByUserName: finalUserName,
         recordedByUserRole: finalRole,
+        status: isAdmin ? 'approved' : 'pending',
       };
 
       await createExpenseMutation.mutateAsync(payload);
@@ -1423,12 +1487,18 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
           layout="vertical"
           onFinish={handleRecordExpense}
           initialValues={{
-            role: selectedRole !== 'all' ? selectedRole : 'secretary',
+            role: currentUserDefaults.role,
+            staffUserId: user?.id,
             type: 'internal',
             incurredOn: dayjs(),
-            branchId: user?.branchId || (branches[0]?.id ?? undefined),
           }}
         >
+          <ExpenseRecorderIdentitySummary
+            userName={activeModalSummary.userName}
+            roleLabel={activeModalSummary.roleLabel}
+            branchName={activeModalSummary.branchName}
+          />
+
           {/* Initiator Source Toggle */}
           <div style={{ marginBottom: 16 }}>
             <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
@@ -1442,7 +1512,7 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
             >
               <Radio.Button value="system" style={{ width: '50%', textAlign: 'center' }}>
                 <TeamOutlined style={{ marginRight: 6 }} />
-                Live System Staff ({liveUsers.length})
+                Live System Staff ({modalStaffUsers.length})
               </Radio.Button>
               <Radio.Button value="custom" style={{ width: '50%', textAlign: 'center' }}>
                 <UserOutlined style={{ marginRight: 6 }} />
@@ -1499,7 +1569,7 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
                     loading={usersLoading}
                     notFoundContent={usersLoading ? 'Loading users...' : 'No matching staff found'}
                   >
-                    {liveUsers.map((u) => (
+                    {modalStaffUsers.map((u) => (
                       <Option
                         key={u.id}
                         value={u.id}
@@ -1613,20 +1683,6 @@ export const RoleFilteredExpensesTable: React.FC<RoleFilteredExpensesTableProps>
               </Form.Item>
             </Col>
           </Row>
-
-          <Form.Item
-            name="branchId"
-            label="Branch Location"
-            rules={[{ required: true, message: 'Please select branch' }]}
-          >
-            <Select placeholder="Select branch">
-              {branches.map((b) => (
-                <Option key={b.id} value={b.id}>
-                  {b.name}
-                </Option>
-              ))}
-            </Select>
-          </Form.Item>
 
           <Form.Item
             name="description"

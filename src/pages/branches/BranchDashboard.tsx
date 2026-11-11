@@ -47,6 +47,7 @@ import { roleLabels } from '@/constants/enums';
 import { useBranchQuery } from '@/api/branches';
 import { useExpensesQuery, useCreateExpenseMutation } from '@/api/expenses';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
+import { ExpenseRecorderIdentitySummary } from '@/components/expenses/ExpenseRecorderIdentitySummary';
 import { useComplaintsQuery } from '@/api/complaints';
 import { useUsersQuery, getUserPhone } from '@/api/users';
 import { useAuth } from '@/contexts/AuthContext';
@@ -57,8 +58,10 @@ import {
   isUserInBranch,
   getStoredBranchStaff,
   setStoredBranchStaff,
+  getStoredUserAssignment,
 } from '@/utils/userAssignmentStorage';
 import { getBranchCanonicalKey } from '@/utils/branchIsolation';
+import { resolveExpenseRecorderDefaults } from '@/utils/expenseRecorderDefaults';
 
 const { Text } = Typography;
 
@@ -142,6 +145,13 @@ export const BranchDashboard: React.FC = () => {
   const [addExpenseModal, setAddExpenseModal] = useState(false);
   const [expenseLoading, setExpenseLoading] = useState(false);
   const [expenseForm] = Form.useForm();
+  const expenseRecorderDefaults = resolveExpenseRecorderDefaults({
+    user,
+    branches,
+    storedAssignment: user?.id ? getStoredUserAssignment(user.id) : undefined,
+    fallbackRole: 'branch_manager',
+    fallbackBranch: branch,
+  });
 
   const handleInitiateExpense = async (values: any) => {
     if (!branch) return;
@@ -154,10 +164,12 @@ export const BranchDashboard: React.FC = () => {
         amountMinor,
         incurredOn: values.incurredOn.format('YYYY-MM-DD'),
         description: values.description,
-        branchId: branch.id,
-        recordedByUserId: user?.id,
-        recordedByUserName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Branch Manager',
-        recordedByUserRole: user?.role || 'branch_manager',
+        branchId: expenseRecorderDefaults.branchId || branch.id,
+        branchName: expenseRecorderDefaults.branchName,
+        department: expenseRecorderDefaults.department,
+        recordedByUserId: expenseRecorderDefaults.userId,
+        recordedByUserName: expenseRecorderDefaults.userName,
+        recordedByUserRole: expenseRecorderDefaults.role,
         status: 'pending',
       });
       message.success(`Expense submitted successfully for Admin & Accounts approval!`);
@@ -451,6 +463,11 @@ export const BranchDashboard: React.FC = () => {
             message="Pending Approval Workflow"
             description="Branch expenses will be placed in 'pending' status for review and authorization by Admin and Accounts dashboards."
             style={{ marginBottom: 16 }}
+          />
+          <ExpenseRecorderIdentitySummary
+            userName={expenseRecorderDefaults.userName}
+            roleLabel={expenseRecorderDefaults.roleLabel}
+            branchName={expenseRecorderDefaults.branchName}
           />
 
           <Row gutter={12}>

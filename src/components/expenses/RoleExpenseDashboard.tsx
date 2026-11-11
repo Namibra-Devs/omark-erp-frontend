@@ -81,10 +81,15 @@ import {
   getRoleDashboardConfig,
   type ExpenseRoleView,
 } from '@/utils/expenseRoleIsolation';
+import {
+  resolveExpenseRecorderDefaults,
+  resolveExpenseUserBranch,
+} from '@/utils/expenseRecorderDefaults';
 import type { Role } from '@/types';
 import { tokens } from '@/constants/tokens';
 import { ExpenseAccordionView } from './ExpenseAccordionView';
 import { ExpenseDetailModal } from './ExpenseDetailModal';
+import { ExpenseRecorderIdentitySummary } from './ExpenseRecorderIdentitySummary';
 
 dayjs.extend(relativeTime);
 
@@ -211,11 +216,18 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
   const { data: apiBranches = [] } = useBranchesQuery();
   const branches = apiBranches.length > 0 ? apiBranches : contextBranches;
 
-  const currentBranchName = useMemo(() => {
-    const bId = user?.branchId || user?.branch;
-    const found = branches.find((b: any) => b.id === bId || b.name === bId);
-    return found?.name || user?.branch || 'Kumasi Main';
-  }, [user?.branchId, user?.branch, branches]);
+  const recorderDefaults = useMemo(
+    () =>
+      resolveExpenseRecorderDefaults({
+        user,
+        branches,
+        storedAssignment: user?.id ? getStoredUserAssignment(user.id) : undefined,
+        fallbackRole: fixedRole || 'secretary',
+      }),
+    [user, branches, fixedRole]
+  );
+
+  const currentBranchName = recorderDefaults.branchName;
 
   // Live queries
   const { data: expensesData, isLoading, refetch, isFetching } = useExpensesQuery();
@@ -252,11 +264,20 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       const liveName = matchedUser
         ? getUserFullName(matchedUser)
         : (expense.recordedByUserName || 'Staff Member');
-      const branchId = expense.branchId || matchedUser?.branchId || user?.branchId;
-      const branchObj = branches.find((b: any) => b.id === branchId);
-      const liveBranchName = expense.branchName || branchObj?.name || 'Kumasi Main';
-
       const userAssignment = matchedUser ? getStoredUserAssignment(matchedUser.id) : undefined;
+      const resolvedBranch = resolveExpenseUserBranch(
+        matchedUser || {
+          id: expense.recordedByUserId,
+          branchId: expense.branchId,
+          branchName: expense.branchName,
+          role: liveRole,
+        },
+        branches,
+        userAssignment
+      );
+      const branchId = expense.branchId || resolvedBranch.branchId;
+      const liveBranchName = expense.branchName || resolvedBranch.branchName;
+
       const assignedDept = userAssignment?.departmentName || userAssignment?.department;
       const liveDepartment = normalizeDepartmentName(expense.department || assignedDept, liveRole);
 
@@ -270,7 +291,7 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
         department: liveDepartment,
       };
     });
-  }, [rawExpenses, usersById, usersByName, branches, user?.branchId]);
+  }, [rawExpenses, usersById, usersByName, branches]);
 
   // 2. Strict Role Isolation: Filter records according to the active role lens
   const roleFilteredExpenses = useMemo(() => {
@@ -517,8 +538,11 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
   // ── Handlers ─────────────────────────────────────────────────────────────
   const handleOpenAddModal = (presetDept?: FourMainDepartmentKey) => {
     const defaultCat = roleConfig.defaultCategories[0] || 'Office Supplies';
-    const defaultType = roleLens === 'marketing_director' ? 'external' : 'internal';
-    let initialDept = normalizeDepartmentName(undefined, roleLens === 'all' ? (user?.role as string) : roleLens);
+    const defaultType =
+      recorderDefaults.role === 'marketing_director' || recorderDefaults.role === 'marketing_staff'
+        ? 'external'
+        : 'internal';
+    let initialDept = recorderDefaults.department;
 
     if (presetDept) {
       const mapPreset: Record<FourMainDepartmentKey, string> = {
@@ -536,7 +560,6 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
       type: defaultType,
       amountGHS: undefined,
       date: dayjs(),
-      branchId: user?.branchId || branches[0]?.id,
       description: '',
     });
     setAddModalOpen(true);
@@ -544,22 +567,18 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
 
   const handleCreateExpense = async (values: any) => {
     try {
-      const userName = user
-        ? (user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email)
-        : 'Authorized Staff';
-      const effectiveRole = fixedRole || (user?.role as Role) || 'secretary';
-
       await createExpenseMutation.mutateAsync({
-        branchId: values.branchId || user?.branchId,
-        department: values.department,
+        branchId: recorderDefaults.branchId,
+        branchName: recorderDefaults.branchName,
+        department: values.department || recorderDefaults.department,
         category: values.category,
         description: values.description,
         amountMinor: Math.round(values.amountGHS * 100),
         type: values.type,
         incurredOn: values.date ? values.date.format('YYYY-MM-DD') : dayjs().format('YYYY-MM-DD'),
-        recordedByUserId: user?.id,
-        recordedByUserName: userName,
-        recordedByUserRole: effectiveRole,
+        recordedByUserId: recorderDefaults.userId,
+        recordedByUserName: recorderDefaults.userName,
+        recordedByUserRole: recorderDefaults.role,
         status: isAdminOrAccounts ? 'approved' : 'pending',
       });
 
@@ -2027,6 +2046,12 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             style={{ marginBottom: 16, fontSize: 12 }}
           />
 
+          <ExpenseRecorderIdentitySummary
+            userName={recorderDefaults.userName}
+            roleLabel={recorderDefaults.roleLabel}
+            branchName={recorderDefaults.branchName}
+          />
+
           <Row gutter={16}>
             <Col span={14}>
               <Form.Item
@@ -2088,31 +2113,13 @@ export const RoleExpenseDashboard: React.FC<RoleExpenseDashboardProps> = ({
             </Col>
           </Row>
 
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item
-                name="date"
-                label="Incurred Date"
-                rules={[{ required: true, message: 'Select date' }]}
-              >
-                <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
-              </Form.Item>
-            </Col>
-
-            <Col span={12}>
-              <Form.Item
-                name="branchId"
-                label="Branch Location"
-                rules={[{ required: true, message: 'Select branch' }]}
-              >
-                <Select placeholder="Select branch">
-                  {branches.map((b: any) => (
-                    <Option key={b.id} value={b.id}>{b.name}</Option>
-                  ))}
-                </Select>
-              </Form.Item>
-            </Col>
-          </Row>
+          <Form.Item
+            name="date"
+            label="Incurred Date"
+            rules={[{ required: true, message: 'Select date' }]}
+          >
+            <DatePicker style={{ width: '100%' }} format="YYYY-MM-DD" />
+          </Form.Item>
 
           <Form.Item
             name="description"

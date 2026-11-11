@@ -39,8 +39,11 @@ import { BankReconciliationSection } from './accounts/BankReconciliationSection'
 import { AccountsReceivableAgingCard } from './accounts/AccountsReceivableAgingCard';
 import { DepartmentalBudgetVarianceCard } from './accounts/DepartmentalBudgetVarianceCard';
 import { ExpenseOverviewChartsAndStats } from '@/components/expenses/ExpenseOverviewChartsAndStats';
+import { ExpenseRecorderIdentitySummary } from '@/components/expenses/ExpenseRecorderIdentitySummary';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { filterEntitiesByBranch } from '@/utils/branchIsolation';
+import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { resolveExpenseRecorderDefaults } from '@/utils/expenseRecorderDefaults';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -94,6 +97,12 @@ export const AccountsDashboardPage: React.FC = () => {
   const [expenseForm] = Form.useForm();
 
   const { branches } = useBranchContext();
+  const recorderDefaults = resolveExpenseRecorderDefaults({
+    user,
+    branches,
+    storedAssignment: user?.id ? getStoredUserAssignment(user.id) : undefined,
+    fallbackRole: 'accounts',
+  });
   const rawExpenses = expensesData?.items ?? [];
   const rawPaymentPlans = paymentPlansData?.items ?? [];
 
@@ -119,19 +128,20 @@ export const AccountsDashboardPage: React.FC = () => {
     }
   };
 
-  const handleAddExpense = async (values: { branchId?: string; category: string; description?: string; amountGHS: number; type: 'internal' | 'external'; date: dayjs.Dayjs }) => {
+  const handleAddExpense = async (values: { category: string; description?: string; amountGHS: number; type: 'internal' | 'external'; date: dayjs.Dayjs }) => {
     try {
-      const userName = user ? (user.name || `${user.firstName || ''} ${user.lastName || ''}`.trim() || user.email) : 'Accounts Officer';
       await createExpenseMutation.mutateAsync({
-        branchId: values.branchId || user?.branchId,
+        branchId: recorderDefaults.branchId,
+        branchName: recorderDefaults.branchName,
+        department: recorderDefaults.department,
         category: values.category,
         description: values.description,
         amountMinor: Math.round(values.amountGHS * 100),
         type: values.type,
         incurredOn: values.date.format('YYYY-MM-DD'),
-        recordedByUserId: user?.id,
-        recordedByUserName: userName,
-        recordedByUserRole: user?.role || 'accounts',
+        recordedByUserId: recorderDefaults.userId,
+        recordedByUserName: recorderDefaults.userName,
+        recordedByUserRole: recorderDefaults.role,
         status: 'approved',
       });
       message.success('Expense recorded and approved successfully');
@@ -541,9 +551,11 @@ export const AccountsDashboardPage: React.FC = () => {
         width={480}
       >
         <Form form={expenseForm} layout="vertical" onFinish={handleAddExpense} initialValues={{ type: 'internal', date: dayjs() }}>
-          <Form.Item name="branchId" label="Branch">
-            <Select allowClear placeholder="Select branch (Optional)" options={branches.map((b) => ({ value: b.id, label: b.name }))} />
-          </Form.Item>
+          <ExpenseRecorderIdentitySummary
+            userName={recorderDefaults.userName}
+            roleLabel={recorderDefaults.roleLabel}
+            branchName={recorderDefaults.branchName}
+          />
           <Form.Item name="category" label="Category" rules={[{ required: true, message: 'Please enter a category' }]}>
             <Input placeholder="e.g. Office Supplies, Legal Fees" />
           </Form.Item>

@@ -97,6 +97,9 @@ import { saveStoredPaymentPlan, saveCustomerPlanDefinition } from '@/utils/payme
 import { useRecordPaymentMutation } from '@/api/payments';
 import { useCreateExpenseMutation } from '@/api/expenses';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
+import { ExpenseRecorderIdentitySummary } from '@/components/expenses/ExpenseRecorderIdentitySummary';
+import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { resolveExpenseRecorderDefaults } from '@/utils/expenseRecorderDefaults';
 import { usePropertiesQuery } from '@/api/properties';
 import { useBranchesQuery } from '@/api/branches';
 import {
@@ -212,6 +215,12 @@ export const SecretaryDashboardPage: React.FC = () => {
   const navigate = useNavigate();
   const { data: branches = [] } = useBranchesQuery();
   const userBranchId = getUserBranchId(user);
+  const expenseRecorderDefaults = resolveExpenseRecorderDefaults({
+    user,
+    branches,
+    storedAssignment: user?.id ? getStoredUserAssignment(user.id) : undefined,
+    fallbackRole: 'secretary',
+  });
 
   // Live visitor check-in records for secretary's branch
   const { records: visitorRecords } = useCheckIns(userBranchId, branches);
@@ -1485,10 +1494,12 @@ export const SecretaryDashboardPage: React.FC = () => {
         amountMinor,
         incurredOn: values.incurredOn.format('YYYY-MM-DD'),
         description: values.description,
-        branchId: user?.branchId,
-        recordedByUserId: user?.id,
-        recordedByUserName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Secretary',
-        recordedByUserRole: 'secretary',
+        branchId: expenseRecorderDefaults.branchId,
+        branchName: expenseRecorderDefaults.branchName,
+        department: expenseRecorderDefaults.department,
+        recordedByUserId: expenseRecorderDefaults.userId,
+        recordedByUserName: expenseRecorderDefaults.userName,
+        recordedByUserRole: expenseRecorderDefaults.role,
       });
       message.success('Expense submitted successfully for Admin & Accounts approval!');
       setAddExpenseModal(false);
@@ -2885,6 +2896,11 @@ export const SecretaryDashboardPage: React.FC = () => {
             message="Pending Approval Workflow"
             description="All operational expenses initiated by the Secretary Dashboard will be placed in 'pending' status for review and authorization by Admin and Accounts dashboards."
             style={{ marginBottom: 16 }}
+          />
+          <ExpenseRecorderIdentitySummary
+            userName={expenseRecorderDefaults.userName}
+            roleLabel={expenseRecorderDefaults.roleLabel}
+            branchName={expenseRecorderDefaults.branchName}
           />
 
           <Row gutter={12}>

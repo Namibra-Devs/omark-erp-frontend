@@ -51,6 +51,9 @@ import { useCustomersQuery, getCustomerTypeLabel, getCustomerTypeColor } from '@
 import { useScopedAppointments, useCreateAppointmentMutation, appointmentsKeys } from '@/api/appointments';
 import { useCreateExpenseMutation } from '@/api/expenses';
 import { RoleExpenseDashboard } from '@/components/expenses/RoleExpenseDashboard';
+import { ExpenseRecorderIdentitySummary } from '@/components/expenses/ExpenseRecorderIdentitySummary';
+import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
+import { resolveExpenseRecorderDefaults } from '@/utils/expenseRecorderDefaults';
 import { saveStoredInteraction } from '@/utils/interactionStorage';
 import { usePropertiesQuery } from '@/api/properties';
 import { StatusTag } from '@/components/shared/StatusTag';
@@ -230,6 +233,14 @@ export const DirectorOverviewPage: React.FC = () => {
     }
   };
 
+  const { data: branches = [] } = useBranchesQuery();
+  const expenseRecorderDefaults = resolveExpenseRecorderDefaults({
+    user,
+    branches,
+    storedAssignment: user?.id ? getStoredUserAssignment(user.id) : undefined,
+    fallbackRole: 'marketing_director',
+  });
+
   const handleInitiateExpense = async (values: any) => {
     try {
       setExpenseLoading(true);
@@ -240,10 +251,12 @@ export const DirectorOverviewPage: React.FC = () => {
         amountMinor,
         incurredOn: values.incurredOn.format('YYYY-MM-DD'),
         description: values.description,
-        branchId: user?.branchId,
-        recordedByUserId: user?.id,
-        recordedByUserName: user?.firstName ? `${user.firstName} ${user.lastName}` : 'Marketing Director',
-        recordedByUserRole: 'marketing_director',
+        branchId: expenseRecorderDefaults.branchId,
+        branchName: expenseRecorderDefaults.branchName,
+        department: expenseRecorderDefaults.department,
+        recordedByUserId: expenseRecorderDefaults.userId,
+        recordedByUserName: expenseRecorderDefaults.userName,
+        recordedByUserRole: expenseRecorderDefaults.role,
         status: 'pending',
       });
       message.success('Marketing expense submitted successfully for Admin & Accounts approval!');
@@ -259,7 +272,6 @@ export const DirectorOverviewPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [selectedMarketer, setSelectedMarketer] = useState<MarketerPerformance | null>(null);
   const [viewProfileDrawer, setViewProfileDrawer] = useState(false);
-  const { data: branches = [] } = useBranchesQuery();
 
   // Search states for dedicated dashboard tabs
   const [prospectsSearch, setProspectsSearch] = useState('');
@@ -2334,6 +2346,11 @@ export const DirectorOverviewPage: React.FC = () => {
             message="Pending Approval Workflow"
             description="Expenses initiated by the Marketing Director will be placed in 'pending' status for review and authorization by Admin and Accounts dashboards."
             style={{ marginBottom: 16 }}
+          />
+          <ExpenseRecorderIdentitySummary
+            userName={expenseRecorderDefaults.userName}
+            roleLabel={expenseRecorderDefaults.roleLabel}
+            branchName={expenseRecorderDefaults.branchName}
           />
 
           <Row gutter={12}>

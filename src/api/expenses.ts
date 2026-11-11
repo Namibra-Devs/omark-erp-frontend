@@ -57,6 +57,7 @@ export interface CreateExpensePayload {
   amountMinor: number;
   incurredOn: string;
   branchId?: string;
+  branchName?: string;
   department?: string;
   description?: string;
   status?: 'pending' | 'approved' | 'rejected';
@@ -204,6 +205,7 @@ export function useCreateExpenseMutation() {
         amountMinor: payload.amountMinor,
         incurredOn: payload.incurredOn,
         branchId: payload.branchId,
+        branchName: payload.branchName,
         department: payload.department,
         description: payload.description,
         recordedByUserId: payload.recordedByUserId,
@@ -224,6 +226,8 @@ export function useCreateExpenseMutation() {
       if (payload.department) cleanPayload.department = payload.department;
       if (payload.description) cleanPayload.description = payload.description;
 
+      const { branchName: _clientBranchName, ...serverFallbackPayload } = payload;
+
       let saved: ExpenseEntity | null = null;
       try {
         const res = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', cleanPayload);
@@ -235,7 +239,7 @@ export function useCreateExpenseMutation() {
         // Fallback retry with full payload in case backend expects it
         try {
           const retryRes = await apiClient.post<ApiResponse<ExpenseEntity>>('/expenses', {
-            ...payload,
+            ...serverFallbackPayload,
             status: initialStatus,
           });
           const retryData = unwrapData(retryRes) || (retryRes?.data as any)?.data || retryRes?.data;
@@ -250,6 +254,9 @@ export function useCreateExpenseMutation() {
       const finalExpense: ExpenseEntity = {
         ...newExpense,
         ...(saved || {}),
+        branchId: saved?.branchId || payload.branchId,
+        branchName: saved?.branchName || payload.branchName,
+        department: saved?.department || payload.department,
         recordedByUserId: saved?.recordedByUserId || payload.recordedByUserId,
         recordedByUserName: saved?.recordedByUserName || payload.recordedByUserName,
         recordedByUserRole: saved?.recordedByUserRole || payload.recordedByUserRole,
