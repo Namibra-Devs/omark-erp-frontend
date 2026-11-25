@@ -12,7 +12,6 @@ export {
   IDB_STORE_NAME,
   EXPENSES_CHANGE_EVENT,
   isDummyFuelExpense,
-  DEFAULT_ROLE_OPERATIONAL_EXPENSES,
   normalizeExpenseEntity,
   getIndexedDBExpenses,
   setIndexedDBExpenses,
@@ -96,21 +95,18 @@ export function useExpensesQuery(params?: ExpensesListParams) {
         const unwrapped = unwrapList(res);
 
         let candidates: any[] = [];
-        if (Array.isArray(unwrapped?.items) && unwrapped.items.length > 0) {
+        if (Array.isArray(unwrapped?.items)) {
           candidates = unwrapped.items;
-        } else if (Array.isArray(data) && data.length > 0) {
+        } else if (Array.isArray(data)) {
           candidates = data;
-        } else if (Array.isArray((data as any)?.items) && (data as any).items.length > 0) {
+        } else if (Array.isArray((data as any)?.items)) {
           candidates = (data as any).items;
         } else if (Array.isArray(raw)) {
           candidates = raw;
-        } else if (Array.isArray(raw?.items) && raw.items.length > 0) {
+        } else if (Array.isArray(raw?.items)) {
           candidates = raw.items;
-        } else if (Array.isArray(raw?.data) && raw.data.length > 0) {
+        } else if (Array.isArray(raw?.data)) {
           candidates = raw.data;
-        } else if (Array.isArray(unwrapped?.items)) {
-          candidates = [];
-          serverExpenses = [];
         }
 
         // Walk remaining pages if dataset is multi-page and no single page was explicitly requested
@@ -141,25 +137,21 @@ export function useExpensesQuery(params?: ExpensesListParams) {
 
         // Filter out dummy repeated fuel placeholders
         candidates = candidates.filter((c) => !isDummyFuelExpense(c));
-
-        if (candidates.length > 0) {
-          serverExpenses = candidates.map(normalizeExpenseEntity);
-        } else if (serverExpenses === null && (Array.isArray(raw) || Array.isArray(raw?.items))) {
-          serverExpenses = [];
-        }
+        serverExpenses = candidates.map(normalizeExpenseEntity);
       } catch (err: any) {
         console.warn('[Omark Expenses] Live backend /expenses fetch error:', err?.message || err);
       }
 
-      const localExpenses = getStoredExpenses();
       let all: ExpenseEntity[] = [];
 
-      if (serverExpenses !== null && serverExpenses.length > 0) {
-        all = mergeExpenses(serverExpenses, localExpenses);
-        // Persist reconciled dataset across IndexedDB, localStorage, and server settings
+      if (serverExpenses !== null) {
+        // Authoritative live backend response: live database state takes absolute precedence
+        all = serverExpenses;
+        // Persist reconciled dataset across IndexedDB, localStorage, and server settings so cleared databases stay clean
         saveStoredExpenses(all).catch(() => {});
       } else {
-        all = localExpenses;
+        // Offline fallback only when backend could not be reached
+        all = getStoredExpenses();
       }
 
       all.sort((a, b) => dayjs(b.incurredOn || b.createdAt).valueOf() - dayjs(a.incurredOn || a.createdAt).valueOf());

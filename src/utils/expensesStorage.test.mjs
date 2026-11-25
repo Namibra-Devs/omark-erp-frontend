@@ -25,30 +25,17 @@ const {
   normalizeExpenseEntity,
 } = await import('./expensesStorage.ts');
 
-test('Cookie Wipe Resilience: empty localStorage is automatically re-seeded with baseline operational expenses', () => {
+test('Zero Mock Data: empty localStorage remains empty without injecting synthetic baseline expenses', () => {
   localStorage.clear();
   assert.equal(localStorage.getItem(EXPENSES_STORAGE_KEY), null);
 
   const expenses = getStoredExpenses();
   assert.ok(Array.isArray(expenses));
-  assert.ok(expenses.length >= DEFAULT_ROLE_OPERATIONAL_EXPENSES.length);
-
-  // Verify that it is immediately written back to localStorage so subsequent calls have it
-  const storedRaw = localStorage.getItem(EXPENSES_STORAGE_KEY);
-  assert.ok(storedRaw !== null);
-  const parsed = JSON.parse(storedRaw);
-  assert.ok(parsed.length >= DEFAULT_ROLE_OPERATIONAL_EXPENSES.length);
+  assert.equal(expenses.length, 0, 'No mock expenses should be injected into empty storage');
 });
 
-test('Department Coverage on Cookie Wipe: all 4 main departments (Secretary, BM, Marketing, Admin) are present', () => {
-  localStorage.clear();
-  const expenses = getStoredExpenses();
-
-  const roles = new Set(expenses.map((e) => (e.recordedByUserRole || '').toLowerCase()));
-  assert.ok(roles.has('secretary'), 'Secretary role must be present');
-  assert.ok(roles.has('branch_manager'), 'Branch manager role must be present');
-  assert.ok(roles.has('marketing_director'), 'Marketing director role must be present');
-  assert.ok(roles.has('admin') || roles.has('accounts'), 'Admin or accounts role must be present');
+test('Zero Mock Data: DEFAULT_ROLE_OPERATIONAL_EXPENSES contains no synthetic mock expenses', () => {
+  assert.equal(DEFAULT_ROLE_OPERATIONAL_EXPENSES.length, 0);
 });
 
 test('User Expense Persistence: newly created expense is stored and survives', () => {
@@ -117,9 +104,19 @@ test('Deduplication & Merging: mergeExpenses combines server and local items cle
 
 test('Deletion Persistence: deleted expense does not resurrect from baseline', () => {
   localStorage.clear();
+  const testExp = {
+    id: 'exp-to-delete-1',
+    category: 'Client Hospitality',
+    type: 'internal',
+    amountMinor: 25000,
+    incurredOn: '2026-10-17',
+    status: 'pending',
+  };
+  saveStoredExpense(testExp);
   const initial = getStoredExpenses();
+  assert.equal(initial.length, 1);
   const target = initial[0];
-  assert.ok(target && target.id);
+  assert.equal(target.id, 'exp-to-delete-1');
 
   deleteStoredExpense(target.id);
   const afterDelete = getStoredExpenses();

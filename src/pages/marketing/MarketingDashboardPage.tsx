@@ -1236,6 +1236,19 @@ export const MarketingDashboardPage: React.FC = () => {
         if (getAppointmentDueStatus(appt) !== 'overdue') return false;
       } else if (appointmentStatusFilter === 'due_today') {
         if (getAppointmentDueStatus(appt) !== 'due_today') return false;
+      } else if (appointmentStatusFilter === 'completed') {
+        const s = (appt.status || '').toLowerCase();
+        const isAttended =
+          s === 'completed' ||
+          s === 'attended' ||
+          (appt as any).attended === true ||
+          (appt as any).isAttended === true ||
+          Boolean((appt as any).attendedByUserId) ||
+          Boolean((appt as any).attendedByName) ||
+          String(appt.feedback || '').toLowerCase().includes('attended');
+        if (!isAttended) return false;
+      } else if (appointmentStatusFilter === 'canceled') {
+        if (appt.status !== 'canceled' && appt.status !== 'cancelled') return false;
       } else if (appointmentStatusFilter !== 'all') {
         if (appt.status !== appointmentStatusFilter) return false;
       }
@@ -1287,9 +1300,20 @@ export const MarketingDashboardPage: React.FC = () => {
       dueToday: targetList.filter((a) => getAppointmentDueStatus(a) === 'due_today').length,
       overdue: targetList.filter((a) => getAppointmentDueStatus(a) === 'overdue').length,
       scheduled: targetList.filter((a) => a.status === 'scheduled').length,
-      completed: targetList.filter((a) => a.status === 'completed').length,
+      completed: targetList.filter((a) => {
+        const s = (a.status || '').toLowerCase();
+        return (
+          s === 'completed' ||
+          s === 'attended' ||
+          (a as any).attended === true ||
+          (a as any).isAttended === true ||
+          Boolean((a as any).attendedByUserId) ||
+          Boolean((a as any).attendedByName) ||
+          String(a.feedback || '').toLowerCase().includes('attended')
+        );
+      }).length,
       postponed: targetList.filter((a) => a.status === 'postponed').length,
-      canceled: targetList.filter((a) => a.status === 'canceled').length,
+      canceled: targetList.filter((a) => a.status === 'canceled' || a.status === 'cancelled').length,
     };
   }, [appointmentScope, effectiveDashboardAppointments, myStaffAppointments]);
 
@@ -1475,7 +1499,18 @@ export const MarketingDashboardPage: React.FC = () => {
       title: 'Status',
       key: 'status',
       width: 120,
-      render: (_: any, record: any) => <StatusTag status={record.status || 'scheduled'} type="appointment" />,
+      render: (_: any, record: any) => {
+        const isAttended =
+          record.status === 'completed' ||
+          record.status === 'attended' ||
+          record.attended === true ||
+          record.isAttended === true ||
+          Boolean(record.attendedByUserId) ||
+          Boolean(record.attendedByName) ||
+          String(record.feedback || '').toLowerCase().includes('attended');
+        const effectiveStatus = isAttended ? (record.status === 'attended' ? 'attended' : 'completed') : (record.status || 'scheduled');
+        return <StatusTag status={effectiveStatus} type="appointment" />;
+      },
     },
     {
       title: 'Actions',
@@ -1487,6 +1522,15 @@ export const MarketingDashboardPage: React.FC = () => {
         if (!isEditable) {
           return <Text type="secondary" style={{ fontSize: 12 }}>View only</Text>;
         }
+        const isAttendedOrCompleted =
+          record.status === 'completed' ||
+          record.status === 'attended' ||
+          record.attended === true ||
+          record.isAttended === true ||
+          Boolean(record.attendedByUserId) ||
+          Boolean(record.attendedByName) ||
+          String(record.feedback || '').toLowerCase().includes('attended');
+
         return (
           <Space size={6} style={{ flexWrap: 'nowrap' }}>
             <Button
@@ -1497,7 +1541,7 @@ export const MarketingDashboardPage: React.FC = () => {
             >
               Reschedule
             </Button>
-            {record.status !== 'completed' && record.status !== 'canceled' && (
+            {!isAttendedOrCompleted && record.status !== 'canceled' && record.status !== 'cancelled' && (
               <Tooltip title="Mark Attended & Completed">
                 <Button
                   size="small"
@@ -1536,7 +1580,7 @@ export const MarketingDashboardPage: React.FC = () => {
                 onClick={() => handleOpenStatusModal(record)}
               />
             </Tooltip>
-            {record.status !== 'canceled' && record.status !== 'completed' && (
+            {record.status !== 'canceled' && record.status !== 'cancelled' && !isAttendedOrCompleted && (
               <Tooltip title="Cancel Appointment">
                 <Popconfirm
                   title="Cancel Appointment"

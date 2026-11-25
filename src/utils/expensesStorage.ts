@@ -57,244 +57,7 @@ export function isDummyFuelExpense(expense: any): boolean {
   return false;
 }
 
-export const DEFAULT_ROLE_OPERATIONAL_EXPENSES: ExpenseEntity[] = [
-  // ── Today's Fresh Cycle Operational Expenses ──────────────────────────────
-  {
-    id: 'exp-role-sec-today',
-    code: 'EXP-SEC-TODAY-001',
-    category: 'Client Hospitality',
-    type: 'internal',
-    amountMinor: 32000, // GHS 320.00
-    incurredOn: dayjs().format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Executive client lounge refreshments, mineral water packs & coffee beans for morning meetings',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().toISOString(),
-    updatedAt: dayjs().toISOString(),
-  },
-  {
-    id: 'exp-role-bm-today',
-    code: 'EXP-BM-TODAY-001',
-    category: 'Power & Fuel',
-    type: 'internal',
-    amountMinor: 65000, // GHS 650.00
-    incurredOn: dayjs().format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Standby generator diesel fuel replenishment for showroom continuity',
-    status: 'pending',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().toISOString(),
-    updatedAt: dayjs().toISOString(),
-  },
-  {
-    id: 'exp-role-mkt-today',
-    code: 'EXP-MKT-TODAY-001',
-    category: 'Digital Media Ads',
-    type: 'external',
-    amountMinor: 120000, // GHS 1,200.00
-    incurredOn: dayjs().format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Social media sponsored video ad promotion for weekend land exhibition',
-    status: 'pending',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().toISOString(),
-    updatedAt: dayjs().toISOString(),
-  },
-
-  // ── Secretary Role Expenses ───────────────────────────────────────────────
-  {
-    id: 'exp-role-sec-001',
-    code: 'EXP-SEC-2026-001',
-    category: 'Client Hospitality',
-    type: 'internal',
-    amountMinor: 145000, // GHS 1,450.00
-    incurredOn: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Executive client lounge refreshments, mineral water packs & coffee beans for investor meetings',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(1, 'day').toISOString(),
-    updatedAt: dayjs().subtract(1, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-sec-002',
-    code: 'EXP-SEC-2026-002',
-    category: 'Office Supplies',
-    type: 'internal',
-    amountMinor: 85000, // GHS 850.00
-    incurredOn: dayjs().subtract(3, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Corporate visitor logbooks, branded presentation folders, toner cartridges & paperwork reams',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(3, 'day').toISOString(),
-    updatedAt: dayjs().subtract(3, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-sec-003',
-    code: 'EXP-SEC-2026-003',
-    category: 'Courier & Dispatch',
-    type: 'internal',
-    amountMinor: 65000, // GHS 650.00
-    incurredOn: dayjs().subtract(5, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Express international courier dispatch of executed land deeds & indentures to diaspora buyers',
-    status: 'approved',
-    recordedByUserRole: 'secretary',
-    createdAt: dayjs().subtract(5, 'day').toISOString(),
-    updatedAt: dayjs().subtract(5, 'day').toISOString(),
-  },
-
-  // ── Marketing Director Role Expenses ──────────────────────────────────────
-  {
-    id: 'exp-role-mkt-001',
-    code: 'EXP-MKT-2026-001',
-    category: 'Mega Billboard & Out-Of-Home',
-    type: 'external',
-    amountMinor: 1250000, // GHS 12,500.00
-    incurredOn: dayjs().subtract(2, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Airport bypass highway mega-billboard hoarding rental & night illumination maintenance',
-    status: 'approved',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(2, 'day').toISOString(),
-    updatedAt: dayjs().subtract(2, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-mkt-002',
-    code: 'EXP-MKT-2026-002',
-    category: 'Property Expo & Roadshow',
-    type: 'external',
-    amountMinor: 680000, // GHS 6,800.00
-    incurredOn: dayjs().subtract(4, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Accra International Conference Centre Real Estate Summit exhibition booth & roll-up banners',
-    status: 'approved',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(4, 'day').toISOString(),
-    updatedAt: dayjs().subtract(4, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-mkt-003',
-    code: 'EXP-MKT-2026-003',
-    category: 'Digital Media Ads',
-    type: 'external',
-    amountMinor: 420000, // GHS 4,200.00
-    incurredOn: dayjs().subtract(6, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Targeted Google search and social media promotional campaigns for gated community plots',
-    status: 'approved',
-    recordedByUserRole: 'marketing_director',
-    createdAt: dayjs().subtract(6, 'day').toISOString(),
-    updatedAt: dayjs().subtract(6, 'day').toISOString(),
-  },
-
-  // ── Branch Manager Role Expenses ──────────────────────────────────────────
-  {
-    id: 'exp-role-bm-001',
-    code: 'EXP-BM-2026-001',
-    category: 'Power & Fuel',
-    type: 'internal',
-    amountMinor: 240000, // GHS 2,400.00
-    incurredOn: dayjs().subtract(1, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Diesel delivery for 60kVA standby generator to maintain uninterrupted showroom operations',
-    status: 'approved',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(1, 'day').toISOString(),
-    updatedAt: dayjs().subtract(1, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-bm-002',
-    code: 'EXP-BM-2026-002',
-    category: 'Logistics & Transit',
-    type: 'internal',
-    amountMinor: 180000, // GHS 1,800.00
-    incurredOn: dayjs().subtract(3, 'day').format('YYYY-MM-DD'),
-    branchId: 'b3',
-    branchName: 'Takoradi Branch',
-    description: 'Client site inspection utility vehicle fuel, expressway tolls & weekend site viewing transport',
-    status: 'approved',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(3, 'day').toISOString(),
-    updatedAt: dayjs().subtract(3, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-bm-003',
-    code: 'EXP-BM-2026-003',
-    category: 'Premises Repairs',
-    type: 'internal',
-    amountMinor: 120000, // GHS 1,200.00
-    incurredOn: dayjs().subtract(7, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Branch showroom air conditioning preventive servicing and compound security light repairs',
-    status: 'approved',
-    recordedByUserRole: 'branch_manager',
-    createdAt: dayjs().subtract(7, 'day').toISOString(),
-    updatedAt: dayjs().subtract(7, 'day').toISOString(),
-  },
-
-  // ── Accounts & Finance Role Expenses ──────────────────────────────────────
-  {
-    id: 'exp-role-acc-001',
-    code: 'EXP-ACC-2026-001',
-    category: 'Legal & Regulatory',
-    type: 'internal',
-    amountMinor: 350000, // GHS 3,500.00
-    incurredOn: dayjs().subtract(2, 'day').format('YYYY-MM-DD'),
-    branchId: 'b2',
-    branchName: 'Accra Central',
-    description: 'Official title search fees, cadastral survey verification & zoning clearances at Lands Commission',
-    status: 'approved',
-    recordedByUserRole: 'accounts',
-    createdAt: dayjs().subtract(2, 'day').toISOString(),
-    updatedAt: dayjs().subtract(2, 'day').toISOString(),
-  },
-  {
-    id: 'exp-role-acc-002',
-    code: 'EXP-ACC-2026-002',
-    category: 'Audit & Compliance',
-    type: 'internal',
-    amountMinor: 210000, // GHS 2,100.00
-    incurredOn: dayjs().subtract(8, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'GRA stamp duty assessment filing and quarterly tax compliance documentation retainers',
-    status: 'approved',
-    recordedByUserRole: 'accounts',
-    createdAt: dayjs().subtract(8, 'day').toISOString(),
-    updatedAt: dayjs().subtract(8, 'day').toISOString(),
-  },
-
-  // ── Administration Role Expenses ──────────────────────────────────────────
-  {
-    id: 'exp-role-adm-001',
-    code: 'EXP-ADM-2026-001',
-    category: 'Cloud & IT Systems',
-    type: 'internal',
-    amountMinor: 560000, // GHS 5,600.00
-    incurredOn: dayjs().subtract(5, 'day').format('YYYY-MM-DD'),
-    branchId: 'b1',
-    branchName: 'Kumasi Main',
-    description: 'Omark ERP cloud server hosting, automated daily backups & enterprise SSL security certificate renewal',
-    status: 'approved',
-    recordedByUserRole: 'admin',
-    createdAt: dayjs().subtract(5, 'day').toISOString(),
-    updatedAt: dayjs().subtract(5, 'day').toISOString(),
-  },
-];
+export const DEFAULT_ROLE_OPERATIONAL_EXPENSES: ExpenseEntity[] = [];
 
 export function normalizeExpenseEntity(raw: any): ExpenseEntity {
   if (!raw) return raw;
@@ -492,9 +255,11 @@ export function mergeExpenses(
   const deletedIds = getDeletedExpenseIds();
 
   // 1. Seed fallback list first (if not deleted and not dummy)
-  for (const item of fallbackList) {
-    if (item && item.id && !deletedIds.has(item.id) && !isDummyFuelExpense(item)) {
-      map.set(item.id, normalizeExpenseEntity(item));
+  if (Array.isArray(fallbackList)) {
+    for (const item of fallbackList) {
+      if (item && item.id && !deletedIds.has(item.id) && !isDummyFuelExpense(item)) {
+        map.set(item.id, normalizeExpenseEntity(item));
+      }
     }
   }
 
@@ -522,8 +287,7 @@ export function mergeExpenses(
     }
   } catch {}
 
-  const result = Array.from(map.values());
-  return result.length > 0 ? result : DEFAULT_ROLE_OPERATIONAL_EXPENSES.filter((e) => !deletedIds.has(e.id));
+  return Array.from(map.values());
 }
 
 // ── Read Synchronously from LocalStorage with Resilient Baseline Seeding ──────
@@ -540,7 +304,7 @@ export function getStoredExpenses(): ExpenseEntity[] {
           if (Array.isArray(idb) && idb.length > 0) {
             const cleanIdb = idb.filter((e) => !isDummyFuelExpense(e) && !deletedIds.has(e.id));
             if (cleanIdb.length > 0) {
-              const merged = mergeExpenses(cleanIdb, DEFAULT_ROLE_OPERATIONAL_EXPENSES);
+              const merged = mergeExpenses(cleanIdb, []);
               localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(merged));
               window.dispatchEvent(new Event(EXPENSES_CHANGE_EVENT));
             }
@@ -548,12 +312,7 @@ export function getStoredExpenses(): ExpenseEntity[] {
         }).catch(() => {});
       }
 
-      // Immediately return baseline DEFAULT_ROLE_OPERATIONAL_EXPENSES so page is NEVER empty
-      const baseline = DEFAULT_ROLE_OPERATIONAL_EXPENSES.filter((e) => !deletedIds.has(e.id));
-      if (typeof window !== 'undefined') {
-        localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(baseline));
-      }
-      return baseline;
+      return [];
     }
 
     const parsed = JSON.parse(raw);
@@ -566,38 +325,13 @@ export function getStoredExpenses(): ExpenseEntity[] {
         return true;
       });
 
-      // If clean is empty (e.g. everything was purged or empty array), fallback to baseline
-      if (clean.length === 0) {
-        const baseline = DEFAULT_ROLE_OPERATIONAL_EXPENSES.filter((e) => !deletedIds.has(e.id));
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(baseline));
-        }
-        return baseline;
-      }
-
-      // Guarantee all 4 main departments are represented: if a role is missing from clean, supplement it
-      const presentRoles = new Set(clean.map((e) => (e.recordedByUserRole || '').toLowerCase()));
-      const missingBaseline = DEFAULT_ROLE_OPERATIONAL_EXPENSES.filter(
-        (def) => !deletedIds.has(def.id) && !presentRoles.has((def.recordedByUserRole || '').toLowerCase())
-      );
-      const fullList = missingBaseline.length > 0 ? [...clean, ...missingBaseline] : clean;
-
-      if (clean.length !== parsed.length || missingBaseline.length > 0) {
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(fullList));
-        }
-      }
-      return fullList;
+      return clean;
     }
 
-    const baseline = DEFAULT_ROLE_OPERATIONAL_EXPENSES.filter((e) => !deletedIds.has(e.id));
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(baseline));
-    }
-    return baseline;
+    return [];
   } catch (err) {
     console.warn('[Omark Expenses] Failed to read stored expenses:', err);
-    return DEFAULT_ROLE_OPERATIONAL_EXPENSES;
+    return [];
   }
 }
 
@@ -671,7 +405,7 @@ export async function rehydrateAllExpensesData(): Promise<ExpenseEntity[]> {
           settings.deletedExpenseIds.forEach((id: string) => recordDeletedExpenseId(id));
         }
         if (Array.isArray(settings.expensesStore) && settings.expensesStore.length > 0) {
-          const merged = mergeExpenses(settings.expensesStore, DEFAULT_ROLE_OPERATIONAL_EXPENSES);
+          const merged = mergeExpenses(settings.expensesStore, []);
           if (typeof window !== 'undefined') {
             localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(merged));
             window.dispatchEvent(new Event(EXPENSES_CHANGE_EVENT));
@@ -689,7 +423,7 @@ export async function rehydrateAllExpensesData(): Promise<ExpenseEntity[]> {
   try {
     const idbExpenses = await getIndexedDBExpenses();
     if (Array.isArray(idbExpenses) && idbExpenses.length > 0) {
-      const merged = mergeExpenses(idbExpenses, DEFAULT_ROLE_OPERATIONAL_EXPENSES);
+      const merged = mergeExpenses(idbExpenses, []);
       if (typeof window !== 'undefined') {
         localStorage.setItem(EXPENSES_STORAGE_KEY, JSON.stringify(merged));
         window.dispatchEvent(new Event(EXPENSES_CHANGE_EVENT));

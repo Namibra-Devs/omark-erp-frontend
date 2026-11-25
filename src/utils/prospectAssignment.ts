@@ -1003,16 +1003,23 @@ export function consolidateAllAppointments(
  * Ensures all staff and admin dashboards share an identical, complete appointment dataset.
  */
 export function synthesizeAllAppointments(
-  appointmentSources: (any[] | undefined | null)[],
+  appointmentSources: (any[] | undefined | null)[] | any[],
   allInteractions: any[] = [],
   allProspects: Prospect[] = []
 ): any[] {
-  const baseAppointments = consolidateAllAppointments(...appointmentSources);
+  const sourcesArray = Array.isArray(appointmentSources) && Array.isArray(appointmentSources[0])
+    ? (appointmentSources as any[][])
+    : [appointmentSources as any[]];
+  const baseAppointments = consolidateAllAppointments(...sourcesArray);
+  if (!Array.isArray(baseAppointments) || baseAppointments.length === 0) {
+    return [];
+  }
+
   const interactionsPool = Array.isArray(allInteractions) && allInteractions.length > 0
     ? allInteractions
     : getStoredInteractions();
 
-  // 1. Resolve creator and attribution for all base appointments (aligns with docs/MISSING_ENDPOINTS.md Section 3.1)
+  // 1. Resolve creator and attribution for all real base appointments (aligns with docs/MISSING_ENDPOINTS.md Section 3.1)
   const resolvedBase = baseAppointments.map((appt) => {
     if (!appt || !appt.id) return appt;
 
@@ -1102,106 +1109,7 @@ export function synthesizeAllAppointments(
     };
   });
 
-  const seenIds = new Set<string>(resolvedBase.map((a) => String(a.id)));
-  const seenProspects = new Set<string>(resolvedBase.filter((a) => a.prospectId).map((a) => String(a.prospectId)));
-  const list = [...resolvedBase];
-
-  // 2. Incorporate booking records from interactions
-  interactionsPool.forEach((inter) => {
-    if (!inter) return;
-    const apptId = inter.appointmentId;
-    if (apptId && !seenIds.has(String(apptId))) {
-      seenIds.add(String(apptId));
-      if (inter.prospectId) seenProspects.add(String(inter.prospectId));
-      const creatorId = inter.loggedByUserId || (inter as any).userId;
-      const creatorName = inter.loggedByUserName || (inter as any).userName;
-      list.push({
-        id: String(apptId),
-        prospectId: inter.prospectId,
-        customerId: inter.customerId,
-        source: 'staff',
-        scheduledFor: inter.occurredAt || inter.createdAt,
-        status: 'scheduled',
-        reason: inter.response || 'Staff Booking Scheduled',
-        createdBy: creatorId,
-        createdByUserId: creatorId,
-        createdByName: creatorName,
-        assignedUserId: creatorId,
-        assignedUserName: creatorName,
-        staffId: creatorId,
-        staffName: creatorName,
-        createdAt: inter.createdAt || inter.occurredAt,
-        updatedAt: inter.createdAt || inter.occurredAt,
-      });
-    }
-  });
-
-  // 3. Incorporate prospects whose status is meeting_scheduled or meeting_completed, or have inspection/meeting notes
-  (allProspects || []).forEach((p) => {
-    if (!p || !p.id) return;
-    const notesLower = String(p.notes || '').toLowerCase();
-    const reasonLower = String(p.reasonForContact || '').toLowerCase();
-    const hasMeetingNote =
-      notesLower.includes('meet') ||
-      notesLower.includes('appoint') ||
-      notesLower.includes('inspect') ||
-      notesLower.includes('visit') ||
-      reasonLower.includes('meet') ||
-      reasonLower.includes('appoint') ||
-      reasonLower.includes('inspect') ||
-      reasonLower.includes('visit');
-
-    const isMeetingStatus =
-      p.status === 'meeting_scheduled' ||
-      p.status === 'meeting_completed' ||
-      (p.status as any) === 'scheduled' ||
-      (p.status === 'postponed' && hasMeetingNote) ||
-      hasMeetingNote;
-
-    if (isMeetingStatus && !seenProspects.has(String(p.id))) {
-      seenProspects.add(String(p.id));
-      const meetingId = `prospect_meeting_${p.id}`;
-      if (!seenIds.has(meetingId)) {
-        seenIds.add(meetingId);
-        const mappedStatus =
-          p.status === 'meeting_completed'
-            ? 'completed'
-            : p.status === 'postponed'
-            ? 'postponed'
-            : 'scheduled';
-
-        const creatorId =
-          p.assignedUserId ||
-          p.createdByUserId ||
-          p.createdBy ||
-          (p as any).creatorId ||
-          (p as any).registeredByUserId ||
-          (p as any).recordedByUserId;
-
-        const creatorName = (p as any).assignedUserName || (p as any).createdByName;
-
-        list.push({
-          id: meetingId,
-          prospectId: p.id,
-          source: 'staff',
-          scheduledFor: p.updatedAt || p.createdAt,
-          status: mappedStatus,
-          reason: p.notes || p.reasonForContact || 'Consultation Meeting Scheduled',
-          createdBy: creatorId,
-          createdByUserId: creatorId,
-          createdByName: creatorName,
-          assignedUserId: creatorId,
-          assignedUserName: creatorName,
-          staffId: creatorId,
-          staffName: creatorName,
-          createdAt: p.createdAt,
-          updatedAt: p.updatedAt,
-        });
-      }
-    }
-  });
-
-  return consolidateAllAppointments(list);
+  return consolidateAllAppointments(resolvedBase);
 }
 
 /**
@@ -1307,10 +1215,36 @@ export const getAppointmentDueStatus = (appointment: {
   scheduledFor?: string;
   date?: string;
   time?: string;
-}): AppointmentDueStatus => {
-  const status = String(appointment.status || '').toLowerCase();
-  // Completed, attended, canceled or no_show appointments must NEVER show due/overdue flags
-  if (status === 'completed' || status === 'canceled' || status === 'no_show') {
+  feedback?: string;
+  attended?: boolean;
+  isAttended?: boolean;
+  attendedByUserId?: string;
+  attendedByName?: string;
+  [key: string]: any;
+} | null | undefined): AppointmentDueStatus => {
+  if (!appointment) return 'none';
+  const status = String(appointment.status || '').toLowerCase().trim();
+  const feedbackLower = String(appointment.feedback || '').toLowerCase();
+
+  // Completed, attended, canceled or no_show appointments NEVER create due/overdue flags
+  if (
+    status === 'completed' ||
+    status === 'attended' ||
+    status === 'canceled' ||
+    status === 'cancelled' ||
+    status === 'no_show' ||
+    status === 'no-show' ||
+    status === 'noshow' ||
+    status === 'closed' ||
+    status === 'done' ||
+    status === 'fulfilled' ||
+    appointment.attended === true ||
+    appointment.isAttended === true ||
+    Boolean(appointment.attendedByUserId) ||
+    Boolean(appointment.attendedByName) ||
+    feedbackLower.includes('attended') ||
+    feedbackLower.includes('completed')
+  ) {
     return 'none';
   }
 

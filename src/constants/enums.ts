@@ -73,6 +73,7 @@ export const appointmentSourceLabels: Record<AppointmentSource, string> = {
 export const appointmentStatusLabels: Record<AppointmentStatus, string> = {
   scheduled: 'Scheduled',
   completed: 'Completed',
+  attended: 'Attended',
   canceled: 'Canceled',
   no_show: 'No Show',
   postponed: 'Postponed',
@@ -81,6 +82,7 @@ export const appointmentStatusLabels: Record<AppointmentStatus, string> = {
 export const appointmentStatusColors: Record<AppointmentStatus, string> = {
   scheduled: 'blue',
   completed: 'green',
+  attended: 'green',
   canceled: 'red',
   no_show: 'gold',
   postponed: 'orange',

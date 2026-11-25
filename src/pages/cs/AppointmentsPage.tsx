@@ -1,6 +1,7 @@
 // src/pages/cs/AppointmentsPage.tsx
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query';
 import {
   Button, Space, Modal, Form, Input, Select, Row, Col, Table,
   Tag, message, Typography, Card, Avatar, Badge, Tooltip,
@@ -61,6 +62,7 @@ import {
   useAppointmentsQuery,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
+  clearAllAppointmentsStorage,
   type Appointment as ApiAppointment,
   type AppointmentStatus,
   type AppointmentSource,
@@ -112,12 +114,15 @@ const { RangePicker } = DatePicker;
 const getStatusConfig = (status: string) => {
   const configs: Record<string, { color: string; icon: any; label: string }> = {
     scheduled: { color: '#1890ff', icon: <ClockCircleOutlined />, label: 'Scheduled' },
-    completed: { color: '#722ed1', icon: <CheckCircleOutlined />, label: 'Completed' },
+    attended: { color: '#52c41a', icon: <CheckCircleOutlined />, label: 'Attended' },
+    completed: { color: '#52c41a', icon: <CheckCircleOutlined />, label: 'Completed' },
     canceled: { color: '#ff4d4f', icon: <CloseCircleOutlined />, label: 'Canceled' },
+    cancelled: { color: '#ff4d4f', icon: <CloseCircleOutlined />, label: 'Canceled' },
     no_show: { color: '#faad14', icon: <WarningOutlined />, label: 'No Show' },
     postponed: { color: '#fa8c16', icon: <FieldTimeOutlined />, label: 'Postponed' },
   };
-  return configs[status] || configs.scheduled;
+  const key = (status || '').toLowerCase().trim();
+  return configs[key] || configs.scheduled;
 };
 
 // Helper to get source config
@@ -131,6 +136,7 @@ const getSourceConfig = (source: string) => {
 
 export const AppointmentsPage: React.FC = () => {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { user, hasRole } = useAuth();
   const isAdmin = hasRole(['admin', 'super_admin']);
 
@@ -270,6 +276,32 @@ export const AppointmentsPage: React.FC = () => {
     } catch (err) {
       message.error('Failed to export local data backup');
     }
+  };
+
+  // Clear all locally stored appointments and status overrides
+  const handleClearLocalAppointments = () => {
+    Modal.confirm({
+      title: 'Clear Stored Appointments & Cache?',
+      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+      content:
+        'This will clear all locally cached appointments and status overrides from your browser, resetting your view directly to what is currently in the database. Any mock or phantom records will be permanently removed.',
+      okText: 'Clear All Now',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          clearAllAppointmentsStorage();
+          await queryClient.invalidateQueries({ queryKey: ['appointments'] });
+          await queryClient.refetchQueries({ queryKey: ['appointments'] });
+          message.success('Appointments cache and offline storage cleared successfully.');
+          refetchAppointments();
+        } catch (err) {
+          clearAllAppointmentsStorage();
+          message.success('Appointments cache cleared.');
+          refetchAppointments();
+        }
+      },
+    });
   };
 
   // Run dry-run backfill classification on live appointments + local data
@@ -778,6 +810,18 @@ export const AppointmentsPage: React.FC = () => {
         matchesStatus = getAppointmentDueStatus(app) === 'overdue';
       } else if (statusFilter === 'due_today') {
         matchesStatus = getAppointmentDueStatus(app) === 'due_today';
+      } else if (statusFilter === 'completed') {
+        const s = (app.status || '').toLowerCase();
+        matchesStatus =
+          s === 'completed' ||
+          s === 'attended' ||
+          (app as any).attended === true ||
+          (app as any).isAttended === true ||
+          Boolean((app as any).attendedByUserId) ||
+          Boolean((app as any).attendedByName) ||
+          String(app.feedback || '').toLowerCase().includes('attended');
+      } else if (statusFilter === 'canceled') {
+        matchesStatus = app.status === 'canceled' || (app.status as string) === 'cancelled';
       } else if (statusFilter !== 'all') {
         matchesStatus = app.status === statusFilter;
       }
@@ -873,8 +917,19 @@ export const AppointmentsPage: React.FC = () => {
       dueToday: effectiveScopedList.filter((a: Appointment) => getAppointmentDueStatus(a) === 'due_today').length,
       scheduled: effectiveScopedList.filter((a: Appointment) => a.status === 'scheduled').length,
       postponed: effectiveScopedList.filter((a: Appointment) => a.status === 'postponed').length,
-      completed: effectiveScopedList.filter((a: Appointment) => a.status === 'completed').length,
-      canceled: effectiveScopedList.filter((a: Appointment) => a.status === 'canceled').length,
+      completed: effectiveScopedList.filter((a: Appointment) => {
+        const s = (a.status || '').toLowerCase();
+        return (
+          s === 'completed' ||
+          s === 'attended' ||
+          (a as any).attended === true ||
+          (a as any).isAttended === true ||
+          Boolean((a as any).attendedByUserId) ||
+          Boolean((a as any).attendedByName) ||
+          String(a.feedback || '').toLowerCase().includes('attended')
+        );
+      }).length,
+      canceled: effectiveScopedList.filter((a: Appointment) => a.status === 'canceled' || (a.status as string) === 'cancelled').length,
       noShow: effectiveScopedList.filter((a: Appointment) => a.status === 'no_show').length,
     };
   }, [effectiveScopedList]);
@@ -1592,8 +1647,17 @@ export const AppointmentsPage: React.FC = () => {
       dataIndex: 'status',
       key: 'status',
       width: 150,
-      render: (status: string) => {
-        const config = getStatusConfig(status);
+      render: (status: string, record: Appointment) => {
+        const isAttended =
+          status === 'attended' ||
+          status === 'completed' ||
+          (record as any).attended === true ||
+          (record as any).isAttended === true ||
+          Boolean((record as any).attendedByUserId) ||
+          Boolean((record as any).attendedByName) ||
+          String(record.feedback || '').toLowerCase().includes('attended');
+        const effectiveStatus = isAttended ? (status === 'attended' ? 'attended' : 'completed') : status;
+        const config = getStatusConfig(effectiveStatus);
         return (
           <Tag color={config.color} icon={config.icon}>
             {config.label}
@@ -1685,9 +1749,18 @@ export const AppointmentsPage: React.FC = () => {
       fixed: 'right' as const,
       render: (_: any, record: Appointment) => {
         const isEditable = isAppointmentEditableByUser(record, user, allUsers, allInteractions);
+        const isAttendedOrCompleted =
+          record.status === 'completed' ||
+          record.status === 'attended' ||
+          (record as any).attended === true ||
+          (record as any).isAttended === true ||
+          Boolean((record as any).attendedByUserId) ||
+          Boolean((record as any).attendedByName) ||
+          String(record.feedback || '').toLowerCase().includes('attended');
+
         return (
           <Space>
-            {isEditable && record.status !== 'completed' && record.status !== 'canceled' && (
+            {isEditable && !isAttendedOrCompleted && record.status !== 'canceled' && (record.status as string) !== 'cancelled' && (
               <Tooltip title="Mark as Attended / Completed (clears due & overdue flags)">
                 <Button
                   type="primary"
@@ -1763,13 +1836,13 @@ export const AppointmentsPage: React.FC = () => {
                 onConfirm={() => handleCancelAppointment(record.id)}
                 okText="Yes"
                 cancelText="No"
-                disabled={record.status === 'canceled' || record.status === 'completed'}
+                disabled={record.status === 'canceled' || (record.status as string) === 'cancelled' || isAttendedOrCompleted}
               >
                 <Tooltip title="Cancel">
                   <Button
                     danger
                     icon={<CloseCircleOutlined />}
-                    disabled={record.status === 'canceled' || record.status === 'completed'}
+                    disabled={record.status === 'canceled' || (record.status as string) === 'cancelled' || isAttendedOrCompleted}
                   />
                 </Tooltip>
               </Popconfirm>
@@ -1909,6 +1982,12 @@ export const AppointmentsPage: React.FC = () => {
             : 'View and manage your individual client appointments. Showing appointments created by you.'
         }
         actions={[
+          {
+            label: 'Clear Stored Appointments',
+            onClick: handleClearLocalAppointments,
+            icon: <DeleteOutlined />,
+            danger: true,
+          },
           ...(user?.role === 'admin'
             ? [
                 {
@@ -2682,7 +2761,7 @@ export const AppointmentsPage: React.FC = () => {
             <Select placeholder="Select new status">
               <Option value="scheduled">Scheduled</Option>
               <Option value="postponed">Postponed</Option>
-              <Option value="completed">Completed</Option>
+              <Option value="completed">Completed / Attended</Option>
               <Option value="canceled">Canceled</Option>
               <Option value="no_show">No Show</Option>
             </Select>

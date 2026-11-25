@@ -22,10 +22,20 @@ export const StatusTag: React.FC<StatusTagProps> = ({ status, type = 'prospect' 
   let color: string;
 
   switch (type) {
-    case 'appointment':
-      label = appointmentStatusLabels[status as keyof typeof appointmentStatusLabels] || status;
-      color = appointmentStatusColors[status as keyof typeof appointmentStatusColors] || 'default';
+    case 'appointment': {
+      const norm = String(status || '').toLowerCase().trim();
+      if (norm === 'attended' || norm === 'completed') {
+        label = norm === 'attended' ? 'Attended' : 'Completed';
+        color = 'green';
+      } else if (norm === 'cancelled' || norm === 'canceled') {
+        label = 'Canceled';
+        color = 'red';
+      } else {
+        label = appointmentStatusLabels[status as keyof typeof appointmentStatusLabels] || status;
+        color = appointmentStatusColors[status as keyof typeof appointmentStatusColors] || 'default';
+      }
       break;
+    }
     case 'paymentPlan':
       label = paymentPlanStatusLabels[status as keyof typeof paymentPlanStatusLabels] || status;
       color = paymentPlanStatusColors[status as keyof typeof paymentPlanStatusColors] || 'default';

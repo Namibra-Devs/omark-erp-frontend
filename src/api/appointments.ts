@@ -153,6 +153,21 @@ export interface AppointmentStatusOverride {
 }
 
 /**
+ * Completely purges all stored appointments, offline mockups, and local status overrides.
+ */
+export function clearAllAppointmentsStorage(): void {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(APPOINTMENTS_STORAGE_KEY);
+      localStorage.removeItem(APPOINTMENTS_STATUS_OVERRIDES_KEY);
+      window.dispatchEvent(new Event('omark-appointments-changed'));
+    } catch (err) {
+      console.warn('Failed to clear appointments storage:', err);
+    }
+  }
+}
+
+/**
  * Accessor for locally overridden appointment statuses (e.g. non-admin updates, offline updates).
  */
 export function getAppointmentStatusOverrides(): Record<string, AppointmentStatusOverride> {
@@ -272,11 +287,20 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
           });
         }
 
-        // Include any locally stored / offline created appointments
-        const storedAppointments = getStoredAppointments();
-        for (const stored of storedAppointments) {
-          if (stored && stored.id) {
-            allItems.push(stored);
+        // Normalize IDs from backend
+        allItems = allItems.map((item) => ({
+          ...item,
+          id: String(item.id || (item as any)._id || ''),
+        }));
+
+        // The live server database is authoritative: never resurrect stale local or mock appointments.
+        if (typeof window !== 'undefined') {
+          if (allItems.length === 0) {
+            // Database is cleared: purge local storage clean
+            localStorage.removeItem(APPOINTMENTS_STORAGE_KEY);
+            localStorage.removeItem(APPOINTMENTS_STATUS_OVERRIDES_KEY);
+          } else {
+            localStorage.setItem(APPOINTMENTS_STORAGE_KEY, JSON.stringify(allItems));
           }
         }
 
@@ -284,7 +308,7 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
         const statusOverrides = getAppointmentStatusOverrides();
         if (Object.keys(statusOverrides).length > 0) {
           allItems = allItems.map((item) => {
-            const ov = statusOverrides[item.id];
+            const ov = statusOverrides[item.id] || statusOverrides[(item as any)._id];
             if (ov) {
               return {
                 ...item,
@@ -355,8 +379,7 @@ export function useScopedAppointments(params?: AppointmentsListParams, enabled =
   const rawServerItems = query.data?.items ?? [];
 
   const rawItems = useMemo(() => {
-    const stored = getStoredAppointments();
-    return synthesizeAllAppointments([rawServerItems, stored], allInteractions, allProspects);
+    return synthesizeAllAppointments(rawServerItems, allInteractions, allProspects);
   }, [rawServerItems, allInteractions, allProspects]);
 
   const scopedAppointments = useMemo(() => {
@@ -407,9 +430,11 @@ export function useCreateAppointmentMutation() {
       try {
         const response = await apiClient.post<ApiResponse<Appointment>>('/appointments', requestBody);
         const data = unwrapData(response);
-        if (data && data.id) {
+        const recordId = data?.id || (data as any)?._id;
+        if (data && recordId) {
           const augmentedData: Appointment = {
             ...data,
+            id: String(recordId),
             createdBy: data.createdBy || user?.id,
             createdByUserId: data.createdByUserId || user?.id,
             createdByName: data.createdByName || staffFullName,
@@ -438,52 +463,14 @@ export function useCreateAppointmentMutation() {
 
           return augmentedData;
         }
+        return data as Appointment;
       } catch (error: any) {
-        console.info(
-          '[Omark Appointments] Server appointment creation fallback intercepted:',
+        console.warn(
+          '[Omark Appointments] Server appointment creation failed:',
           error?.response?.data?.message || error?.error?.message || error?.message
         );
+        throw error;
       }
-
-      // Safe local persistence fallback with full staff attribution
-      const newAppt: Appointment = {
-        id: `appt_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-        scheduledFor: payload.scheduledFor,
-        prospectId: payload.prospectId || undefined,
-        customerId: payload.customerId || undefined,
-        reason: payload.reason || undefined,
-        status: 'scheduled',
-        source: 'staff',
-        createdByUserId: user?.id,
-        createdBy: user?.id,
-        createdByName: staffFullName,
-        assignedUserId: payload.assignedUserId || user?.id,
-        assignedUserName: payload.assignedUserName || staffFullName,
-        staffId: payload.assignedUserId || user?.id,
-        staffName: payload.assignedUserName || staffFullName,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      saveStoredAppointment(newAppt);
-
-      // Directly update React Query caches so UI reflects new appointment instantaneously
-      queryClient.setQueriesData({ queryKey: appointmentsKeys.all }, (oldData: any) => {
-        if (!oldData) return { items: [newAppt], total: 1, page: 1, pageSize: 1000 };
-        if (Array.isArray(oldData)) {
-          return [newAppt, ...oldData.filter((i: any) => i.id !== newAppt.id)];
-        }
-        if (Array.isArray(oldData.items)) {
-          return {
-            ...oldData,
-            items: [newAppt, ...oldData.items.filter((item: any) => item.id !== newAppt.id)],
-            total: (oldData.total || 0) + 1,
-          };
-        }
-        return oldData;
-      });
-
-      return newAppt;
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
@@ -505,29 +492,43 @@ export function useUpdateAppointmentMutation() {
       try {
         const response = await apiClient.patch<ApiResponse<Appointment>>(`/appointments/${id}`, payload);
         const data = unwrapData(response);
+        const effectiveStatus = data?.status || payload.status;
+        const effectiveFeedback = (data as any)?.feedback !== undefined ? (data as any).feedback : payload.feedback;
+        const effectiveScheduledFor = data?.scheduledFor || payload.scheduledFor;
+
         saveAppointmentStatusOverride(id, {
-          status: data.status,
-          feedback: (data as any).feedback,
-          scheduledFor: data.scheduledFor,
-          updatedAt: data.updatedAt || now,
+          status: effectiveStatus,
+          feedback: effectiveFeedback,
+          scheduledFor: effectiveScheduledFor,
+          updatedAt: data?.updatedAt || now,
         });
-        saveStoredAppointment(data);
+
+        const updatedData: Appointment = {
+          ...data,
+          id,
+          status: effectiveStatus || 'scheduled',
+          feedback: effectiveFeedback,
+          scheduledFor: effectiveScheduledFor || now,
+          updatedAt: data?.updatedAt || now,
+        };
+
+        saveStoredAppointment(updatedData);
 
         queryClient.setQueriesData({ queryKey: appointmentsKeys.all }, (oldData: any) => {
           if (!oldData) return oldData;
           if (Array.isArray(oldData)) {
-            return oldData.map((item: any) => (item.id === id ? { ...item, ...data } : item));
+            return oldData.map((item: any) => (item.id === id ? { ...item, ...updatedData } : item));
           }
           if (Array.isArray(oldData.items)) {
             return {
               ...oldData,
-              items: oldData.items.map((item: any) => (item.id === id ? { ...item, ...data } : item)),
+              items: oldData.items.map((item: any) => (item.id === id ? { ...item, ...updatedData } : item)),
             };
           }
           return oldData;
         });
 
-        return data;
+        return updatedData;
       } catch (error: any) {
         console.info('[Omark Appointments] Server appointment status update fallback:', {
           id,
@@ -537,6 +538,7 @@ export function useUpdateAppointmentMutation() {
 
         saveAppointmentStatusOverride(id, {
           ...payload,
+          status: payload.status,
           updatedAt: now,
         });
 
@@ -625,7 +627,8 @@ export function usePublicBookAppointmentMutation() {
 export const getAppointmentStatusConfig = (status: AppointmentStatus) => {
   const configs: Record<AppointmentStatus, { color: string; icon: string; label: string }> = {
     scheduled: { color: '#1890ff', icon: '📅', label: 'Scheduled' },
-    completed: { color: '#722ed1', icon: '✔️', label: 'Completed' },
+    completed: { color: '#52c41a', icon: '✔️', label: 'Completed' },
+    attended: { color: '#52c41a', icon: '✔️', label: 'Attended' },
     canceled: { color: '#ff4d4f', icon: '❌', label: 'Canceled' },
     no_show: { color: '#faad14', icon: '⚠️', label: 'No Show' },
     postponed: { color: '#fa8c16', icon: '⏳', label: 'Postponed' },

@@ -27,7 +27,7 @@ export type InteractionChannel =
   | 'social_media' 
   | 'other';
 export type AppointmentSource = 'staff' | 'website';
-export type AppointmentStatus = 'scheduled' | 'completed' | 'canceled' | 'no_show' | 'postponed';
+export type AppointmentStatus = 'scheduled' | 'completed' | 'canceled' | 'no_show' | 'postponed' | 'attended';
 export type CustomerType = 'payment_plan' | 'fully_paid';
 export type PaymentPlanStatus = 'active' | 'completed' | 'defaulted' | 'cancelled';
 export type PaymentMethod = 'cash' | 'bank_transfer' | 'mobile_money' | 'cheque' | 'other';

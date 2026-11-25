@@ -83,6 +83,7 @@ import {
 } from '@/api/appointments';
 import { useAllStaffInteractionsQuery } from '@/api/interactions';
 import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
+import { getAppointmentDueStatus } from '@/utils/prospectAssignment';
 import { roleLabels } from '@/constants/enums';
 import type { Role } from '@/types';
 import { useQueryClient } from '@tanstack/react-query';
@@ -247,24 +248,19 @@ export const CSProspectsPage: React.FC = () => {
   const prospects: Prospect[] = filterEntitiesByBranch(rawProspects, user, branches);
 
   // ── Calculate Due Appointments by Prospect ID ──────────────────────────────────
-  // Completed, canceled, or no_show appointments must NEVER create due/overdue flags
+  // Completed, attended, canceled, or no_show appointments must NEVER create due/overdue flags
   const dueProspectMap = React.useMemo(() => {
     const map: Record<string, Appointment> = {};
-    const endOfToday = dayjs().endOf('day');
 
     appointments.forEach((apt) => {
       if (!apt.prospectId) return;
-      const statusLower = String(apt.status || '').toLowerCase();
-      if (statusLower === 'completed' || statusLower === 'canceled' || statusLower === 'no_show') return;
-      const isScheduled = statusLower === 'scheduled' || statusLower === 'postponed';
-      if (!isScheduled) return;
+      const dueStatus = getAppointmentDueStatus(apt);
+      if (dueStatus !== 'overdue' && dueStatus !== 'due_today') return;
 
       const aptTime = dayjs(apt.scheduledFor);
-      if (aptTime.isBefore(endOfToday)) {
-        // Keep the earliest due appointment
-        if (!map[apt.prospectId] || aptTime.isBefore(dayjs(map[apt.prospectId].scheduledFor))) {
-          map[apt.prospectId] = apt;
-        }
+      // Keep the earliest due appointment
+      if (!map[apt.prospectId] || aptTime.isBefore(dayjs(map[apt.prospectId].scheduledFor))) {
+        map[apt.prospectId] = apt;
       }
     });
 

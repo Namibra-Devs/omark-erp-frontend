@@ -79,6 +79,7 @@ import {
   consolidateAllProspects,
   resolveProspectAttribution,
   canWriteProspects,
+  getAppointmentDueStatus,
 } from '@/utils/prospectAssignment';
 import { getAppointmentCreatorId } from '@/utils/appointmentScoping';
 import { roleLabels } from '@/constants/enums';
@@ -268,23 +269,18 @@ export const ProspectsPage: React.FC = () => {
     return () => window.removeEventListener('omark-prospects-changed', handleProspectsChanged);
   }, [refetch]);
 
-  // Due appointments map - completed, canceled or no_show appointments NEVER create due flags
+  // Due appointments map - completed, attended, canceled or no_show appointments NEVER create due flags
   const dueProspectMap = useMemo(() => {
     const map: Record<string, any> = {};
-    const endOfToday = dayjs().endOf('day');
 
     appointments.forEach((apt) => {
       if (!apt.prospectId) return;
-      const statusLower = String(apt.status || '').toLowerCase();
-      if (statusLower === 'completed' || statusLower === 'canceled' || statusLower === 'no_show') return;
-      const isScheduled = statusLower === 'scheduled' || statusLower === 'postponed';
-      if (!isScheduled) return;
+      const dueStatus = getAppointmentDueStatus(apt);
+      if (dueStatus !== 'overdue' && dueStatus !== 'due_today') return;
 
       const aptTime = dayjs(apt.scheduledFor);
-      if (aptTime.isBefore(endOfToday)) {
-        if (!map[apt.prospectId] || aptTime.isBefore(dayjs(map[apt.prospectId].scheduledFor))) {
-          map[apt.prospectId] = apt;
-        }
+      if (!map[apt.prospectId] || aptTime.isBefore(dayjs(map[apt.prospectId].scheduledFor))) {
+        map[apt.prospectId] = apt;
       }
     });
 
