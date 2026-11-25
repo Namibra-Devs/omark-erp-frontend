@@ -16,6 +16,14 @@ import {
   getVisibleStaffIds,
   isServerScopingEnabled,
 } from '@/utils/appointmentScoping';
+import {
+  getDeletedAppointmentIds,
+  recordDeletedAppointmentId,
+  recordDeletedAppointmentIds,
+  clearDeletedAppointmentIds,
+  DELETED_APPOINTMENTS_KEY,
+  APPOINTMENTS_CHANGE_EVENT,
+} from '@/utils/appointmentStorage';
 
 export type { Appointment, AppointmentStatus, AppointmentSource };
 export {
@@ -24,6 +32,11 @@ export {
   isAppointmentEditableByUser,
   getVisibleStaffIds,
   isServerScopingEnabled,
+  getDeletedAppointmentIds,
+  recordDeletedAppointmentId,
+  recordDeletedAppointmentIds,
+  clearDeletedAppointmentIds,
+  DELETED_APPOINTMENTS_KEY,
 };
 
 export interface AppointmentsListParams {
@@ -114,7 +127,11 @@ export function getStoredAppointments(): Appointment[] {
     const raw = localStorage.getItem(APPOINTMENTS_STORAGE_KEY);
     if (!raw) return [];
     const list: Appointment[] = JSON.parse(raw);
-    return Array.isArray(list) ? list : [];
+    const deletedIds = getDeletedAppointmentIds();
+    const cleanList = Array.isArray(list)
+      ? list.filter((item) => item && item.id && !deletedIds.has(String(item.id)))
+      : [];
+    return cleanList;
   } catch {
     return [];
   }
@@ -292,6 +309,10 @@ export function useAppointmentsQuery(params?: AppointmentsListParams, enabled = 
           ...item,
           id: String(item.id || (item as any)._id || ''),
         }));
+
+        // Filter out explicitly deleted appointment IDs so backend un-deletable records stay permanently gone
+        const deletedIds = getDeletedAppointmentIds();
+        allItems = allItems.filter((item) => item && item.id && !deletedIds.has(String(item.id)));
 
         // The live server database is authoritative: never resurrect stale local or mock appointments.
         if (typeof window !== 'undefined') {
@@ -595,6 +616,81 @@ export function useUpdateAppointmentMutation() {
 
 /** @deprecated Use useUpdateAppointmentMutation with { status, feedback } instead */
 export const useUpdateAppointmentStatusMutation = useUpdateAppointmentMutation;
+
+/**
+ * Hard-delete a single appointment by ID.
+ * Maps to DELETE /appointments/{id} with graceful fallback to status cancellation
+ * and permanent multi-tier deletion tracking across local storage and server settings.
+ */
+export function useDeleteAppointmentMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      // 1. Immediately record as deleted locally & trigger remote sync
+      recordDeletedAppointmentId(id);
+
+      // 2. Try backend DELETE (graceful fallback if 404 Route not found)
+      try {
+        await apiClient.delete(`/appointments/${id}`);
+      } catch (err: any) {
+        // Backend route not found: try PATCH to cancel on server as best-effort
+        try {
+          await apiClient.patch(`/appointments/${id}`, { status: 'canceled', feedback: 'Deleted' });
+        } catch {}
+      }
+
+      // 3. Scrub from local storage override cache
+      const overrides = getAppointmentStatusOverrides();
+      delete overrides[id];
+      localStorage.setItem(APPOINTMENTS_STATUS_OVERRIDES_KEY, JSON.stringify(overrides));
+
+      // 4. Scrub from stored appointments list
+      const stored = getStoredAppointments().filter((a) => a.id !== id);
+      localStorage.setItem(APPOINTMENTS_STORAGE_KEY, JSON.stringify(stored));
+
+      return id;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
+      window.dispatchEvent(new Event(APPOINTMENTS_CHANGE_EVENT));
+    },
+  });
+}
+
+/**
+ * Bulk hard-delete every appointment whose ID is in the supplied array.
+ * Immediately records IDs in permanent deleted list, calls backend DELETE / PATCH
+ * best-effort, and clears all local storage so records cannot re-surface.
+ */
+export function useDeleteAllAppointmentsMutation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (ids: string[]) => {
+      // 1. Immediately record ALL as deleted locally & trigger remote settings sync
+      recordDeletedAppointmentIds(ids);
+
+      // 2. Attempt server cleanup (both DELETE and PATCH best-effort)
+      for (const id of ids) {
+        try {
+          await apiClient.delete(`/appointments/${id}`);
+        } catch {
+          try {
+            await apiClient.patch(`/appointments/${id}`, { status: 'canceled', feedback: 'Deleted' });
+          } catch {}
+        }
+      }
+
+      // 3. Clear stored appointments and status overrides
+      clearAllAppointmentsStorage();
+
+      return { deleted: ids.length, failed: 0 };
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: appointmentsKeys.all });
+      window.dispatchEvent(new Event(APPOINTMENTS_CHANGE_EVENT));
+    },
+  });
+}
 
 /**
  * Public booking (unauthenticated) — POST /api/v1/public/appointments

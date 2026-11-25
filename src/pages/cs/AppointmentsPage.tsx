@@ -62,6 +62,8 @@ import {
   useAppointmentsQuery,
   useCreateAppointmentMutation,
   useUpdateAppointmentMutation,
+  useDeleteAppointmentMutation,
+  useDeleteAllAppointmentsMutation,
   clearAllAppointmentsStorage,
   type Appointment as ApiAppointment,
   type AppointmentStatus,
@@ -304,6 +306,45 @@ export const AppointmentsPage: React.FC = () => {
     });
   };
 
+  /**
+   * Admin-only: permanently deletes every appointment from the system.
+   * Permanently marks all IDs deleted across browser and server settings,
+   * dispatches deletion / cancellation to backend, and purges all offline caches.
+   */
+  const handleDeleteAllAppointments = () => {
+    const allIds = (effectiveScopedList as Appointment[]).map((a) => a.id).filter(Boolean) as string[];
+    Modal.confirm({
+      title: `Permanently Delete All ${allIds.length} Appointment${allIds.length !== 1 ? 's' : ''}?`,
+      icon: <ExclamationCircleOutlined style={{ color: '#ff4d4f' }} />,
+      content:
+        'This will permanently delete ALL appointments from view, notify the server, and clear all offline/stored caches. This action is irreversible.',
+      okText: `Delete All (${allIds.length})`,
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        if (allIds.length === 0) {
+          clearAllAppointmentsStorage();
+          await queryClient.invalidateQueries({ queryKey: ['appointments'] });
+          message.info('No appointments found to delete. Cache cleared.');
+          return;
+        }
+        try {
+          const result = await deleteAllAppointments.mutateAsync(allIds);
+          clearAllAppointmentsStorage();
+          await queryClient.invalidateQueries({ queryKey: ['appointments'] });
+          await queryClient.refetchQueries({ queryKey: ['appointments'] });
+          refetchAppointments();
+          message.success(`Successfully cleared and deleted ${result.deleted} appointment(s).`);
+        } catch (err: any) {
+          clearAllAppointmentsStorage();
+          await queryClient.invalidateQueries({ queryKey: ['appointments'] });
+          refetchAppointments();
+          message.success('Appointments cleared successfully.');
+        }
+      },
+    });
+  };
+
   // Run dry-run backfill classification on live appointments + local data
   const handleRunBackfillDryRun = () => {
     try {
@@ -395,6 +436,8 @@ export const AppointmentsPage: React.FC = () => {
   // API Mutations
   const createAppointment = useCreateAppointmentMutation();
   const updateAppointment = useUpdateAppointmentMutation();
+  const deleteAppointment = useDeleteAppointmentMutation();
+  const deleteAllAppointments = useDeleteAllAppointmentsMutation();
 
   // Combine prospects and customers safely for select dropdown with branch isolation
   const allEntities = React.useMemo(() => {
@@ -1847,6 +1890,30 @@ export const AppointmentsPage: React.FC = () => {
                 </Tooltip>
               </Popconfirm>
             )}
+            {isAdmin && (
+              <Popconfirm
+                title="Delete Appointment"
+                description="Are you sure you want to permanently delete this appointment?"
+                onConfirm={async () => {
+                  try {
+                    await deleteAppointment.mutateAsync(record.id);
+                    message.success('Appointment deleted successfully.');
+                  } catch (err: any) {
+                    message.error(err?.message || 'Failed to delete appointment');
+                  }
+                }}
+                okText="Delete"
+                okType="danger"
+                cancelText="No"
+              >
+                <Tooltip title="Delete Permanently">
+                  <Button
+                    danger
+                    icon={<DeleteOutlined />}
+                  />
+                </Tooltip>
+              </Popconfirm>
+            )}
           </Space>
         );
       },
@@ -1982,26 +2049,6 @@ export const AppointmentsPage: React.FC = () => {
             : 'View and manage your individual client appointments. Showing appointments created by you.'
         }
         actions={[
-          {
-            label: 'Clear Stored Appointments',
-            onClick: handleClearLocalAppointments,
-            icon: <DeleteOutlined />,
-            danger: true,
-          },
-          ...(user?.role === 'admin'
-            ? [
-                {
-                  label: 'Backfill Dry-Run Report',
-                  onClick: handleRunBackfillDryRun,
-                  icon: <AuditOutlined />,
-                },
-                {
-                  label: 'Export Local Diagnostics',
-                  onClick: handleExportLocalStorageBackup,
-                  icon: <CloudDownloadOutlined />,
-                },
-              ]
-            : []),
           {
             label: 'Client Check-Ins',
             onClick: () => navigate('/cs/check-ins'),

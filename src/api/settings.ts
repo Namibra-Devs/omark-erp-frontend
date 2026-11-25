@@ -17,6 +17,10 @@ import {
   getStoredUserAssignment,
   setStoredUserAssignment,
 } from '@/utils/userAssignmentStorage';
+import {
+  rehydrateDeletedAppointmentIdsFromSettings,
+  setAppointmentSettingsHandlers,
+} from '@/utils/appointmentStorage';
 
 let cachedBranches: any[] = [];
 
@@ -282,6 +286,9 @@ setPhotoSettingsHandlers(
 // Wire user assignments and profile persistence to PostgreSQL settings
 setUserAssignmentSettingsHandlers(fetchAppSettings, updateAppSettings);
 
+// Wire deleted appointment tracking to server settings persistence
+setAppointmentSettingsHandlers(updateAppSettings);
+
 if (typeof window !== 'undefined') {
   initPhotoStorage().catch(() => {});
   initUserAssignmentStorage().catch(() => {});
@@ -296,6 +303,7 @@ export interface AppSettings {
   customerPortalCache?: Record<string, any>;
   expensesStore?: any[];
   deletedExpenseIds?: string[];
+  deletedAppointmentIds?: string[];
   customerAvatars?: Record<string, string>;
   userAvatars?: Record<string, string>;
   entityAvatars?: Record<string, string>;
@@ -314,6 +322,7 @@ export async function fetchAppSettings(): Promise<AppSettings> {
     if (data && typeof data === 'object') {
       rehydrateAvatarsFromSettings(data);
       rehydrateUserAssignmentsFromSettings(data);
+      rehydrateDeletedAppointmentIdsFromSettings(data);
     }
     // Also rehydrate staff records from remote branch tasks channel
     fetchStaffRecordsFromServer().catch(() => {});
@@ -338,6 +347,9 @@ export async function updateAppSettings(payload: Partial<AppSettings>): Promise<
     if (payload.userAssignments) {
       rehydrateUserAssignmentsFromSettings(payload);
     }
+    if (payload.deletedAppointmentIds) {
+      rehydrateDeletedAppointmentIdsFromSettings(payload);
+    }
   }
 
   try {
@@ -346,6 +358,7 @@ export async function updateAppSettings(payload: Partial<AppSettings>): Promise<
     if (data && typeof data === 'object') {
       rehydrateAvatarsFromSettings(data);
       rehydrateUserAssignmentsFromSettings(data);
+      rehydrateDeletedAppointmentIdsFromSettings(data);
     }
     return data;
   } catch (err) {

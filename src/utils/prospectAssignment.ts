@@ -5,6 +5,7 @@ import { getStoredUserAssignment } from '@/utils/userAssignmentStorage';
 import { getUserFullName } from '@/api/users';
 import { getStoredInteractions } from '@/utils/interactionStorage';
 import { normalizePhone } from '@/utils/duplicateValidation';
+import { getDeletedAppointmentIds } from '@/utils/appointmentStorage';
 import dayjs from 'dayjs';
 
 /**
@@ -951,11 +952,13 @@ export function consolidateAllAppointments(
 
   const seenActivePersons = new Set<string>();
   const seenIds = new Set<string>();
+  const deletedIds = getDeletedAppointmentIds();
   const result: any[] = [];
 
   for (const appt of sorted) {
     if (!appt || !appt.id) continue;
     if (seenIds.has(appt.id)) continue;
+    if (deletedIds.has(String(appt.id))) continue;
 
     const cleanPhone = String(appt.phone || appt.phoneNumber || (appt as any).clientPhone || '').replace(/\D/g, '');
     const cleanName = String(appt.clientName || appt.name || '').trim().toLowerCase();
@@ -1010,7 +1013,10 @@ export function synthesizeAllAppointments(
   const sourcesArray = Array.isArray(appointmentSources) && Array.isArray(appointmentSources[0])
     ? (appointmentSources as any[][])
     : [appointmentSources as any[]];
-  const baseAppointments = consolidateAllAppointments(...sourcesArray);
+  const deletedIds = getDeletedAppointmentIds();
+  const baseAppointments = consolidateAllAppointments(...sourcesArray).filter(
+    (a) => a && a.id && !deletedIds.has(String(a.id))
+  );
   if (!Array.isArray(baseAppointments) || baseAppointments.length === 0) {
     return [];
   }
