@@ -569,9 +569,11 @@ export const AddUserModal: React.FC<AddUserModalProps> = ({
           <Col span={12}>
             <Form.Item name="departmentId" label="Branch Department">
               <Select placeholder="Select department" allowClear>
-                {mockBranchDepartments.map((d) => (
-                  <Option key={d.id} value={d.id}>{d.name}</Option>
-                ))}
+                {mockBranchDepartments
+                  .filter((d) => (d.name || '').toLowerCase().trim() !== 'operations' && d.id !== 'dept-ops')
+                  .map((d) => (
+                    <Option key={d.id} value={d.id}>{d.name}</Option>
+                  ))}
               </Select>
             </Form.Item>
           </Col>

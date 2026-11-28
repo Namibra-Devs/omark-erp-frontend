@@ -648,17 +648,24 @@ export const enrichUserWithAssignment = (user: any, branches: any[] = []): any =
   const activeBranch = branchWhereManager || branchWhereStaff;
 
   const defaultDept = resolveDefaultDepartment(user.role);
-  const branchId =
+  const primaryBranch = branches.find((b) => getBranchCanonicalKey(b.name || b.id || b.branchCode) === 'kumasi') || branches[0];
+  const primaryBranchId = primaryBranch?.id || 'b1';
+  const primaryBranchName = primaryBranch?.name || 'Kumasi Main';
+
+  const rawBranchId =
     activeBranch?.id ||
     stored?.branchId ||
     user.branchId ||
     user.branch ||
     entityBranch;
 
-  const branchName =
+  const finalBranchId = rawBranchId && rawBranchId !== 'Unassigned' ? rawBranchId : primaryBranchId;
+
+  const finalBranchName =
     activeBranch?.name ||
-    stored?.branchName ||
-    (branchId ? getUserBranchName({ branchId }, branches) : undefined);
+    getUserBranchName(stored?.branchName, branches) ||
+    getUserBranchName(finalBranchId, branches) ||
+    primaryBranchName;
 
   const department =
     stored?.departmentName ||
@@ -670,9 +677,9 @@ export const enrichUserWithAssignment = (user: any, branches: any[] = []): any =
 
   return {
     ...user,
-    branchId,
-    branch: branchName || branchId,
-    branchName,
+    branchId: finalBranchId,
+    branch: finalBranchName,
+    branchName: finalBranchName,
     departmentId,
     department,
   };

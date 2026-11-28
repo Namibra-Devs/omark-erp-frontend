@@ -34,45 +34,52 @@ export const getBranchCanonicalKey = (branchIdOrName?: string): string => {
 };
 
 /**
- * Resolves the branch ID for a user based on direct user attributes.
+ * Resolves the branch ID for a user based on direct user attributes or string ID.
  */
 export const getUserBranchId = (user: any): string | undefined => {
-  if (!user?.id) return undefined;
-  return user.branchId || user.branch || user.branchCode;
+  if (!user) return undefined;
+  if (typeof user === 'string') return user.trim();
+  return (
+    user.branchId ||
+    user.branch ||
+    user.branchCode ||
+    (user.id && (user.id.startsWith('b') || /^[0-9a-fA-F]{20,32}$/.test(user.id)) ? user.id : undefined)
+  );
 };
 
 /**
- * Resolves the official branch name for a user.
+ * Resolves the official uniform branch name for a user or branch identifier.
+ * Ensures raw hex IDs (e.g. MongoDB ObjectIDs) and unnormalized variants
+ * always resolve cleanly to human-readable branch names (e.g. "Kumasi Main").
  */
-export const getUserBranchName = (user: any, branches: BranchInfo[] = []): string | undefined => {
-  if (!user) return undefined;
-  let bId = getUserBranchId(user);
-  if (!bId && (user.branchName || user.branch)) {
-    bId = user.branchName || user.branch;
+export const getUserBranchName = (userOrBranchId: any, branches: BranchInfo[] = []): string | undefined => {
+  if (!userOrBranchId) return undefined;
+  let bId: string | undefined;
+  if (typeof userOrBranchId === 'string') {
+    bId = userOrBranchId.trim();
+  } else {
+    bId =
+      userOrBranchId.branchName ||
+      userOrBranchId.branch ||
+      userOrBranchId.branchId ||
+      userOrBranchId.branchCode ||
+      getUserBranchId(userOrBranchId);
   }
-  if (!bId) return undefined;
+  if (!bId || bId === 'Unassigned') return undefined;
 
-  // If bId is a raw hex ID or MongoDB ObjectID (e.g. 24 hex characters), resolve via branches or default to primary branch
-  if (typeof bId === 'string' && /^[0-9a-fA-F]{20,32}$/.test(bId)) {
-    const directBranch = branches.find((b) => b.id === bId);
-    if (directBranch) return directBranch.name;
-    return 'Kumasi Main';
-  }
-
-  const bIdCanonical = getBranchCanonicalKey(bId);
-
-  const branch = branches.find(
+  // 1. Direct branch lookup in provided branches list
+  const directBranch = branches.find(
     (b) =>
       b.id === bId ||
       b.branchCode === bId ||
       b.name === bId ||
-      (bIdCanonical &&
-        (getBranchCanonicalKey(b.id) === bIdCanonical ||
-         getBranchCanonicalKey(b.name) === bIdCanonical ||
-         getBranchCanonicalKey(b.branchCode) === bIdCanonical))
+      (b.name && b.name.toLowerCase() === bId!.toLowerCase()) ||
+      (b.branchCode && b.branchCode.toLowerCase() === bId!.toLowerCase())
   );
-  if (branch) return branch.name;
+  if (directBranch) return directBranch.name;
 
+  // 2. Canonical key matching
+  const bIdCanonical = getBranchCanonicalKey(bId);
   if (bIdCanonical) {
     const matchedByCanon = branches.find(
       (b) => getBranchCanonicalKey(b.name || b.id || b.branchCode) === bIdCanonical
@@ -80,11 +87,12 @@ export const getUserBranchName = (user: any, branches: BranchInfo[] = []): strin
     if (matchedByCanon) return matchedByCanon.name;
   }
 
+  // 3. Fallback standard uniform branch names
   const fallbackNames: Record<string, string> = {
     kumasi: 'Kumasi Main',
     accra: 'Accra Central',
-    takoradi: 'Takoradi',
-    tamale: 'Tamale',
+    takoradi: 'Takoradi Branch',
+    tamale: 'Tamale Branch',
     wa: 'Wa Branch',
     tafo: 'Tafo Branch',
     b1: 'Kumasi Main',
@@ -93,11 +101,25 @@ export const getUserBranchName = (user: any, branches: BranchInfo[] = []): strin
     b4: 'Tamale Branch',
   };
 
-  if (fallbackNames[bIdCanonical]) {
+  if (bIdCanonical && fallbackNames[bIdCanonical]) {
     return fallbackNames[bIdCanonical];
   }
 
-  return typeof bId === 'string' && bId.length > 0 && !bId.startsWith('obj_') ? bId : undefined;
+  // 4. Raw MongoDB ObjectIDs or hex IDs (e.g. 6a9ecc352c8bf0658b4a...)
+  if (typeof bId === 'string' && /^[0-9a-fA-F]{20,32}$/.test(bId)) {
+    return 'Kumasi Main';
+  }
+
+  // 5. Normalization for common aliases / uppercase strings ("KUMASI", "KMA", "ACCRA")
+  if (typeof bId === 'string') {
+    const clean = bId.toLowerCase();
+    if (clean === 'kumasi' || clean === 'kma') return 'Kumasi Main';
+    if (clean === 'accra' || clean === 'acc') return 'Accra Central';
+    if (clean === 'takoradi' || clean === 'tkd') return 'Takoradi Branch';
+    if (clean === 'tamale' || clean === 'tml') return 'Tamale Branch';
+  }
+
+  return undefined;
 };
 
 /**

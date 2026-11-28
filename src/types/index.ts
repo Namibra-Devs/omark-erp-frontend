@@ -46,6 +46,7 @@ export interface User {
   isActive: boolean;
   branchId?: string;
   branch?: string;
+  branchName?: string;
   departmentId?: string;
   department?: string;
   createdPassword?: string;

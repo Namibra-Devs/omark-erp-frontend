@@ -46,7 +46,7 @@ import { PayslipModal } from '@/components/payroll/PayslipModal';
 import { CompensationModal } from '@/components/payroll/CompensationModal';
 import { useUsersQuery, useUpdateUserMutation, useUserAssignmentQuery, useUpdateUserAssignmentMutation, getUserFullName, getUserPhone, getRoleLabel, getRoleColor, getRoleIcon, toBackendRole, toE164Phone } from '@/api/users';
 import { getStoredUserAssignment, setStoredUserAssignment, resolveDefaultDepartment, addStaffToBranchRoster } from '@/utils/userAssignmentStorage';
-import { recordEntityBranch } from '@/utils/branchIsolation';
+import { recordEntityBranch, getUserBranchName } from '@/utils/branchIsolation';
 import { useBranchContext } from '@/contexts/BranchContext';
 import { useBonusesQuery, useAwardBonusMutation, bonusTypeLabels, type StaffBonusRecord, type BonusType } from '@/api/bonuses';
 import {
@@ -79,7 +79,7 @@ const deptLabels: Record<string, string> = {
   'dept-finance': 'Accounts & Finance',
   'dept-marketing': 'Marketing & Sales',
   'dept-cs': 'Customer Service',
-  'dept-ops': 'Branch Operations',
+  'dept-exec': 'Executive Administration',
 };
 
 const { Title, Text, Paragraph } = Typography;
@@ -395,7 +395,7 @@ export const StaffProfilePage: React.FC = () => {
   const fullName = getUserFullName(staffMember);
   const phone = getUserPhone(staffMember);
   const roleName = roleLabels[staffMember.role as keyof typeof roleLabels] || staffMember.role;
-  const branchTitle = assignedBranch ? assignedBranch.name : 'Head Office';
+  const branchTitle = assignedBranch?.name || getUserBranchName(effectiveBranchId, branches) || 'Kumasi Main';
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleEditProfile = async (values: any) => {

@@ -228,9 +228,11 @@ export const EditUserDrawer: React.FC<EditUserDrawerProps> = ({
 
           <Form.Item name="departmentId" label="Department">
             <Select placeholder="Select department" allowClear>
-              {mockBranchDepartments.map((d) => (
-                <Option key={d.id} value={d.id}>{d.name}</Option>
-              ))}
+              {mockBranchDepartments
+                .filter((d) => (d.name || '').toLowerCase().trim() !== 'operations' && d.id !== 'dept-ops')
+                .map((d) => (
+                  <Option key={d.id} value={d.id}>{d.name}</Option>
+                ))}
             </Select>
           </Form.Item>
 

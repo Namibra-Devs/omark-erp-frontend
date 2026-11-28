@@ -77,33 +77,23 @@ const StaffBranchCell: React.FC<{ userId: string; record?: any; branches: any[] 
     );
 
   let name =
-    assignment?.branchName ||
-    stored?.branchName ||
+    getUserBranchName(assignment?.branchName, branches) ||
+    getUserBranchName(stored?.branchName, branches) ||
     branch?.name ||
-    (branchId ? getUserBranchName({ branchId }, branches) : null);
+    (branchId ? getUserBranchName(branchId, branches) : null);
 
   if (!name && branchId) {
     const canon = getBranchCanonicalKey(branchId);
     if (canon === 'accra') {
       const accraBranch = branches.find((b) => getBranchCanonicalKey(b.name || b.id || b.branchCode) === 'accra');
       name = accraBranch?.name || 'Accra Central';
-    } else if (canon === 'kumasi') {
+    } else {
       name = 'Kumasi Main';
-    } else if (typeof branchId === 'string' && branchId.length > 0 && branchId !== 'undefined') {
-      name = branchId;
     }
   }
 
-  if (name && name !== 'Unassigned') {
-    return <Tag color={tokens.primary}>{name}</Tag>;
-  }
-
-  // Administrators default to Head Office if no specific branch is constrained
-  if (record?.role === 'admin') {
-    return <Tag color="blue">Head Office</Tag>;
-  }
-
-  return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+  const finalName = name || 'Kumasi Main';
+  return <Tag color={tokens.primary}>{finalName}</Tag>;
 };
 
 const StaffDepartmentCell: React.FC<{ userId: string; record?: any }> = ({ userId, record }) => {

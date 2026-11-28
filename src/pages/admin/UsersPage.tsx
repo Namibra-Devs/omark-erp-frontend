@@ -204,12 +204,26 @@ export const UsersPage: React.FC = () => {
   };
 
   const allDepartments = useMemo(() => {
-    if (apiDepartments && apiDepartments.length > 0) return apiDepartments;
-    return STANDARD_DEPARTMENTS;
+    const list = apiDepartments && apiDepartments.length > 0 ? apiDepartments : STANDARD_DEPARTMENTS;
+    return list.filter((d: any) => {
+      const name = (d.name || '').toLowerCase().trim();
+      const id = (d.id || '').toLowerCase().trim();
+      return name !== 'operations' && id !== 'dept-ops';
+    });
   }, [apiDepartments]);
 
-  const resolveBranchValue = (branchIdOrCode?: string): string | undefined => {
-    if (!branchIdOrCode) return undefined;
+  const primaryBranch = useMemo(() => {
+    return (
+      allBranches.find((b: any) => getBranchCanonicalKey(b.name || b.id || b.branchCode) === 'kumasi') ||
+      allBranches[0] ||
+      DEFAULT_SYSTEM_BRANCHES[0]
+    );
+  }, [allBranches]);
+  const primaryBranchId = primaryBranch?.id || 'b1';
+  const primaryBranchName = primaryBranch?.name || 'Kumasi Main';
+
+  const resolveBranchValue = (branchIdOrCode?: string): string => {
+    if (!branchIdOrCode || branchIdOrCode === 'Unassigned') return primaryBranchId;
     const match = allBranches.find(
       (b: any) =>
         b.id === branchIdOrCode ||
@@ -220,7 +234,11 @@ export const UsersPage: React.FC = () => {
         (b.name && b.name.toLowerCase() === String(branchIdOrCode).toLowerCase()) ||
         (getBranchCanonicalKey(b.id || b.name || b.branchCode) === getBranchCanonicalKey(branchIdOrCode))
     );
-    return match?.id || branchIdOrCode;
+    if (match) return match.id;
+    if (typeof branchIdOrCode === 'string' && /^[0-9a-fA-F]{20,32}$/.test(branchIdOrCode)) {
+      return branchIdOrCode;
+    }
+    return primaryBranchId;
   };
 
   const resolveDepartmentValue = (deptIdOrName?: string): string | undefined => {
@@ -247,31 +265,70 @@ export const UsersPage: React.FC = () => {
   }, [allBranches]);
 
   const departmentOptions = useMemo(() => {
-    return allDepartments.map((d: any) => ({
-      value: d.id,
-      label: d.name,
-    }));
+    return allDepartments
+      .filter((d: any) => {
+        const name = (d.name || '').toLowerCase().trim();
+        const id = (d.id || '').toLowerCase().trim();
+        return name !== 'operations' && id !== 'dept-ops';
+      })
+      .map((d: any) => ({
+        value: d.id,
+        label: d.name,
+      }));
   }, [allDepartments]);
 
   // Extract users array safely. UserEntity.phoneNumber is optional (backend may
   // return phone in a different shape), but the local User type requires a
   // string, so normalize via getUserPhone().
+  // Every staff member must belong to a particular branch by ID, and uniform branch
+  // name must be displayed (never raw IDs, never "Unassigned").
   const rawItems = usersResponse?.items ?? [];
   const users: User[] = rawItems.length > 0
     ? rawItems.map((u) => {
         const stored = getStoredUserAssignment(u.id);
         const defaultDept = resolveDefaultDepartment(u.role);
-        const branchId = stored?.branchId || (u as any).branchId || (u as any).branch || getStoredEntityBranch(u.id);
-        const branchName = stored?.branchName || (branchId ? getUserBranchName({ branchId }, allBranches) : undefined);
+
+        // 1. Raw branch from stored assignment, user object, or entity branch map
+        const rawBranch =
+          stored?.branchId ||
+          (u as any).branchId ||
+          (u as any).branch ||
+          getStoredEntityBranch(u.id);
+
+        // 2. All staff must belong to a particular branch by ID
+        const concreteBranchId =
+          rawBranch && rawBranch !== 'Unassigned'
+            ? resolveBranchValue(rawBranch)
+            : primaryBranchId;
+
+        // 3. Resolve official uniform branch name (never raw hex ID, never "Unassigned", never all-caps "KUMASI")
+        const uniformBranchName =
+          getUserBranchName(concreteBranchId, allBranches) ||
+          getUserBranchName(stored?.branchName, allBranches) ||
+          getUserBranchName(rawBranch, allBranches) ||
+          primaryBranchName;
+
+        // 4. Ensure persistent assignment has concrete branchId and uniform branchName
+        if (
+          !stored?.branchId ||
+          stored.branchId !== concreteBranchId ||
+          stored.branchName !== uniformBranchName
+        ) {
+          setStoredUserAssignment(u.id, {
+            branchId: concreteBranchId,
+            branchName: uniformBranchName,
+          });
+        }
+
         const department = stored?.departmentName || stored?.department || u.department || defaultDept;
         const effectiveRole = (stored?.role as Role) || u.role;
         return {
           ...u,
           role: effectiveRole,
           phoneNumber: getUserPhone(u),
-          branchId,
-          branch: branchName || branchId,
-          branchName,
+          branchId: concreteBranchId,
+          branch: uniformBranchName,
+          branchName: uniformBranchName,
           departmentId: stored?.departmentId || (u as any).departmentId,
           department,
         } as User;
@@ -344,7 +401,7 @@ export const UsersPage: React.FC = () => {
       if (newUserObj?.id && (values.branchId || values.departmentId || values.role)) {
         const branchObj = allBranches.find((b: any) => b.id === values.branchId || b.branchCode === values.branchId || b.name === values.branchId);
         const deptObj = allDepartments.find((d: any) => d.id === values.departmentId || d.name === values.departmentId);
-        const branchName = branchObj?.name || (values.branchId ? getUserBranchName({ branchId: values.branchId }, allBranches) : undefined);
+        const branchName = branchObj?.name || (values.branchId ? getUserBranchName(values.branchId, allBranches) : undefined);
         const departmentName = deptObj?.name || values.departmentId;
 
         const effectiveBranchId = branchObj?.id || values.branchId;
@@ -415,7 +472,7 @@ export const UsersPage: React.FC = () => {
       if (values.branchId || values.departmentId || values.role) {
         const branchObj = allBranches.find((b: any) => b.id === values.branchId || b.branchCode === values.branchId || b.name === values.branchId);
         const deptObj = allDepartments.find((d: any) => d.id === values.departmentId || d.name === values.departmentId);
-        const branchName = branchObj?.name || (values.branchId ? getUserBranchName({ branchId: values.branchId }, allBranches) : undefined);
+        const branchName = branchObj?.name || (values.branchId ? getUserBranchName(values.branchId, allBranches) : undefined);
         const departmentName = deptObj?.name || values.departmentId;
 
         const effectiveBranchId = branchObj?.id || values.branchId;
@@ -646,19 +703,19 @@ export const UsersPage: React.FC = () => {
       align: 'left' as const,
       render: (_: any, record: User) => {
         const stored = getStoredUserAssignment(record.id);
-        const branchId = stored?.branchId || record.branchId || (record as any).branch || getStoredEntityBranch(record.id);
-        const managedBranch = allBranches.find((b: any) => b.managerUserId === record.id);
-        const branch = allBranches.find(
-          (b: any) => b.id === branchId || b.branchCode === branchId || b.name === branchId || (branchId && getBranchCanonicalKey(b.id) === getBranchCanonicalKey(branchId))
-        ) || managedBranch;
-        const name = stored?.branchName || branch?.name || (branchId ? getUserBranchName({ branchId }, allBranches) : null) || (typeof branchId === 'string' && branchId.length > 0 ? branchId : null);
-        if (name) {
-          return <Tag color={tokens.primary}>{name}</Tag>;
-        }
-        if (record.role === 'admin') {
-          return <Tag color="blue">Head Office</Tag>;
-        }
-        return <Text type="secondary" style={{ fontSize: 12 }}>Unassigned</Text>;
+        const rawBranch =
+          stored?.branchId ||
+          record.branchId ||
+          (record as any).branch ||
+          getStoredEntityBranch(record.id);
+        const name =
+          getUserBranchName(stored?.branchName, allBranches) ||
+          getUserBranchName(rawBranch, allBranches) ||
+          getUserBranchName(record.branch, allBranches) ||
+          record.branchName ||
+          primaryBranchName;
+
+        return <Tag color={tokens.primary}>{name}</Tag>;
       },
     },
     {
